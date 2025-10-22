@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Dentist Radar</title>
+  <style>
+    :root { --bg: linear-gradient(135deg,#f0f7ff,#e8ffe8); --card:#fff; --ink:#0a0a0a; }
+    *{ box-sizing:border-box; }
+    body{ margin:0; font-family: system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--ink); }
+    .wrap{ max-width: 960px; margin: 32px auto; padding: 0 16px; }
+    .card{ background:#fff; border-radius:16px; padding:24px; box-shadow:0 6px 30px rgba(0,0,0,.06); margin-bottom:16px; }
+    h1{ margin:0 0 6px; font-size:28px; } .lead{ margin:0 0 18px; color:#333; }
+    form{ display:grid; gap:12px; grid-template-columns: repeat(3, 1fr); }
+    label{ font-size:14px; color:#333; }
+    input, select{ width:100%; padding:10px 12px; border:1px solid #ddd; border-radius:10px; font-size:16px; }
+    .row-full{ grid-column: 1 / -1; }
+    .btn{ background:#0a7; color:#fff; border:none; padding:12px 16px; border-radius:12px; font-weight:600; cursor:pointer; }
+    .plans{ display:flex; gap:12px; flex-wrap:wrap; }
+    .plan{ border:1px solid #e5e5e5; border-radius:12px; padding:12px; width: 280px; }
+    .muted{ color:#666; font-size:12px; }
+    header{ display:flex; align-items:center; gap:12px; }
+    header img{ height:36px; }
+    footer{ text-align:center; color:#666; font-size:12px; margin: 18px 0; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <header>
+        <img id="brandLogo" style="display:none"/>
+        <h1 id="brandTitle">Dentist Radar</h1>
+      </header>
+      <p class="lead">Get alerts when nearby NHS dentists start accepting new patients. Choose region, enter postcode, and we’ll watch for you.</p>
+    </div>
+
+    <div class="card">
+      <h3>Create a watch</h3>
+      <form id="watchForm">
+        <div>
+          <label>Region</label>
+          <select name="region">
+            <option value="england">England</option>
+          </select>
+        </div>
+        <div>
+          <label>Postcode</label>
+          <input required name="postcode" placeholder="RG41" />
+        </div>
+        <div>
+          <label>Radius (miles)</label>
+          <input required type="number" name="radius_miles" value="10" min="1" max="50" />
+        </div>
+        <div>
+          <label>Frequency (minutes)</label>
+          <input required type="number" name="frequency_minutes" value="60" min="15" max="720" />
+        </div>
+        <div class="row-full">
+          <label>Contact (at least one)</label>
+          <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:10px;">
+            <input name="email" placeholder="email@example.com" />
+            <input name="sms" placeholder="+447700900123" />
+            <input name="whatsapp" placeholder="+447700900123" />
+          </div>
+        </div>
+        <div class="row-full">
+          <label>Account email (optional — needed for billing/plan)</label>
+          <input name="account_email" placeholder="you@domain.com" />
+        </div>
+        <div class="row-full">
+          <button class="btn" type="submit">Start watching</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>Active watches</h3>
+      <div id="watches"></div>
+    </div>
+
+    <!-- Plans -->
+    <div class="card">
+      <h3>Plans</h3>
+      <div class="plans">
+        <div class="plan">
+          <strong>Free</strong><br/>
+          <div class="muted">1 postcode · checks every 3 hours · email alerts</div>
+          <button class="btn" onclick="alert('Free plan is active by default — just add a watch above.')">Use Free</button>
+        </div>
+        <div class="plan">
+          <strong>Pro — £15/mo</strong><br/>
+          <div class="muted">3 postcodes · hourly checks · WhatsApp/SMS + email</div>
+          <button class="btn" onclick="startCheckout('pro')">Upgrade to Pro</button>
+        </div>
+        <div class="plan">
+          <strong>Agency — £49/mo</strong><br/>
+          <div class="muted">50 postcodes · 15‑min checks · Slack/Webhooks/API</div>
+          <button class="btn" onclick="startCheckout('agency')">Upgrade to Agency</button>
+        </div>
+      </div>
+      <p class="muted">You can cancel anytime from the billing portal.</p>
+    <div style="margin-top:10px">
+        <button class="btn" onclick="openBillingPortal()">Manage Billing</button>
+      </div>
+    </div>
+
+    <!-- Competitors -->
+    <div class="card">
+      <h3>How We're Different</h3>
+      <p class="lead">Most sites list dentists. We <em>alert you</em> the moment an NHS practice flips to “accepting new patients”.</p>
+      <div style="overflow-x:auto">
+        <table style="width:100%; border-collapse:collapse;">
+          <thead>
+            <tr>
+              <th style="text-align:left; border-bottom:1px solid #eee; padding:8px;">Service</th>
+              <th style="text-align:left; border-bottom:1px solid #eee; padding:8px;">What They Do</th>
+              <th style="text-align:left; border-bottom:1px solid #eee; padding:8px;">What’s Missing</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="padding:8px;">NHS Find a Dentist</td>
+              <td style="padding:8px;">Official list of practices and current status</td>
+              <td style="padding:8px;">No alerts · Manual checking required</td>
+            </tr>
+            <tr>
+              <td style="padding:8px;">FindNHSDentist.co.uk</td>
+              <td style="padding:8px;">Updated weekly; newsletter sign‑up</td>
+              <td style="padding:8px;">Not real‑time · No WhatsApp/SMS alerts · Single area</td>
+            </tr>
+            <tr>
+              <td style="padding:8px;"><strong>Dentist Radar (this site)</strong></td>
+              <td style="padding:8px;">Monitors official pages 24/7 and sends alerts when status flips to <em>accepting</em></td>
+              <td style="padding:8px;">Instant alerts · Multi‑postcode · WhatsApp/SMS · Family & Agency plans</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Trust -->
+    <div class="card">
+      <h3>Trust &amp; Safety</h3>
+      <ul>
+        <li>We only monitor <strong>public NHS webpages</strong> — no medical or patient data.</li>
+        <li>We <strong>never</strong> sell or broker appointments. Every alert links to the official NHS page to call directly.</li>
+        <li>Hosted in the EU; GDPR‑aware. Minimal data (email/phone + postcode) to deliver alerts.</li>
+      </ul>
+      <p class="muted"><strong>Disclaimer:</strong> Dentist Radar is independent and not affiliated with the NHS. Availability can change quickly — always call to confirm.</p>
+    </div>
+
+    <footer>Availability can change rapidly; always call the practice to confirm. Use responsibly.</footer>
+  </div>
+
+<script>
+  async function loadConfig(){
+    const r = await fetch('/api/config');
+    const cfg = await r.json();
+    document.getElementById('brandTitle').textContent = cfg.brand || 'Dentist Radar';
+    if (cfg.logo){
+      const img = document.getElementById('brandLogo');
+      img.src = cfg.logo; img.style.display='block';
+    }
+  }
+  async function loadWatches(){
+    const r = await fetch('/api/watches');
+    const data = await r.json();
+    const root = document.getElementById('watches');
+    root.innerHTML='';
+    (data.items||[]).forEach(w => {
+      const div = document.createElement('div');
+      div.className = 'card';
+      div.innerHTML = `<strong>${w.region.toUpperCase()}</strong> — ${w.postcode} within ${w.radius_miles} miles<br/>
+        Every ${w.frequency_minutes} min · Channels: ${(w.channels||[]).join(', ') || 'email'}
+        <div style="margin-top:8px"><button class="btn" data-id="${w.id}">Run now</button></div>`;
+      div.querySelector('button').onclick = async (e)=>{
+        const id = e.target.getAttribute('data-id');
+        e.target.disabled=true; e.target.textContent='Running...';
+        const r = await fetch('/api/watch/'+id+'/trigger', { method:'POST' });
+        const j = await r.json();
+        alert('Scan complete. Alerts sent: '+(j.result?.alerts||0));
+        e.target.disabled=false; e.target.textContent='Run now';
+      };
+      root.appendChild(div);
+    });
+  }
+  document.getElementById('watchForm').addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const body = {
+      region: fd.get('region'),
+      postcode: fd.get('postcode'),
+      radius_miles: Number(fd.get('radius_miles')),
+      frequency_minutes: Number(fd.get('frequency_minutes')),
+      channels: ['email','sms','whatsapp'].filter(c => fd.get(c)),
+      contact: {
+        email: fd.get('email') || undefined,
+        sms: fd.get('sms') || undefined,
+        whatsapp: fd.get('whatsapp') || undefined
+      },
+      email: fd.get('account_email') || undefined
+    };
+    const r = await fetch('/api/watch', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) });
+    const j = await r.json();
+    if(!j.ok){ alert('Error: ' + (j.error||'unknown')); return; }
+    if (j.notice) alert(j.notice);
+    e.target.reset();
+    loadWatches();
+    alert('Watch created. Scheduler respects your plan limits and frequency.');
+  });
+  async function openBillingPortal(){
+  const email = prompt('Enter the email you used for subscription:');
+  if(!email){ alert('Email is required'); return; }
+  try{
+    const r = await fetch('/api/billing/portal', {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({ email })
+    });
+    const j = await r.json();
+    if(j.url){ window.location = j.url; }
+    else{ alert('Could not open billing portal. Is Stripe configured?'); }
+  }catch(e){ alert('Error: ' + e.message); }
+}
+
+async function startCheckout(plan){
+    const email = prompt('Enter your email for the receipt and account:');
+    if(!email){ alert('Email is required to start checkout'); return; }
+    try{
+      const r = await fetch('/api/billing/checkout', {
+        method:'POST',
+        headers:{'content-type':'application/json'},
+        body: JSON.stringify({ email, plan })
+      });
+      const j = await r.json();
+      if(j.url){ window.location = j.url; }
+      else{ alert('Unable to start checkout. Is Stripe configured?'); }
+    }catch(e){ alert('Error: ' + e.message); }
+  }
+  loadConfig(); loadWatches();
+</script>
+</body>
+</html>
