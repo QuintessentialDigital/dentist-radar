@@ -104,6 +104,79 @@ app.post('/api/watch/:id/run', async (req, res) => {
   }
 });
 
+// --- SIMPLE SERVER-RENDERED ADMIN (no JS needed) ---
+
+app.get('/admin2', (req, res) => {
+  try {
+    const items = listWatches();
+    const rows = items.map(w => `
+      <tr>
+        <td>#${w.id}</td>
+        <td>${w.postcode}</td>
+        <td>${w.radius_miles} mi</td>
+        <td>${w.frequency_minutes} min</td>
+        <td>${w.contact_email||'-'}</td>
+        <td><a href="/admin2/run/${w.id}">Run now</a></td>
+      </tr>
+    `).join('') || `<tr><td colspan="6">No watches yet.</td></tr>`;
+
+    res.send(`<!doctype html>
+      <meta charset="utf-8">
+      <title>Admin2 — Dentist Radar</title>
+      <body style="font-family:system-ui;margin:24px;max-width:1000px">
+        <h1>🛠 Admin2 (no JavaScript)</h1>
+        <form action="/admin2/create" method="get" style="margin-bottom:16px;border:1px solid #eee;padding:12px;border-radius:8px">
+          <strong>Create watch:</strong>
+          <input name="email" placeholder="you@gmail.com" required>
+          <input name="postcode" placeholder="RG41" required>
+          <input name="radius" type="number" value="10" min="1" max="50" required>
+          <button type="submit">Create</button>
+        </form>
+        <table border="1" cellspacing="0" cellpadding="6">
+          <thead><tr><th>ID</th><th>Postcode</th><th>Radius</th><th>Freq</th><th>Email</th><th>Action</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <p style="margin-top:12px"><a href="/api/watches">View raw JSON</a></p>
+      </body>`);
+  } catch (e) {
+    res.status(500).send('Admin error');
+  }
+});
+
+app.get('/admin2/create', (req, res) => {
+  try {
+    const email = String(req.query.email||'').trim();
+    const postcode = String(req.query.postcode||'').toUpperCase().replace(/\s+/g,'');
+    const radius = Number(req.query.radius||10);
+    if (!email || !postcode) return res.redirect('/admin2');
+
+    const u = upsertUser(email);
+    const w = createWatch({
+      user_id: u.id,
+      postcode,
+      radius_miles: radius,
+      frequency_minutes: 60,
+      contact_email: email
+    });
+    return res.redirect('/admin2');
+  } catch (e) {
+    return res.status(500).send('Create failed');
+  }
+});
+
+app.get('/admin2/run/:id', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    const w = listWatches().find(x => x.id === id);
+    if (!w) return res.status(404).send('Watch not found');
+    await runScan(w);
+    return res.redirect('/admin2');
+  } catch (e) {
+    return res.status(500).send('Run failed');
+  }
+});
+
+
 const port = process.env.PORT || 8787;
 app.listen(port, () => console.log(`[Dentist Radar] listening on :${port}`));
 startScheduler();
