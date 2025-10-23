@@ -1,24 +1,137 @@
-<!doctype html><html><head><meta charset='utf-8'/><meta name='viewport' content='width=device-width, initial-scale=1'/><title>Admin — Dentist Radar</title><style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:24px}.card{border:1px solid #eee;border-radius:12px;padding:12px;margin-bottom:12px}</style></head><body><h1>Admin</h1><p>Set ADMIN_PASSWORD env var. This simple admin lists watches and lets you run scans.</p><button onclick="createTest()">Create test watch</button><button onclick='load()'>Refresh</button><div id='w'></div><script> async function createTest(){
-  const email = prompt('Enter your email for alerts:', 'you@gmail.com');
-  const postcode = prompt('Enter postcode (no spaces):', 'RG41');
-  const radius = prompt('Radius miles:', '10');
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Admin — Dentist Radar</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:24px;max-width:900px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  .btn{background:#0a7;color:#fff;border:none;padding:10px 14px;border-radius:10px;font-weight:600;cursor:pointer}
+  .card{border:1px solid #eee;border-radius:12px;padding:12px;margin:8px 0}
+  #msg{margin:6px 0;color:#333}
+  input{padding:8px;border:1px solid #ddd;border-radius:8px}
+  label{font-size:12px;color:#555}
+</style>
+</head>
+<body>
+  <h1>🛠 Admin</h1>
+  <div id="msg">Tip: create a test watch with your email + postcode.</div>
 
-  const r = await fetch('/api/watch', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      email: String(email||'').trim(),
-      postcode: String(postcode||'').toUpperCase().trim(),
-      radius_miles: Number(radius||10),
-      frequency_minutes: 60
-    })
-  });
+  <!-- Quick create form -->
+  <div class="card">
+    <div class="row">
+      <div>
+        <label>Email</label><br/>
+        <input id="email" placeholder="you@gmail.com" />
+      </div>
+      <div>
+        <label>Postcode</label><br/>
+        <input id="postcode" placeholder="RG41" />
+      </div>
+      <div>
+        <label>Radius (miles)</label><br/>
+        <input id="radius" type="number" value="10" min="1" max="50" />
+      </div>
+      <div style="align-self:end">
+        <button class="btn" id="createBtn">Create test watch</button>
+      </div>
+      <div style="align-self:end">
+        <button class="btn" id="refreshBtn" style="background:#066">Refresh list</button>
+      </div>
+    </div>
+  </div>
 
-  const j = await r.json();
-  if (j.ok) {
-    alert('Watch created! ID #' + j.watch.id);
-    load();
-  } else {
-    alert('Error: ' + (j.error || 'failed'));
+  <h3>Watches</h3>
+  <div id="list"></div>
+
+<script>
+function setMsg(t, ok=true){
+  const el = document.getElementById('msg');
+  el.style.color = ok ? '#0a7' : '#b00020';
+  el.textContent = t;
+}
+
+async function createTest(){
+  const email = document.getElementById('email').value.trim();
+  const postcode = document.getElementById('postcode').value.trim().toUpperCase().replace(/\s+/g,'');
+  const radius = Number(document.getElementById('radius').value || 10);
+
+  if (!email || !postcode){
+    setMsg('Please enter both email and postcode.', false);
+    return;
   }
-}   async function load(){const r=await fetch('/api/watches');const j=await r.json();const root=document.getElementById('w');root.innerHTML='';(j.items||[]).forEach(x=>{const d=document.createElement('div');d.className='card';d.innerHTML=`<strong>#${x.id}</strong> ${x.postcode} · ${x.radius_miles} miles · every ${x.frequency_minutes} min · ${x.contact_email||'-'} <div><button onclick='run(${x.id}, this)'>Run now</button></div>`;root.appendChild(d);});}async function run(id,btn){btn.disabled=true;btn.textContent='Running...';const r=await fetch('/api/watch/'+id+'/run',{method:'POST'});const j=await r.json();alert('Scan done. Alerts: '+(j.result?.alerts||0));btn.disabled=false;btn.textContent='Run now';}load();</script></body></html>
+
+  try{
+    const res = await fetch('/api/watch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        email,
+        postcode,
+        radius_miles: radius,
+        frequency_minutes: 60
+      })
+    });
+    const j = await res.json();
+    if (j.ok){
+      setMsg('✅ Watch created (ID #' + j.watch.id + ').');
+      load();
+    } else {
+      setMsg('❌ Error creating watch: ' + (j.error || 'failed'), false);
+    }
+  }catch(e){
+    setMsg('❌ Network error creating watch: ' + e.message, false);
+  }
+}
+
+async function load(){
+  try{
+    const res = await fetch('/api/watches', { cache:'no-store' });
+    const j = await res.json();
+    const root = document.getElementById('list');
+    root.innerHTML = '';
+    if (!j.items || j.items.length === 0){
+      root.innerHTML = '<div class="card">No watches yet. Create one above.</div>';
+      return;
+    }
+    j.items.forEach(w=>{
+      const d = document.createElement('div');
+      d.className = 'card';
+      d.innerHTML = `
+        <strong>#${w.id}</strong> · ${w.postcode} · ${w.radius_miles} miles · every ${w.frequency_minutes} min · email: ${w.contact_email||'-'}
+        <div style="margin-top:8px">
+          <button class="btn" data-id="${w.id}">Run now</button>
+        </div>
+      `;
+      d.querySelector('button').onclick = ()=> runScan(w.id, d.querySelector('button'));
+      root.appendChild(d);
+    });
+  }catch(e){
+    setMsg('❌ Could not load watches: ' + e.message, false);
+  }
+}
+
+async function runScan(id, btn){
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Running...';
+  try{
+    const res = await fetch('/api/watch/' + id + '/run', { method:'POST' });
+    const j = await res.json();
+    if (j.ok){
+      setMsg('✅ Scan complete. Alerts sent: ' + (j.result?.alerts || 0));
+    } else {
+      setMsg('❌ Scan failed: ' + (j.error || 'failed'), false);
+    }
+  }catch(e){
+    setMsg('❌ Scan error: ' + e.message, false);
+  }
+  btn.disabled = false; btn.textContent = old;
+}
+
+document.getElementById('createBtn').addEventListener('click', createTest);
+document.getElementById('refreshBtn').addEventListener('click', load);
+document.addEventListener('DOMContentLoaded', load);
+</script>
+</body>
+</html>
