@@ -104,6 +104,20 @@ app.post('/api/watch/:id/run', async (req, res) => {
   }
 });
 
+// Also allow GET run for quick testing
+app.get('/api/watch/:id/run', async (req,res)=>{
+  try{
+    const id = Number(req.params.id);
+    const w = listWatches().find(x => x.id === id);
+    if (!w) return res.status(404).json({ ok:false, error:'not found' });
+    const r = await runScan(w);
+    return res.json({ ok:true, result:r });
+  }catch(e){
+    return res.status(500).json({ ok:false, error:'failed' });
+  }
+});
+
+
 // --- SIMPLE SERVER-RENDERED ADMIN (no JS needed) ---
 
 app.get('/admin2', (req, res) => {
