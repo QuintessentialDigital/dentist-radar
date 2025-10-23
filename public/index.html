@@ -16,6 +16,7 @@ document.getElementById('f').addEventListener('submit', async (e)=>{
   headers:{'content-type':'application/json'},
   body: JSON.stringify(body)
 });
+
   const j = await r.json();
   const msg = document.getElementById('msg');
   if (j.ok) { msg.textContent = 'Alert created! Check your email when a local practice flips to accepting.'; e.target.reset(); }
