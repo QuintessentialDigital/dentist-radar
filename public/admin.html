@@ -1,1 +1,24 @@
-<!doctype html><html><head><meta charset='utf-8'/><meta name='viewport' content='width=device-width, initial-scale=1'/><title>Admin — Dentist Radar</title><style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:24px}.card{border:1px solid #eee;border-radius:12px;padding:12px;margin-bottom:12px}</style></head><body><h1>Admin</h1><p>Set ADMIN_PASSWORD env var. This simple admin lists watches and lets you run scans.</p><button onclick='load()'>Refresh</button><div id='w'></div><script>async function load(){const r=await fetch('/api/watches');const j=await r.json();const root=document.getElementById('w');root.innerHTML='';(j.items||[]).forEach(x=>{const d=document.createElement('div');d.className='card';d.innerHTML=`<strong>#${x.id}</strong> ${x.postcode} · ${x.radius_miles} miles · every ${x.frequency_minutes} min · ${x.contact_email||'-'} <div><button onclick='run(${x.id}, this)'>Run now</button></div>`;root.appendChild(d);});}async function run(id,btn){btn.disabled=true;btn.textContent='Running...';const r=await fetch('/api/watch/'+id+'/run',{method:'POST'});const j=await r.json();alert('Scan done. Alerts: '+(j.result?.alerts||0));btn.disabled=false;btn.textContent='Run now';}load();</script></body></html>
+<!doctype html><html><head><meta charset='utf-8'/><meta name='viewport' content='width=device-width, initial-scale=1'/><title>Admin — Dentist Radar</title><style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:24px}.card{border:1px solid #eee;border-radius:12px;padding:12px;margin-bottom:12px}</style></head><body><h1>Admin</h1><p>Set ADMIN_PASSWORD env var. This simple admin lists watches and lets you run scans.</p><button onclick="createTest()">Create test watch</button><button onclick='load()'>Refresh</button><div id='w'></div><script> async function createTest(){
+  const email = prompt('Enter your email for alerts:', 'you@gmail.com');
+  const postcode = prompt('Enter postcode (no spaces):', 'RG41');
+  const radius = prompt('Radius miles:', '10');
+
+  const r = await fetch('/api/watch', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      email: String(email||'').trim(),
+      postcode: String(postcode||'').toUpperCase().trim(),
+      radius_miles: Number(radius||10),
+      frequency_minutes: 60
+    })
+  });
+
+  const j = await r.json();
+  if (j.ok) {
+    alert('Watch created! ID #' + j.watch.id);
+    load();
+  } else {
+    alert('Error: ' + (j.error || 'failed'));
+  }
+}   async function load(){const r=await fetch('/api/watches');const j=await r.json();const root=document.getElementById('w');root.innerHTML='';(j.items||[]).forEach(x=>{const d=document.createElement('div');d.className='card';d.innerHTML=`<strong>#${x.id}</strong> ${x.postcode} · ${x.radius_miles} miles · every ${x.frequency_minutes} min · ${x.contact_email||'-'} <div><button onclick='run(${x.id}, this)'>Run now</button></div>`;root.appendChild(d);});}async function run(id,btn){btn.disabled=true;btn.textContent='Running...';const r=await fetch('/api/watch/'+id+'/run',{method:'POST'});const j=await r.json();alert('Scan done. Alerts: '+(j.result?.alerts||0));btn.disabled=false;btn.textContent='Run now';}load();</script></body></html>
