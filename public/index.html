@@ -11,7 +11,11 @@ document.getElementById('f').addEventListener('submit', async (e)=>{
   e.preventDefault();
   const fd = new FormData(e.target);
   const body = Object.fromEntries(fd.entries());
-  const r = await fetch('/api/watch', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(body) });
+  const r = await fetch('https://dentist-radar.onrender.com/api/watch', {
+  method:'POST',
+  headers:{'content-type':'application/json'},
+  body: JSON.stringify(body)
+});
   const j = await r.json();
   const msg = document.getElementById('msg');
   if (j.ok) { msg.textContent = 'Alert created! Check your email when a local practice flips to accepting.'; e.target.reset(); }
