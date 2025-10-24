@@ -1,0 +1,7 @@
+/* Minimal normalize */
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0}
+img{max-width:100%;display:block}
+button,input,select{font:inherit}
+a{color:inherit}
