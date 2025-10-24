@@ -13,17 +13,13 @@
     <button id="refreshAnalytics">Refresh Analytics</button>
     <pre id="output"></pre>
   </main>
-
   <script>
-  document.getElementById("refreshWatches").onclick = async () => {
-    const r = await fetch("/api/watches");
-    const j = await r.json();
-    output.textContent = JSON.stringify(j.items, null, 2);
+  const out=document.getElementById("output");
+  document.getElementById("refreshWatches").onclick=async()=>{
+    const r=await fetch("/api/watches"); out.textContent=JSON.stringify(await r.json(),null,2);
   };
-  document.getElementById("refreshAnalytics").onclick = async () => {
-    const r = await fetch("/api/analytics");
-    const j = await r.json();
-    output.textContent = JSON.stringify(j.analytics, null, 2);
+  document.getElementById("refreshAnalytics").onclick=async()=>{
+    const r=await fetch("/api/analytics"); out.textContent=JSON.stringify(await r.json(),null,2);
   };
   </script>
 </body>
