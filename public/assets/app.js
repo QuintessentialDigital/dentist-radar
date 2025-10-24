@@ -1,1 +1,0 @@
-(function(){console.log('DR app loaded')})();
