@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Dentist Radar — NHS Availability Alerts</title>
+<meta name="description" content="Get alerts when NHS dentists near you start accepting new NHS patients.">
+<link rel="icon" href="/assets/logo.svg"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;700;800;900&display=swap" rel="stylesheet">
+
+<link rel="stylesheet" href="/assets/theme.css"/>
+</head>
+<body>
+<nav class="navbar">
+  <div class="nav-inner">
+    <a class="brand" href="/">
+      <img src="/assets/logo.svg" alt="Dentist Radar logo"/>
+      <span class="txt">Dentist&nbsp;Radar</span>
+    </a>
+    <div class="nav-links">
+      <a href="/pricing.html">Pricing</a>
+      <a href="/admin.html">Admin</a>
+    </div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div class="card hero">
+    <div>
+      <h1>Find an NHS dentist faster</h1>
+      <p class="lead">We monitor public NHS pages and email you when a nearby practice starts accepting new NHS patients.</p>
+
+      <form id="f" class="grid" aria-label="Create alert" style="max-width:720px">
+        <div class="full">
+          <label for="email">Email</label>
+          <div class="input"><input id="email" name="email" type="email" required placeholder="you@email.com" autocomplete="email"/></div>
+        </div>
+
+        <div class="col-6">
+          <label for="postcode">Postcode(s)</label>
+          <div class="input"><input id="postcode" name="postcode" type="text" required placeholder="RG41, RG1, SL6" aria-describedby="pc-note"/></div>
+          <div id="pc-note" class="help">Multiple postcodes allowed — separate with commas.</div>
+        </div>
+
+        <div class="col-4">
+          <label for="radius">Radius (miles)</label>
+          <div class="input"><input id="radius" name="radius_miles" type="number" value="10" min="1" max="30" required/></div>
+        </div>
+
+        <div class="full">
+          <div class="mt-12">
+            <button class="btn" type="submit">Create alert</button>
+            <a class="btn outline" href="/pricing.html">See plans</a>
+          </div>
+        </div>
+      </form>
+
+      <div id="ok" class="success" hidden></div>
+      <div id="err" class="error" hidden></div>
+    </div>
+    <div class="hero-vis" aria-hidden="true"></div>
+  </div>
+
+  <div class="card">
+    <h2>How it works</h2>
+    <div class="how">
+      <div class="step"><strong>1. Tell us your area</strong><br/><span class="note">Enter your email and postcode(s).</span></div>
+      <div class="step"><strong>2. We watch automatically</strong><br/><span class="note">Checks run regularly. Faster on Pro.</span></div>
+      <div class="step"><strong>3. You get an email</strong><br/><span class="note">When availability appears, we alert you so you can call the practice.</span></div>
+    </div>
+  </div>
+
+  <footer>
+    <div>© 2025 Dentist Radar</div>
+    <div><a href="/pricing.html">Pricing</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a> · <a href="/about.html">About</a></div>
+  </footer>
+</div>
+
+<script src="/assets/config.js"></script>
+<script src="/assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 40' aria-labelledby='title' role='img'>
+  <title>Dentist Radar</title>
+  <defs><linearGradient id='g' x1='0' x2='1'><stop offset='0' stop-color='#0EA5E9'/><stop offset='1' stop-color='#10B981'/></linearGradient></defs>
+  <g transform='translate(4,4)'>
+    <rect x='0' y='0' width='32' height='32' rx='10' fill='url(#g)'/>
+    <circle cx='10' cy='12' r='3' fill='#fff'/>
+    <circle cx='22' cy='12' r='3' fill='#fff'/>
+    <rect x='10' y='21' width='12' height='3' rx='1.5' fill='rgba(255,255,255,.95)'/>
+  </g>
+  <g font-family='Inter, Arial, sans-serif' font-weight='900' font-size='18' dominant-baseline='middle'>
+    <text x='48' y='20' fill='#0EA5E9'>Dentist</text>
+    <text x='112' y='20' fill='#10B981'>Radar</text>
+  </g>
+</svg>
