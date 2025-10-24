@@ -1,0 +1,6 @@
+<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 220 48'>
+  <defs><linearGradient id='g' x1='0' x2='1'><stop offset='0' stop-color='#0AA77F'/><stop offset='1' stop-color='#0891B2'/></linearGradient></defs>
+  <rect x='0' y='0' width='48' height='48' rx='12' fill='url(#g)'/>
+  <text x='60' y='30' font-family='Inter,Segoe UI,Arial' font-weight='800' font-size='22' fill='#fff'>Dentist</text>
+  <text x='140' y='30' font-family='Inter,Segoe UI,Arial' font-weight='800' font-size='22' fill='#7DD3FC'>Radar</text>
+</svg>
