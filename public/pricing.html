@@ -1,0 +1,47 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Pricing — Dentist Radar</title>
+<link rel="icon" href="/assets/favicon.svg">
+<link rel="stylesheet" href="/assets/normalize.css">
+<link rel="stylesheet" href="/assets/theme.css">
+</head><body><div class="wrap">
+  <!-- Set this if UI and API are different domains -->
+  <!-- <script>window.DR_API_BASE='https://your-api.onrender.com';</script> -->
+  <script src="/assets/app.js"></script>
+
+  <div class="card"><h1>Pricing</h1><p class="note">Simple plans. Cancel anytime.</p></div>
+  <div class="card">
+    <div class="grid">
+      <div class="card"><h2>Free</h2><p>1 postcode · checks every 3 hours · email alerts</p></div>
+      <div class="card"><h2>Quick Find</h2><p>£4.99 one‑time · 7 days · hourly checks</p><a class="btn" href="#" onclick="return checkout('quick')">Get Quick Find</a></div>
+      <div class="card"><h2>Pro</h2><p>£14.99/month · up to 5 postcodes · 30‑minute checks</p><a class="btn" href="#" onclick="return checkout('pro')">Go Pro</a></div>
+    </div>
+    <hr class="sep" aria-hidden="true">
+    <h2>Compare plans</h2>
+    <div class="how">
+      <div class="step"><strong>Postcodes</strong><br><span class="note">Free: 1 · Pro: 5</span></div>
+      <div class="step"><strong>Scan interval</strong><br><span class="note">Free: 3h · Pro: 30m</span></div>
+      <div class="step"><strong>Alerts</strong><br><span class="note">Email on both plans</span></div>
+    </div>
+    <hr class="sep" aria-hidden="true">
+    <h2>FAQ</h2>
+    <div class="section">
+      <p><strong>Do you book appointments?</strong><br><span class="note">No. We only notify you when NHS pages indicate availability so you can call the practice yourself.</span></p>
+      <p><strong>Is this official NHS?</strong><br><span class="note">No. We are independent and use public NHS information. Always verify directly with the practice.</span></p>
+      <p><strong>What’s different with Pro?</strong><br><span class="note">You can watch up to 5 areas and we check more frequently, so you’re more likely to catch openings.</span></p>
+      <p><strong>Can I cancel any time?</strong><br><span class="note">Yes — subscriptions are month-to-month.</span></p>
+    </div>
+  </div>
+  <footer><div class="links"><a href="/">Home</a> <a href="/privacy.html">Privacy</a></div><div>© 2025 Dentist Radar</div></footer>
+
+<script>
+function checkout(plan){
+  var email = prompt('Enter your email to continue:');
+  if(!email) return false;
+  fetch(apiPath('/api/checkout/session'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:email,plan:plan})})
+    .then(function(r){return r.json()})
+    .then(function(j){ if(j.ok&&j.url){ window.location=j.url; } else { alert('Could not start checkout: '+(j.error||'failed')); } })
+    .catch(function(e){ alert('Network error: '+e.message); });
+  return false;
+}
+</script>
+</div></body></html>
