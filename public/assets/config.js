@@ -1,1 +1,0 @@
-window.DR_API_BASE='https://dentist-radar.onrender.com'; window.apiPath=function(p){return (window.DR_API_BASE||'')+p};
