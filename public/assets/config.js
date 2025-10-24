@@ -1,0 +1,1 @@
+window.DR_API_BASE='';window.apiPath=(p)=>p;
