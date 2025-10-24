@@ -1,0 +1,1 @@
+window.DR_API_BASE=''; window.apiPath=function(p){return (window.DR_API_BASE||'')+p};
