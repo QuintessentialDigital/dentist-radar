@@ -18,7 +18,7 @@
   <main>
     <section class="hero">
       <h1>Find NHS Dentists Accepting Patients</h1>
-      <p>Instant alerts when a nearby dentist starts accepting new NHS patients.</p>
+      <p>Get instant alerts when a nearby dentist starts accepting new NHS patients.</p>
     </section>
 
     <section class="form-box">
@@ -41,14 +41,8 @@
     <section id="plans" class="plans">
       <h2>Plans</h2>
       <div class="plan-cards">
-        <div class="plan">
-          <h3>Free</h3>
-          <p>1 postcode • email alerts</p>
-        </div>
-        <div class="plan pro">
-          <h3>Pro</h3>
-          <p>Up to 5 postcodes • faster checks • priority alerts</p>
-        </div>
+        <div class="plan"><h3>Free</h3><p>1 postcode • email alerts</p></div>
+        <div class="plan pro"><h3>Pro</h3><p>Up to 5 postcodes • faster checks • priority alerts</p></div>
       </div>
     </section>
   </main>
@@ -58,20 +52,39 @@
   </footer>
 
   <script>
-  document.getElementById("createAlert").onclick = async () => {
-    const email = email.value.trim();
-    const postcode = postcode.value.trim();
-    const radius = radius.value.trim();
-    const res = await fetch("/api/watch/create", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, postcode, radius })
-    });
-    const data = await res.json();
-    const msg = document.getElementById("msg");
-    msg.textContent = data.ok ? "✅ Alert created!" : "⚠️ Error creating alert";
-    msg.style.display = "block";
-  };
+  (function () {
+    const byId = (id) => document.getElementById(id);
+    const btn = byId("createAlert");
+    const msg = byId("msg");
+
+    function show(ok, text) {
+      msg.style.display = "block";
+      msg.style.color = ok ? "#16a34a" : "#ef4444";
+      msg.textContent = text;
+    }
+
+    btn.onclick = async () => {
+      const email = byId("email").value.trim();
+      const postcode = byId("postcode").value.trim();
+      const radius = Number(byId("radius").value.trim() || 10);
+      if (!email || !postcode) {
+        show(false, "Please enter both email and postcode(s).");
+        return;
+      }
+      try {
+        const res = await fetch("/api/watch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, postcode, radius })
+        });
+        const j = await res.json();
+        if (j.ok) show(true, "✅ Alert created!");
+        else show(false, j.error || "Failed to create alert.");
+      } catch (e) {
+        show(false, e.message);
+      }
+    };
+  })();
   </script>
 </body>
 </html>
