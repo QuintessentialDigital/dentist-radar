@@ -6,7 +6,7 @@
   <title>Dentist Radar</title>
   <meta name="description" content="Be first to know when an NHS dentist near you starts accepting new patients. Create postcode alerts in seconds — free plan available."/>
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="preload" as="image" href="/logo.svg" imagesizes="(max-width: 480px) 160px, 240px">
+  <link rel="preload" as="image" href="/logo.svg" imagesizes="(max-width: 480px) 200px, 280px">
   <meta property="og:title" content="Dentist Radar">
   <meta property="og:description" content="Get instant email alerts when nearby NHS dentists start accepting NHS patients.">
   <meta property="og:type" content="website">
@@ -18,7 +18,7 @@
   <header class="navbar">
     <div class="nav-inner">
       <a class="brand" href="/" aria-label="Dentist Radar">
-        <img src="/logo.svg" alt="Dentist Radar" width="240" height="44" />
+        <img src="/logo.svg" alt="Dentist Radar" width="280" height="52" />
       </a>
       <nav class="nav-links">
         <a href="/pricing.html">Pricing</a>
@@ -37,7 +37,7 @@
         <p class="lead">
           We monitor public NHS sources and email you the moment a nearby practice starts accepting new NHS patients.
         </p>
-        <div class="nhs-note" aria-hidden="false">
+        <div class="nhs-note">
           <span class="nhs-dot" aria-hidden="true"></span>
           Data is sourced from publicly available NHS pages. Please double-check with the practice before you travel.
         </div>
@@ -54,7 +54,7 @@
         <div class="f-group">
           <input id="postcode" name="postcode" type="text" required inputmode="text" placeholder=" " class="f-input f-uppercase" aria-describedby="pcHelp pcErr"/>
           <label for="postcode" class="f-label">Postcode(s)</label>
-          <div id="pcHelp" class="help">Free plan allows up to <strong>2 postcodes</strong> per email. Separate with commas (e.g., <code>RG41, RG1</code>).</div>
+          <div id="pcHelp" class="help"><strong>Free plan supports 1 postcode.</strong> (e.g., <code>RG41</code> or <code>RG41 3XX</code>)</div>
           <div id="pcErr" class="field-err" role="alert" aria-live="polite"></div>
         </div>
 
@@ -78,9 +78,9 @@
     <section class="card section-gap">
       <h2>How it works</h2>
       <div class="how">
-        <div class="step"><strong>1.</strong> Tell us your areas (postcodes)</div>
-        <div class="step"><strong>2.</strong> We watch automatically (faster on Pro)</div>
-        <div class="step"><strong>3.</strong> You get an email when there’s availability</div>
+        <div class="step"><strong>1.</strong> Enter your area</div>
+        <div class="step"><strong>2.</strong> We watch automatically</div>
+        <div class="step"><strong>3.</strong> We email you when there’s availability</div>
       </div>
     </section>
 
@@ -161,13 +161,14 @@
       if (!Number.isInteger(r) || r < 1 || r > 30){ fieldError(radius, rErr, 'Radius must be 1–30 miles.'); bad = true; }
       else fieldOK(radius, rErr);
 
+      // Only allow ONE postcode on free plan
       const tokens = pc.value.split(',').map(s=>s.trim()).filter(Boolean);
-      if (!tokens.length){ fieldError(pc, pcErr, 'Enter at least one postcode.'); bad = true; }
+      if (!tokens.length){ fieldError(pc, pcErr, 'Enter a postcode.'); bad = true; }
+      else if (tokens.length > 1){ fieldError(pc, pcErr, 'Free plan supports 1 postcode. Separate plans support more.'); bad = true; }
       else {
-        for (const t of tokens){
-          if (!validPostcodeToken(t)){ fieldError(pc, pcErr, 'Invalid postcode: "'+t+'". Use full (RG41 3XX) or outward (RG41).'); bad = true; break; }
-        }
-        if (!bad) fieldOK(pc, pcErr);
+        const t = tokens[0];
+        if (!validPostcodeToken(t)){ fieldError(pc, pcErr, 'Invalid postcode. Use full (RG41 3XX) or outward (RG41).'); bad = true; }
+        else fieldOK(pc, pcErr);
       }
       return !bad;
     }
@@ -208,19 +209,25 @@
         const res = await fetch('/api/watch', {
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ email: email.value.trim(), postcode: pc.value.trim(), radius: Number(radius.value.trim()) })
+          body: JSON.stringify({
+            email: email.value.trim(),
+            postcode: pc.value.trim(),
+            radius: Number(radius.value.trim())
+          })
         });
         const j = await res.json().catch(()=>null);
 
         if (res.ok && j && j.ok){
-          if (j.duplicates > 0) showGlobal(infoBox, \`Note: \${j.duplicates} duplicate \${j.duplicates===1?'postcode was':'postcodes were'} skipped.\`);
-          showToast('🎉 You’re all set! We’ll email you when a dentist near you opens NHS spots.');
+          if (j.duplicates > 0){
+            showGlobal(infoBox, `Note: duplicate postcode skipped.`);
+          }
+          showToast('🎉 Alert set. We’ll email you as soon as there’s a match.');
           form.reset();
           [email, pc, radius].forEach(i=>i.removeAttribute('aria-invalid'));
           [emailErr, pcErr, rErr].forEach(e=>e.textContent='');
         } else {
           if (j && j.code === 'free_limit'){
-            showGlobal(errBox, j.error + ' Want to track more areas? Upgrade to Pro for unlimited postcodes.');
+            showGlobal(errBox, 'Free plan supports 1 postcode. Upgrade to add more areas.');
           } else {
             showGlobal(errBox, (j && j.error) ? ('❌ ' + j.error) : '❌ Could not create alert.');
           }
@@ -233,7 +240,7 @@
     }
 
     form.addEventListener('submit', e=>{ e.preventDefault(); submitForm(); });
-    $('createBtnMobile').addEventListener('click', submitForm);
+    btnM.addEventListener('click', submitForm);
   })();
   </script>
 </body>
