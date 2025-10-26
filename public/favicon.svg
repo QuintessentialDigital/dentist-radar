@@ -1,0 +1,13 @@
+<!-- Dentist Radar – Favicon -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0EA5E9"/>
+      <stop offset="1" stop-color="#10B981"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#ffffff"/>
+  <path d="M32 12c7 0 12 6 12 13 0 11-6 20-12 20s-12-9-12-20c0-7 5-13 12-13z" fill="url(#g)"/>
+  <circle cx="32" cy="25" r="6" fill="#fff"/>
+  <path d="M32 14a11 11 0 0 1 0 22" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/>
+</svg>
