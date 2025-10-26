@@ -1,26 +1,86 @@
-/* Base + header + cards + form + buttons + toast from previous message ... */
-
-/* HERO layout: copy/replace this part to ensure cross-browser layout */
-.hero{
-  display:grid; grid-template-columns:1fr; gap:16px; align-items:center;
+:root{
+  --bg:#f7f9fc; --surface:#ffffff; --ink:#0b1220; --muted:#5b6a82;
+  --line:#e6e9f0; --brand:#0ea5e9; --brand2:#10b981;
+  --radius:14px; --shadow:0 10px 24px rgba(15,23,42,.08);
+  --font:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
 }
-@media (min-width: 960px){
-  .hero{ grid-template-columns: 1.05fr .95fr; }
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);-webkit-font-smoothing:antialiased}
+.wrap{max-width:960px;margin:0 auto;padding:16px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:var(--shadow);margin-bottom:16px}
+
+/* Navbar */
+.navbar{background:var(--surface);border-bottom:1px solid var(--line)}
+.nav-inner{max-width:960px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.brand img{height:32px}
+.nav-links{display:flex;gap:10px}
+.nav-links a{text-decoration:none;color:inherit;font-weight:700;padding:8px 10px;border-radius:10px}
+.nav-links a:hover{background:#eef3f9}
+
+/* Hero */
+.hero h1{font-size:1.8rem;margin-bottom:6px}
+.hero .lead{color:var(--muted);margin-bottom:12px}
+
+/* Form */
+.form-grid{display:grid;grid-template-columns:1fr;gap:12px}
+@media(min-width:720px){.form-grid{grid-template-columns:1fr 1fr}.form-grid .btn{grid-column:span 2}}
+
+.f-group{position:relative}
+.f-input{
+  width:100%;height:56px;padding:22px 14px 8px 14px;
+  border:1px solid var(--line);border-radius:12px;
+  background:rgba(255,255,255,0.9);color:var(--ink);
+  font-size:16px;outline:none;
+  transition:border .15s,box-shadow .15s,background .15s;
 }
-.hero-figure{ margin:0; display:flex; align-items:center; justify-content:center }
-.hero-svg{ width:100%; height:auto; max-width:420px; }
+.f-input:focus{border-color:#0ea5e9;box-shadow:0 0 0 4px rgba(14,165,233,.15)}
+.f-label{
+  position:absolute;left:12px;top:50%;transform:translateY(-50%);
+  color:var(--muted);font-size:16px;pointer-events:none;
+  transition:all .15s ease;background:var(--surface);padding:0 4px;
+}
+.f-input::placeholder{color:transparent}
+.f-input:focus + .f-label,
+.f-input:not(:placeholder-shown) + .f-label{
+  top:8px;transform:none;font-size:12px;color:#0284c7;
+}
+.help{font-size:12px;color:var(--muted);margin-top:6px}
+.f-uppercase{text-transform:uppercase;letter-spacing:.3px}
 
-/* How it works */
-.how{display:grid; grid-template-columns:1fr; gap:10px}
-@media (min-width:720px){ .how{grid-template-columns:repeat(3,1fr)} }
-.step{display:flex; gap:10px; align-items:center; border:1px dashed var(--line); border-radius:12px; padding:12px; color:#5b6a82}
-.step .ico{width:28px; height:28px; border-radius:50%; background:linear-gradient(135deg,#0EA5E9,#10B981); color:#fff; font-weight:900; display:inline-flex; align-items:center; justify-content:center}
+/* Buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:14px 16px;
+border-radius:14px;font-weight:900;cursor:pointer;
+background:linear-gradient(135deg,var(--brand),var(--brand2));
+color:#fff;border:1px solid transparent;box-shadow:0 8px 20px rgba(2,132,199,.25);
+transition:transform .12s,filter .12s}
+.btn:hover{transform:translateY(-1px);filter:brightness(1.05)}
+.spinner{width:18px;height:18px;border-radius:50%;
+border:3px solid rgba(255,255,255,.45);border-top-color:#fff;
+display:none;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 
-/* Trust strip */
-.trust h2{ margin-top: 0 }
-.trust-list{ margin:10px 0 0 18px }
-.trust-list li{ margin:8px 0 }
+/* Toast + errors */
+.banner{padding:12px 14px;border-radius:12px;margin-top:10px;font-weight:700}
+.error{background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.35);color:#c0392b}
+.toast{position:fixed;right:16px;bottom:16px;z-index:9999;
+background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px 14px;
+box-shadow:var(--shadow);transform:translateY(24px);opacity:0;
+transition:transform .25s ease,opacity .25s ease;pointer-events:none;font-weight:800}
+.toast-success{border-color:rgba(34,197,94,.3)}
+.toast.show{transform:translateY(0);opacity:1}
 
-/* Optional photo */
-.hero-photo{ width:100%; height:auto; border-radius:12px; display:block }
-.photo-caption{ font-size:12px; color:#6c7a90; margin-top:6px }
+/* How & Trust */
+.how{display:grid;grid-template-columns:1fr;gap:10px}
+@media(min-width:720px){.how{grid-template-columns:repeat(3,1fr)}}
+.step{border:1px dashed var(--line);border-radius:12px;padding:12px;color:var(--muted)}
+.trust-list{margin:10px 0 0 18px}
+.trust-list li{margin:8px 0}
+
+/* Footer */
+.site-footer{margin:24px 0}
+.footer-inner{max-width:960px;margin:0 auto;padding:0 16px;
+display:flex;align-items:center;justify-content:space-between;
+color:var(--muted);font-size:12px;gap:10px}
+.footer-links{display:flex;gap:12px}
+.footer-links a{color:inherit;text-decoration:none}
+.footer-links a:hover{text-decoration:underline}
