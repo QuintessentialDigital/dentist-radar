@@ -15,13 +15,13 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <!-- Top nav -->
   <header class="navbar">
     <div class="nav-inner">
       <a class="brand" href="/" aria-label="Dentist Radar">
         <img src="/logo.svg" alt="Dentist Radar" width="240" height="44" />
       </a>
       <nav class="nav-links">
+        <a href="/pricing.html">Pricing</a>
         <a href="/about.html">About</a>
         <a href="/terms.html">Terms</a>
         <a href="/privacy.html">Privacy</a>
@@ -30,68 +30,52 @@
     </div>
   </header>
 
-  <!-- Content -->
   <main class="wrap">
-    <!-- Hero + form -->
     <section class="card hero">
       <div class="hero-head">
         <h1>Be first to know about NHS dentist openings</h1>
         <p class="lead">
           We monitor public NHS sources and email you the moment a nearby practice starts accepting new NHS patients.
         </p>
-        <div class="nhs-note" aria-hidden="true">
+        <div class="nhs-note" aria-hidden="false">
           <span class="nhs-dot" aria-hidden="true"></span>
-          Data sourced from publicly available NHS pages. Please confirm directly with the practice before travel.
+          Data is sourced from publicly available NHS pages. Please double-check with the practice before you travel.
         </div>
       </div>
 
       <form id="alertForm" class="form-grid" novalidate>
-        <!-- Email -->
         <div class="f-group">
-          <input id="email" name="email" type="email" required
-                 inputmode="email" autocomplete="email" placeholder=" "
-                 class="f-input" aria-describedby="emailHelp emailErr" />
+          <input id="email" name="email" type="email" required inputmode="email" autocomplete="email" placeholder=" " class="f-input" aria-describedby="emailHelp emailErr"/>
           <label for="email" class="f-label">Email</label>
           <div id="emailHelp" class="help">We’ll send alerts here.</div>
           <div id="emailErr" class="field-err" role="alert" aria-live="polite"></div>
         </div>
 
-        <!-- Postcodes -->
         <div class="f-group">
-          <input id="postcode" name="postcode" type="text" required
-                 inputmode="text" placeholder=" "
-                 class="f-input f-uppercase" aria-describedby="pcHelp pcErr" />
+          <input id="postcode" name="postcode" type="text" required inputmode="text" placeholder=" " class="f-input f-uppercase" aria-describedby="pcHelp pcErr"/>
           <label for="postcode" class="f-label">Postcode(s)</label>
-          <div id="pcHelp" class="help">
-            Free plan allows up to <strong>2 postcodes</strong> per email. Separate with commas (e.g., <code>RG41, RG1</code>).
-          </div>
+          <div id="pcHelp" class="help">Free plan allows up to <strong>2 postcodes</strong> per email. Separate with commas (e.g., <code>RG41, RG1</code>).</div>
           <div id="pcErr" class="field-err" role="alert" aria-live="polite"></div>
         </div>
 
-        <!-- Radius -->
         <div class="f-group">
-          <input id="radius" name="radius" type="number" required
-                 inputmode="numeric" min="1" max="30" step="1" value="10"
-                 placeholder=" " class="f-input" aria-describedby="rHelp rErr" />
+          <input id="radius" name="radius" type="number" required inputmode="numeric" min="1" max="30" step="1" value="10" placeholder=" " class="f-input" aria-describedby="rHelp rErr"/>
           <label for="radius" class="f-label">Radius (miles)</label>
           <div id="rHelp" class="help">We’ll check practices within this distance (1–30 miles).</div>
           <div id="rErr" class="field-err" role="alert" aria-live="polite"></div>
         </div>
 
-        <!-- Desktop/tablet submit -->
         <button id="createBtn" class="btn" type="submit">
           <span class="btn-label">Get my alert</span>
           <span class="spinner" aria-hidden="true"></span>
         </button>
 
-        <!-- Global banners (fallback) -->
         <div id="err" class="banner error" hidden></div>
         <div id="info" class="banner info" hidden></div>
       </form>
     </section>
 
-    <!-- How it works -->
-    <section class="card">
+    <section class="card section-gap">
       <h2>How it works</h2>
       <div class="how">
         <div class="step"><strong>1.</strong> Tell us your areas (postcodes)</div>
@@ -100,18 +84,16 @@
       </div>
     </section>
 
-    <!-- Trust strip -->
-    <section class="card trust">
+    <section class="card section-gap">
       <h2>Why people use Dentist Radar</h2>
       <ul class="trust-list">
         <li><strong>Made in the UK.</strong> Built for NHS patients.</li>
         <li><strong>Privacy first.</strong> We only store what’s needed for alerts.</li>
-        <li><strong>Transparent.</strong> We monitor public NHS pages; please confirm directly before travel.</li>
+        <li><strong>Transparent.</strong> We monitor public NHS pages; you confirm directly with the practice.</li>
       </ul>
     </section>
   </main>
 
-  <!-- Mobile sticky CTA -->
   <div class="sticky-cta">
     <button id="createBtnMobile" class="btn btn-full" type="button">
       <span class="btn-label">Get my alert</span>
@@ -119,11 +101,11 @@
     </button>
   </div>
 
-  <!-- Footer -->
   <footer class="site-footer">
     <div class="footer-inner">
       <div>© 2025 Dentist Radar</div>
       <nav class="footer-links">
+        <a href="/pricing.html">Pricing</a>
         <a href="/about.html">About</a>
         <a href="/terms.html">Terms</a>
         <a href="/privacy.html">Privacy</a>
@@ -131,10 +113,8 @@
     </div>
   </footer>
 
-  <!-- Toast (success) -->
   <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
-  <!-- App JS -->
   <script>
   (function(){
     const $ = id => document.getElementById(id);
@@ -158,67 +138,42 @@
     const btnMLabel= btnM.querySelector('.btn-label');
     const spinnerM = btnM.querySelector('.spinner');
 
-    // Correct, cross-browser regex
-    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const fullUK  = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/; // RG41 3XX, W1A 1HQ
-    const outward = /^[A-Z]{1,2}\d[A-Z\d]?$/;             // RG41, W1A, EC1
+    const emailRe = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
+    const fullUK  = /^[A-Z]{1,2}\\d[A-Z\\d]?\\s*\\d[A-Z]{2}$/;
+    const outward = /^[A-Z]{1,2}\\d[A-Z\\d]?$/;
 
     function validPostcodeToken(tok){
-      const t = tok.replace(/\s+/g,'').toUpperCase();
+      const t = tok.replace(/\\s+/g,'').toUpperCase();
       return fullUK.test(t) || outward.test(t);
     }
 
-    function fieldError(inputEl, errEl, msg){
-      inputEl.setAttribute('aria-invalid','true');
-      errEl.textContent = msg || '';
-    }
-    function fieldOK(inputEl, errEl){
-      inputEl.removeAttribute('aria-invalid');
-      errEl.textContent = '';
-    }
+    function fieldError(inputEl, errEl, msg){ inputEl.setAttribute('aria-invalid','true'); errEl.textContent = msg || ''; }
+    function fieldOK(inputEl, errEl){ inputEl.removeAttribute('aria-invalid'); errEl.textContent = ''; }
 
     function validateAll(){
       let bad = false;
 
-      // Email
       const e = email.value.trim();
-      if (!e || !emailRe.test(e)){
-        fieldError(email, emailErr, 'Please enter a valid email.');
-        bad = true;
-      } else fieldOK(email, emailErr);
+      if (!e || !emailRe.test(e)){ fieldError(email, emailErr, 'Please enter a valid email.'); bad = true; }
+      else fieldOK(email, emailErr);
 
-      // Radius
       const r = Number(radius.value.trim());
-      if (!Number.isInteger(r) || r < 1 || r > 30){
-        fieldError(radius, rErr, 'Radius must be 1–30 miles.');
-        bad = true;
-      } else fieldOK(radius, rErr);
+      if (!Number.isInteger(r) || r < 1 || r > 30){ fieldError(radius, rErr, 'Radius must be 1–30 miles.'); bad = true; }
+      else fieldOK(radius, rErr);
 
-      // Postcodes
       const tokens = pc.value.split(',').map(s=>s.trim()).filter(Boolean);
-      if (!tokens.length){
-        fieldError(pc, pcErr, 'Enter at least one postcode.');
-        bad = true;
-      } else {
+      if (!tokens.length){ fieldError(pc, pcErr, 'Enter at least one postcode.'); bad = true; }
+      else {
         for (const t of tokens){
-          if (!validPostcodeToken(t)){
-            fieldError(pc, pcErr, 'Invalid postcode: "'+t+'". Use full (RG41 3XX) or outward (RG41).');
-            bad = true;
-            break;
-          }
+          if (!validPostcodeToken(t)){ fieldError(pc, pcErr, 'Invalid postcode: "'+t+'". Use full (RG41 3XX) or outward (RG41).'); bad = true; break; }
         }
         if (!bad) fieldOK(pc, pcErr);
       }
-
       return !bad;
     }
 
-    // Normalise postcode while typing
     pc.addEventListener('input', e=>{
-      const v = e.target.value
-        .toUpperCase()
-        .replace(/\s+/g,' ')
-        .replace(/,\s*/g, ', ');
+      const v = e.target.value.toUpperCase().replace(/\\s+/g,' ').replace(/,\\s*/g, ', ');
       e.target.value = v;
     });
 
@@ -253,21 +208,14 @@
         const res = await fetch('/api/watch', {
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({
-            email: email.value.trim(),
-            postcode: pc.value.trim(),
-            radius: Number(radius.value.trim())
-          })
+          body: JSON.stringify({ email: email.value.trim(), postcode: pc.value.trim(), radius: Number(radius.value.trim()) })
         });
         const j = await res.json().catch(()=>null);
 
         if (res.ok && j && j.ok){
-          if (j.duplicates > 0){
-            showGlobal(infoBox, `Note: ${j.duplicates} duplicate ${j.duplicates===1?'postcode was':'postcodes were'} skipped.`);
-          }
+          if (j.duplicates > 0) showGlobal(infoBox, \`Note: \${j.duplicates} duplicate \${j.duplicates===1?'postcode was':'postcodes were'} skipped.\`);
           showToast('🎉 You’re all set! We’ll email you when a dentist near you opens NHS spots.');
           form.reset();
-          // Clear inline errors visually after reset
           [email, pc, radius].forEach(i=>i.removeAttribute('aria-invalid'));
           [emailErr, pcErr, rErr].forEach(e=>e.textContent='');
         } else {
@@ -284,12 +232,8 @@
       }
     }
 
-    // Desktop/tablet button submits the form
     form.addEventListener('submit', e=>{ e.preventDefault(); submitForm(); });
-
-    // Mobile sticky CTA triggers submit
-    btnM.addEventListener('click', submitForm);
-
+    $('createBtnMobile').addEventListener('click', submitForm);
   })();
   </script>
 </body>
