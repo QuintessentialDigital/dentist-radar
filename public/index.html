@@ -5,10 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Dentist Radar</title>
   <meta name="description" content="Be first to know when an NHS dentist near you starts accepting new patients. Create postcode alerts in seconds — free plan available."/>
-  <!-- Brand assets -->
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preload" as="image" href="/logo.svg" imagesizes="(max-width: 480px) 160px, 240px">
-  <!-- Social cards -->
   <meta property="og:title" content="Dentist Radar">
   <meta property="og:description" content="Get instant email alerts when nearby NHS dentists start accepting NHS patients.">
   <meta property="og:type" content="website">
@@ -21,7 +19,6 @@
   <header class="navbar">
     <div class="nav-inner">
       <a class="brand" href="/" aria-label="Dentist Radar">
-        <!-- Uses your previous logo file -->
         <img src="/logo.svg" alt="Dentist Radar" width="240" height="44" />
       </a>
       <nav class="nav-links">
@@ -37,51 +34,60 @@
   <main class="wrap">
     <!-- Hero + form -->
     <section class="card hero">
-      <div class="hero-text">
+      <div class="hero-head">
         <h1>Be first to know about NHS dentist openings</h1>
         <p class="lead">
           We monitor public NHS sources and email you the moment a nearby practice starts accepting new NHS patients.
         </p>
-
-        <form id="alertForm" class="form-grid" novalidate>
-          <!-- Email -->
-          <div class="f-group">
-            <input id="email" name="email" type="email" required
-                   inputmode="email" autocomplete="email" placeholder=" "
-                   class="f-input"/>
-            <label for="email" class="f-label">Email</label>
-            <div class="help">We’ll send alerts here.</div>
-          </div>
-
-          <!-- Postcodes -->
-          <div class="f-group">
-            <input id="postcode" name="postcode" type="text" required
-                   inputmode="text" placeholder=" "
-                   class="f-input f-uppercase"/>
-            <label for="postcode" class="f-label">Postcode(s)</label>
-            <div class="help">
-              Free plan allows up to <strong>2 postcodes</strong> per email. Separate with commas (e.g., <code>RG41, RG1</code>).
-            </div>
-          </div>
-
-          <!-- Radius -->
-          <div class="f-group">
-            <input id="radius" name="radius" type="number" required
-                   inputmode="numeric" min="1" max="30" step="1" value="10"
-                   placeholder=" " class="f-input"/>
-            <label for="radius" class="f-label">Radius (miles)</label>
-            <div class="help">1–30 miles.</div>
-          </div>
-
-          <button id="createBtn" class="btn" type="submit">
-            <span class="btn-label">Create alert</span>
-            <span class="spinner" aria-hidden="true"></span>
-          </button>
-
-          <div id="err" class="banner error" hidden></div>
-          <div id="info" class="banner info" hidden></div>
-        </form>
+        <div class="nhs-note" aria-hidden="true">
+          <span class="nhs-dot" aria-hidden="true"></span>
+          Data sourced from publicly available NHS pages. Please confirm directly with the practice before travel.
+        </div>
       </div>
+
+      <form id="alertForm" class="form-grid" novalidate>
+        <!-- Email -->
+        <div class="f-group">
+          <input id="email" name="email" type="email" required
+                 inputmode="email" autocomplete="email" placeholder=" "
+                 class="f-input" aria-describedby="emailHelp emailErr" />
+          <label for="email" class="f-label">Email</label>
+          <div id="emailHelp" class="help">We’ll send alerts here.</div>
+          <div id="emailErr" class="field-err" role="alert" aria-live="polite"></div>
+        </div>
+
+        <!-- Postcodes -->
+        <div class="f-group">
+          <input id="postcode" name="postcode" type="text" required
+                 inputmode="text" placeholder=" "
+                 class="f-input f-uppercase" aria-describedby="pcHelp pcErr" />
+          <label for="postcode" class="f-label">Postcode(s)</label>
+          <div id="pcHelp" class="help">
+            Free plan allows up to <strong>2 postcodes</strong> per email. Separate with commas (e.g., <code>RG41, RG1</code>).
+          </div>
+          <div id="pcErr" class="field-err" role="alert" aria-live="polite"></div>
+        </div>
+
+        <!-- Radius -->
+        <div class="f-group">
+          <input id="radius" name="radius" type="number" required
+                 inputmode="numeric" min="1" max="30" step="1" value="10"
+                 placeholder=" " class="f-input" aria-describedby="rHelp rErr" />
+          <label for="radius" class="f-label">Radius (miles)</label>
+          <div id="rHelp" class="help">We’ll check practices within this distance (1–30 miles).</div>
+          <div id="rErr" class="field-err" role="alert" aria-live="polite"></div>
+        </div>
+
+        <!-- Desktop/tablet submit -->
+        <button id="createBtn" class="btn" type="submit">
+          <span class="btn-label">Get my alert</span>
+          <span class="spinner" aria-hidden="true"></span>
+        </button>
+
+        <!-- Global banners (fallback) -->
+        <div id="err" class="banner error" hidden></div>
+        <div id="info" class="banner info" hidden></div>
+      </form>
     </section>
 
     <!-- How it works -->
@@ -105,6 +111,14 @@
     </section>
   </main>
 
+  <!-- Mobile sticky CTA -->
+  <div class="sticky-cta">
+    <button id="createBtnMobile" class="btn btn-full" type="button">
+      <span class="btn-label">Get my alert</span>
+      <span class="spinner" aria-hidden="true"></span>
+    </button>
+  </div>
+
   <!-- Footer -->
   <footer class="site-footer">
     <div class="footer-inner">
@@ -124,97 +138,158 @@
   <script>
   (function(){
     const $ = id => document.getElementById(id);
-    const err   = $('err');
-    const info  = $('info');
-    const btn   = $('createBtn');
-    const form  = $('alertForm');
-    const toastEl = $('toast');
+
+    const form   = $('alertForm');
+    const btn    = $('createBtn');
+    const btnM   = $('createBtnMobile');
+    const toast  = $('toast');
+    const errBox = $('err'), infoBox = $('info');
+
+    const email  = $('email');
+    const pc     = $('postcode');
+    const radius = $('radius');
+
+    const emailErr = $('emailErr');
+    const pcErr    = $('pcErr');
+    const rErr     = $('rErr');
+
     const btnLabel = btn.querySelector('.btn-label');
     const spinner  = btn.querySelector('.spinner');
+    const btnMLabel= btnM.querySelector('.btn-label');
+    const spinnerM = btnM.querySelector('.spinner');
 
-    // ✅ Correct, cross-browser regex
-    const emailRe = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
-    const fullUK  = /^[A-Z]{1,2}\\d[A-Z\\d]?\\s*\\d[A-Z]{2}$/;  // RG41 3XX, W1A 1HQ
-    const outward = /^[A-Z]{1,2}\\d[A-Z\\d]?$/;                // RG41, W1A, EC1
+    // Correct, cross-browser regex
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const fullUK  = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/; // RG41 3XX, W1A 1HQ
+    const outward = /^[A-Z]{1,2}\d[A-Z\d]?$/;             // RG41, W1A, EC1
 
     function validPostcodeToken(tok){
-      const t = tok.replace(/\\s+/g,'').toUpperCase();
+      const t = tok.replace(/\s+/g,'').toUpperCase();
       return fullUK.test(t) || outward.test(t);
     }
 
-    function validate(email, postcode, radius){
-      if (!email || !emailRe.test(email)) return 'Please enter a valid email.';
-      const r = Number(radius);
-      if (!Number.isInteger(r) || r < 1 || r > 30) return 'Radius must be 1–30 miles.';
-      const tokens = postcode.split(',').map(s=>s.trim()).filter(Boolean);
-      if (!tokens.length) return 'Enter at least one postcode.';
-      for (const t of tokens){
-        if (!validPostcodeToken(t)) return 'Invalid postcode: "'+t+'". Use full postcode (e.g., RG41 3XX) or outward (e.g., RG41).';
-      }
-      return null;
+    function fieldError(inputEl, errEl, msg){
+      inputEl.setAttribute('aria-invalid','true');
+      errEl.textContent = msg || '';
+    }
+    function fieldOK(inputEl, errEl){
+      inputEl.removeAttribute('aria-invalid');
+      errEl.textContent = '';
     }
 
-    function show(el,msg){ el.hidden=false; el.textContent=msg; }
-    function hide(el){ el.hidden=true; el.textContent=''; }
+    function validateAll(){
+      let bad = false;
 
-    // Auto-uppercase & tidy spaces in postcode
-    $('postcode').addEventListener('input', e => {
+      // Email
+      const e = email.value.trim();
+      if (!e || !emailRe.test(e)){
+        fieldError(email, emailErr, 'Please enter a valid email.');
+        bad = true;
+      } else fieldOK(email, emailErr);
+
+      // Radius
+      const r = Number(radius.value.trim());
+      if (!Number.isInteger(r) || r < 1 || r > 30){
+        fieldError(radius, rErr, 'Radius must be 1–30 miles.');
+        bad = true;
+      } else fieldOK(radius, rErr);
+
+      // Postcodes
+      const tokens = pc.value.split(',').map(s=>s.trim()).filter(Boolean);
+      if (!tokens.length){
+        fieldError(pc, pcErr, 'Enter at least one postcode.');
+        bad = true;
+      } else {
+        for (const t of tokens){
+          if (!validPostcodeToken(t)){
+            fieldError(pc, pcErr, 'Invalid postcode: "'+t+'". Use full (RG41 3XX) or outward (RG41).');
+            bad = true;
+            break;
+          }
+        }
+        if (!bad) fieldOK(pc, pcErr);
+      }
+
+      return !bad;
+    }
+
+    // Normalise postcode while typing
+    pc.addEventListener('input', e=>{
       const v = e.target.value
         .toUpperCase()
-        .replace(/\\s+/g,' ')
-        .replace(/,\\s*/g,', ');
+        .replace(/\s+/g,' ')
+        .replace(/,\s*/g, ', ');
       e.target.value = v;
     });
 
-    // Toast helpers
     function showToast(message, type='success'){
-      toastEl.textContent = message;
-      toastEl.className = 'toast ' + (type==='success' ? 'toast-success' : 'toast-error');
-      requestAnimationFrame(()=> toastEl.classList.add('show'));
-      setTimeout(()=> toastEl.classList.remove('show'), 3200);
+      toast.textContent = message;
+      toast.className = 'toast ' + (type==='success' ? 'toast-success' : 'toast-error');
+      requestAnimationFrame(()=> toast.classList.add('show'));
+      setTimeout(()=> toast.classList.remove('show'), 3200);
     }
 
     function setLoading(on){
-      if (on){ btn.disabled = true; btnLabel.textContent='Creating…'; spinner.style.display='inline-block'; }
-      else   { btn.disabled = false; btnLabel.textContent='Create alert'; spinner.style.display='none'; }
+      if (on){
+        btn.disabled = true; btnM.disabled = true;
+        btnLabel.textContent = 'Creating…'; btnMLabel.textContent = 'Creating…';
+        spinner.style.display = 'inline-block'; spinnerM.style.display = 'inline-block';
+      } else {
+        btn.disabled = false; btnM.disabled = false;
+        btnLabel.textContent = 'Get my alert'; btnMLabel.textContent = 'Get my alert';
+        spinner.style.display = 'none'; spinnerM.style.display = 'none';
+      }
     }
 
-    form.addEventListener('submit', async e=>{
-      e.preventDefault(); hide(err); hide(info);
+    function hideGlobal(){ errBox.hidden = true; errBox.textContent = ''; infoBox.hidden = true; infoBox.textContent = ''; }
+    function showGlobal(el, msg){ el.hidden=false; el.textContent=msg; }
 
-      const email = $('email').value.trim();
-      const radius = $('radius').value.trim();
-      const postcode = $('postcode').value.trim();
-
-      const problem = validate(email, postcode, radius);
-      if (problem){ show(err, problem); return; }
+    async function submitForm(){
+      hideGlobal();
+      if (!validateAll()) return;
 
       try{
         setLoading(true);
         const res = await fetch('/api/watch', {
           method:'POST',
           headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({ email, postcode, radius:Number(radius) })
+          body: JSON.stringify({
+            email: email.value.trim(),
+            postcode: pc.value.trim(),
+            radius: Number(radius.value.trim())
+          })
         });
-
         const j = await res.json().catch(()=>null);
+
         if (res.ok && j && j.ok){
-          if (j.duplicates > 0) show(info, `Note: ${j.duplicates} duplicate ${j.duplicates===1?'postcode was':'postcodes were'} skipped.`);
-          showToast('✅ Alert created! We’ll email you when a match appears.','success');
+          if (j.duplicates > 0){
+            showGlobal(infoBox, `Note: ${j.duplicates} duplicate ${j.duplicates===1?'postcode was':'postcodes were'} skipped.`);
+          }
+          showToast('🎉 You’re all set! We’ll email you when a dentist near you opens NHS spots.');
           form.reset();
+          // Clear inline errors visually after reset
+          [email, pc, radius].forEach(i=>i.removeAttribute('aria-invalid'));
+          [emailErr, pcErr, rErr].forEach(e=>e.textContent='');
         } else {
-          if (j && j.code === 'free_limit') {
-            show(err, j.error + ' Consider upgrading to Pro for more areas.');
+          if (j && j.code === 'free_limit'){
+            showGlobal(errBox, j.error + ' Want to track more areas? Upgrade to Pro for unlimited postcodes.');
           } else {
-            show(err, (j && j.error) ? ('❌ ' + j.error) : '❌ Could not create alert.');
+            showGlobal(errBox, (j && j.error) ? ('❌ ' + j.error) : '❌ Could not create alert.');
           }
         }
       } catch(ex){
-        show(err, 'Network error: ' + (ex && ex.message ? ex.message : 'unknown'));
+        showGlobal(errBox, 'Network error: ' + (ex && ex.message ? ex.message : 'unknown'));
       } finally {
         setLoading(false);
       }
-    });
+    }
+
+    // Desktop/tablet button submits the form
+    form.addEventListener('submit', e=>{ e.preventDefault(); submitForm(); });
+
+    // Mobile sticky CTA triggers submit
+    btnM.addEventListener('click', submitForm);
+
   })();
   </script>
 </body>
