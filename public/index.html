@@ -5,13 +5,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Dentist Radar</title>
   <meta name="description" content="Be first to know when an NHS dentist near you starts accepting new patients. Create postcode alerts in seconds — free plan available."/>
+  <!-- Brand assets -->
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preload" as="image" href="/logo.svg" imagesizes="(max-width: 480px) 160px, 240px">
+  <!-- Social cards -->
+  <meta property="og:title" content="Dentist Radar">
+  <meta property="og:description" content="Get instant email alerts when nearby NHS dentists start accepting NHS patients.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="/favicon.svg">
+  <meta name="twitter:card" content="summary">
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <!-- Top nav -->
   <header class="navbar">
     <div class="nav-inner">
-      <a class="brand" href="/">
-        <img src="/logo.svg" alt="Dentist Radar logo" width="180" height="36"/>
+      <a class="brand" href="/" aria-label="Dentist Radar">
+        <!-- Uses your previous logo file -->
+        <img src="/logo.svg" alt="Dentist Radar" width="240" height="44" />
       </a>
       <nav class="nav-links">
         <a href="/about.html">About</a>
@@ -22,7 +33,9 @@
     </div>
   </header>
 
+  <!-- Content -->
   <main class="wrap">
+    <!-- Hero + form -->
     <section class="card hero">
       <div class="hero-text">
         <h1>Be first to know about NHS dentist openings</h1>
@@ -31,6 +44,7 @@
         </p>
 
         <form id="alertForm" class="form-grid" novalidate>
+          <!-- Email -->
           <div class="f-group">
             <input id="email" name="email" type="email" required
                    inputmode="email" autocomplete="email" placeholder=" "
@@ -39,6 +53,7 @@
             <div class="help">We’ll send alerts here.</div>
           </div>
 
+          <!-- Postcodes -->
           <div class="f-group">
             <input id="postcode" name="postcode" type="text" required
                    inputmode="text" placeholder=" "
@@ -49,6 +64,7 @@
             </div>
           </div>
 
+          <!-- Radius -->
           <div class="f-group">
             <input id="radius" name="radius" type="number" required
                    inputmode="numeric" min="1" max="30" step="1" value="10"
@@ -68,6 +84,7 @@
       </div>
     </section>
 
+    <!-- How it works -->
     <section class="card">
       <h2>How it works</h2>
       <div class="how">
@@ -77,6 +94,7 @@
       </div>
     </section>
 
+    <!-- Trust strip -->
     <section class="card trust">
       <h2>Why people use Dentist Radar</h2>
       <ul class="trust-list">
@@ -87,6 +105,7 @@
     </section>
   </main>
 
+  <!-- Footer -->
   <footer class="site-footer">
     <div class="footer-inner">
       <div>© 2025 Dentist Radar</div>
@@ -98,22 +117,28 @@
     </div>
   </footer>
 
+  <!-- Toast (success) -->
   <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
+  <!-- App JS -->
   <script>
   (function(){
     const $ = id => document.getElementById(id);
-    const err = $('err'), info = $('info'), btn = $('createBtn'), form = $('alertForm'), toastEl = $('toast');
+    const err   = $('err');
+    const info  = $('info');
+    const btn   = $('createBtn');
+    const form  = $('alertForm');
+    const toastEl = $('toast');
     const btnLabel = btn.querySelector('.btn-label');
     const spinner  = btn.querySelector('.spinner');
 
-    // ✅ Correct regex (single backslashes)
-    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const fullUK  = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/;
-    const outward = /^[A-Z]{1,2}\d[A-Z\d]?$/;
+    // ✅ Correct, cross-browser regex
+    const emailRe = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
+    const fullUK  = /^[A-Z]{1,2}\\d[A-Z\\d]?\\s*\\d[A-Z]{2}$/;  // RG41 3XX, W1A 1HQ
+    const outward = /^[A-Z]{1,2}\\d[A-Z\\d]?$/;                // RG41, W1A, EC1
 
     function validPostcodeToken(tok){
-      const t = tok.replace(/\s+/g,'').toUpperCase();
+      const t = tok.replace(/\\s+/g,'').toUpperCase();
       return fullUK.test(t) || outward.test(t);
     }
 
@@ -132,12 +157,16 @@
     function show(el,msg){ el.hidden=false; el.textContent=msg; }
     function hide(el){ el.hidden=true; el.textContent=''; }
 
-    // Auto-uppercase & tidy spaces
+    // Auto-uppercase & tidy spaces in postcode
     $('postcode').addEventListener('input', e => {
-      const v = e.target.value.toUpperCase().replace(/\s+/g,' ').replace(/,\s*/g,', ');
+      const v = e.target.value
+        .toUpperCase()
+        .replace(/\\s+/g,' ')
+        .replace(/,\\s*/g,', ');
       e.target.value = v;
     });
 
+    // Toast helpers
     function showToast(message, type='success'){
       toastEl.textContent = message;
       toastEl.className = 'toast ' + (type==='success' ? 'toast-success' : 'toast-error');
@@ -167,14 +196,13 @@
           headers:{'Content-Type':'application/json'},
           body: JSON.stringify({ email, postcode, radius:Number(radius) })
         });
-        const j = await res.json().catch(()=>null);
 
+        const j = await res.json().catch(()=>null);
         if (res.ok && j && j.ok){
           if (j.duplicates > 0) show(info, `Note: ${j.duplicates} duplicate ${j.duplicates===1?'postcode was':'postcodes were'} skipped.`);
           showToast('✅ Alert created! We’ll email you when a match appears.','success');
           form.reset();
         } else {
-          // Special message for free plan limits
           if (j && j.code === 'free_limit') {
             show(err, j.error + ' Consider upgrading to Pro for more areas.');
           } else {
@@ -182,7 +210,7 @@
           }
         }
       } catch(ex){
-        show(err, 'Network error: ' + ex.message);
+        show(err, 'Network error: ' + (ex && ex.message ? ex.message : 'unknown'));
       } finally {
         setLoading(false);
       }
