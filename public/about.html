@@ -1,29 +1,52 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>About Us · Dentist Radar</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>About – Dentist Radar</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-<header><div class="logo">🦷 Dentist Radar</div></header>
+<header class="navbar">
+  <div class="nav-inner">
+    <a class="brand" href="/"><img src="/logo.svg" alt="Dentist Radar" height="34"/></a>
+    <nav class="nav-links">
+      <a href="/pricing.html">Pricing</a>
+      <a href="/about.html">About</a>
+      <a href="/terms.html">Terms</a>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/admin.html">Admin</a>
+    </nav>
+  </div>
+</header>
 
-<main>
-<h1>About Dentist Radar</h1>
-<p><strong>Dentist Radar</strong> is a simple, automated alert service that helps people find NHS dental practices accepting new patients.</p>
-
-<p>We monitor publicly available NHS practice information and notify subscribers by email as soon as a nearby dentist starts taking new patients. Our goal is to save you the time and frustration of manually checking every local practice.</p>
-
-<h2>Our Mission</h2>
-<p>To make access to NHS dental care transparent, fast, and fair for everyone across the UK — using AI and automation to reduce waiting times and missed opportunities for care.</p>
-
-<h2>Who We Are</h2>
-<p>Dentist Radar is an independent micro-SaaS product built in the UK to solve a real problem faced by millions of patients each year. Our team combines experience in data automation, health-tech, and digital design.</p>
+<main class="wrap page">
+  <section class="card">
+    <h1>About</h1>
+    <p>Dentist Radar helps NHS patients find availability faster by sending email alerts when practices near you appear to accept new NHS patients. We use publicly available NHS pages and keep your data minimal and private.</p>
+    <h2>Why we built this</h2>
+    <p>Finding an NHS dentist can be slow and frustrating. We created Dentist Radar to save you time — and to give you a fair chance to secure a place when openings appear.</p>
+    <h2>How it works</h2>
+    <ul>
+      <li>You add your email, postcode(s), and radius.</li>
+      <li>We check public NHS sources on a schedule.</li>
+      <li>We email you when a nearby practice appears to accept new NHS patients.</li>
+    </ul>
+    <p><strong>Note:</strong> Always double-check with the practice before you travel.</p>
+  </section>
 </main>
 
-<footer>
-<p>© 2025 Dentist Radar · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a></p>
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div>© 2025 Dentist Radar</div>
+    <nav class="footer-links">
+      <a href="/pricing.html">Pricing</a>
+      <a href="/about.html">About</a>
+      <a href="/terms.html">Terms</a>
+      <a href="/privacy.html">Privacy</a>
+    </nav>
+  </div>
 </footer>
 </body>
 </html>
