@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dentist Radar</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <div class="logo">🦷 Dentist Radar</div>
+    <nav>
+      <a href="about.html">About</a>
+      <a href="terms.html">Terms</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="admin.html">Admin</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <h1>Find NHS Dentists Accepting Patients</h1>
+      <p>Instant email alerts when a nearby dentist starts accepting new NHS patients.</p>
+    </section>
+
+    <section class="form-box">
+      <input id="email" placeholder="Your Email" />
+      <input id="postcode" placeholder="Postcode" />
+      <input id="radius" placeholder="Radius (miles)" value="10" />
+      <button id="createAlert">Create Alert</button>
+      <div id="msg"></div>
+    </section>
+  </main>
+
+  <footer>
+    <p>© 2025 Dentist Radar · <a href="about.html">About</a> · <a href="terms.html">Terms</a> · <a href="privacy.html">Privacy</a></p>
+  </footer>
+
+  <script>
+  document.getElementById("createAlert").onclick = async () => {
+    const email = document.getElementById("email").value.trim();
+    const postcode = document.getElementById("postcode").value.trim();
+    const radius = document.getElementById("radius").value.trim();
+    const msg = document.getElementById("msg");
+    if (!email || !postcode) { msg.textContent = "Please fill all fields."; msg.style.color="red"; return; }
+    const res = await fetch("/api/watch", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ email, postcode, radius })
+    });
+    const j = await res.json();
+    msg.textContent = j.ok ? "✅ Alert created!" : "⚠️ Error creating alert.";
+    msg.style.color = j.ok ? "green" : "red";
+  };
+  </script>
+</body>
+</html>
