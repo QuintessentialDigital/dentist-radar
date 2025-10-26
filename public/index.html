@@ -2,246 +2,115 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Dentist Radar</title>
-  <meta name="description" content="Be first to know when an NHS dentist near you starts accepting new patients. Create postcode alerts in seconds — free plan available."/>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="preload" as="image" href="/logo.svg" imagesizes="(max-width: 480px) 200px, 280px">
-  <meta property="og:title" content="Dentist Radar">
-  <meta property="og:description" content="Get instant email alerts when nearby NHS dentists start accepting NHS patients.">
-  <meta property="og:type" content="website">
-  <meta property="og:image" content="/favicon.svg">
-  <meta name="twitter:card" content="summary">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dentist Radar — Find an NHS Dentist Fast</title>
   <link rel="stylesheet" href="style.css" />
+  <link rel="icon" type="image/png" href="favicon.png" />
 </head>
 <body>
   <header class="navbar">
-    <div class="nav-inner">
-      <a class="brand" href="/" aria-label="Dentist Radar">
-        <img src="/logo.svg" alt="Dentist Radar" width="280" height="52" />
-      </a>
-      <nav class="nav-links">
-        <a href="/pricing.html">Pricing</a>
-        <a href="/about.html">About</a>
-        <a href="/terms.html">Terms</a>
-        <a href="/privacy.html">Privacy</a>
-        <a href="/admin.html">Admin</a>
+    <div class="nav-container">
+      <img src="logo.svg" alt="Dentist Radar" class="logo" />
+      <nav>
+        <a href="pricing.html">Pricing</a>
+        <a href="about.html">About</a>
+        <a href="terms.html">Terms</a>
+        <a href="privacy.html">Privacy</a>
+        <a href="admin.html">Admin</a>
       </nav>
     </div>
   </header>
 
-  <main class="wrap">
-    <section class="card hero">
-      <div class="hero-head">
-        <h1>Be first to know about NHS dentist openings</h1>
-        <p class="lead">
-          We monitor public NHS sources and email you the moment a nearby practice starts accepting new NHS patients.
-        </p>
-        <div class="nhs-note">
-          <span class="nhs-dot" aria-hidden="true"></span>
-          Data is sourced from publicly available NHS pages. Please double-check with the practice before you travel.
-        </div>
-      </div>
+  <main class="hero">
+    <section class="form-card">
+      <h1>Find an NHS Dentist Faster</h1>
+      <p>Get instant alerts when a nearby practice starts accepting NHS patients.</p>
 
-      <form id="alertForm" class="form-grid" novalidate>
-        <div class="f-group">
-          <input id="email" name="email" type="email" required inputmode="email" autocomplete="email" placeholder=" " class="f-input" aria-describedby="emailHelp emailErr"/>
-          <label for="email" class="f-label">Email</label>
-          <div id="emailHelp" class="help">We’ll send alerts here.</div>
-          <div id="emailErr" class="field-err" role="alert" aria-live="polite"></div>
+      <form id="alertForm">
+        <div class="input-group">
+          <label>Email address</label>
+          <input type="email" id="email" placeholder="you@example.com" required />
         </div>
 
-        <div class="f-group">
-          <input id="postcode" name="postcode" type="text" required inputmode="text" placeholder=" " class="f-input f-uppercase" aria-describedby="pcHelp pcErr"/>
-          <label for="postcode" class="f-label">Postcode(s)</label>
-          <div id="pcHelp" class="help"><strong>Free plan supports 1 postcode.</strong> (e.g., <code>RG41</code> or <code>RG41 3XX</code>)</div>
-          <div id="pcErr" class="field-err" role="alert" aria-live="polite"></div>
+        <div class="input-group">
+          <label>Postcode</label>
+          <input type="text" id="postcode" placeholder="e.g. RG41 3XX" required />
         </div>
 
-        <div class="f-group">
-          <input id="radius" name="radius" type="number" required inputmode="numeric" min="1" max="30" step="1" value="10" placeholder=" " class="f-input" aria-describedby="rHelp rErr"/>
-          <label for="radius" class="f-label">Radius (miles)</label>
-          <div id="rHelp" class="help">We’ll check practices within this distance (1–30 miles).</div>
-          <div id="rErr" class="field-err" role="alert" aria-live="polite"></div>
+        <div class="input-group">
+          <label>Radius (miles)</label>
+          <input type="number" id="radius" min="1" max="30" value="10" required />
         </div>
 
-        <button id="createBtn" class="btn" type="submit">
-          <span class="btn-label">Get my alert</span>
-          <span class="spinner" aria-hidden="true"></span>
-        </button>
-
-        <div id="err" class="banner error" hidden></div>
-        <div id="info" class="banner info" hidden></div>
+        <button type="submit" class="btn-primary">Get My Alert</button>
       </form>
-    </section>
 
-    <section class="card section-gap">
-      <h2>How it works</h2>
-      <div class="how">
-        <div class="step"><strong>1.</strong> Enter your area</div>
-        <div class="step"><strong>2.</strong> We watch automatically</div>
-        <div class="step"><strong>3.</strong> We email you when there’s availability</div>
-      </div>
-    </section>
+      <p class="hint">
+        ✅ Free plan allows 1 postcode. You can upgrade later for more.
+      </p>
 
-    <section class="card section-gap">
-      <h2>Why people use Dentist Radar</h2>
-      <ul class="trust-list">
-        <li><strong>Made in the UK.</strong> Built for NHS patients.</li>
-        <li><strong>Privacy first.</strong> We only store what’s needed for alerts.</li>
-        <li><strong>Transparent.</strong> We monitor public NHS pages; you confirm directly with the practice.</li>
-      </ul>
+      <div id="message" class="message"></div>
     </section>
   </main>
 
-  <div class="sticky-cta">
-    <button id="createBtnMobile" class="btn btn-full" type="button">
-      <span class="btn-label">Get my alert</span>
-      <span class="spinner" aria-hidden="true"></span>
-    </button>
-  </div>
-
-  <footer class="site-footer">
-    <div class="footer-inner">
-      <div>© 2025 Dentist Radar</div>
-      <nav class="footer-links">
-        <a href="/pricing.html">Pricing</a>
-        <a href="/about.html">About</a>
-        <a href="/terms.html">Terms</a>
-        <a href="/privacy.html">Privacy</a>
-      </nav>
+  <footer>
+    <div class="footer-container">
+      <p>© 2025 Dentist Radar. Data sourced from NHS England.</p>
+      <p class="disclaimer">
+        Always confirm with the practice directly before travelling.
+      </p>
+      <div class="footer-links">
+        <a href="privacy.html">Privacy</a>
+        <a href="terms.html">Terms</a>
+        <a href="about.html">About</a>
+      </div>
     </div>
   </footer>
 
-  <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
-
   <script>
-  (function(){
-    const $ = id => document.getElementById(id);
+    const form = document.getElementById("alertForm");
+    const msg = document.getElementById("message");
 
-    const form   = $('alertForm');
-    const btn    = $('createBtn');
-    const btnM   = $('createBtnMobile');
-    const toast  = $('toast');
-    const errBox = $('err'), infoBox = $('info');
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      msg.textContent = "";
+      const email = document.getElementById("email").value.trim();
+      const postcode = document.getElementById("postcode").value.trim();
+      const radius = document.getElementById("radius").value.trim();
 
-    const email  = $('email');
-    const pc     = $('postcode');
-    const radius = $('radius');
-
-    const emailErr = $('emailErr');
-    const pcErr    = $('pcErr');
-    const rErr     = $('rErr');
-
-    const btnLabel = btn.querySelector('.btn-label');
-    const spinner  = btn.querySelector('.spinner');
-    const btnMLabel= btnM.querySelector('.btn-label');
-    const spinnerM = btnM.querySelector('.spinner');
-
-    const emailRe = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
-    const fullUK  = /^[A-Z]{1,2}\\d[A-Z\\d]?\\s*\\d[A-Z]{2}$/;
-    const outward = /^[A-Z]{1,2}\\d[A-Z\\d]?$/;
-
-    function validPostcodeToken(tok){
-      const t = tok.replace(/\\s+/g,'').toUpperCase();
-      return fullUK.test(t) || outward.test(t);
-    }
-
-    function fieldError(inputEl, errEl, msg){ inputEl.setAttribute('aria-invalid','true'); errEl.textContent = msg || ''; }
-    function fieldOK(inputEl, errEl){ inputEl.removeAttribute('aria-invalid'); errEl.textContent = ''; }
-
-    function validateAll(){
-      let bad = false;
-
-      const e = email.value.trim();
-      if (!e || !emailRe.test(e)){ fieldError(email, emailErr, 'Please enter a valid email.'); bad = true; }
-      else fieldOK(email, emailErr);
-
-      const r = Number(radius.value.trim());
-      if (!Number.isInteger(r) || r < 1 || r > 30){ fieldError(radius, rErr, 'Radius must be 1–30 miles.'); bad = true; }
-      else fieldOK(radius, rErr);
-
-      // Only allow ONE postcode on free plan
-      const tokens = pc.value.split(',').map(s=>s.trim()).filter(Boolean);
-      if (!tokens.length){ fieldError(pc, pcErr, 'Enter a postcode.'); bad = true; }
-      else if (tokens.length > 1){ fieldError(pc, pcErr, 'Free plan supports 1 postcode. Separate plans support more.'); bad = true; }
-      else {
-        const t = tokens[0];
-        if (!validPostcodeToken(t)){ fieldError(pc, pcErr, 'Invalid postcode. Use full (RG41 3XX) or outward (RG41).'); bad = true; }
-        else fieldOK(pc, pcErr);
+      const emailRe = /^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/;
+      if (!emailRe.test(email)) {
+        msg.textContent = "❌ Enter a valid email.";
+        msg.className = "message error";
+        return;
       }
-      return !bad;
-    }
 
-    pc.addEventListener('input', e=>{
-      const v = e.target.value.toUpperCase().replace(/\\s+/g,' ').replace(/,\\s*/g, ', ');
-      e.target.value = v;
-    });
-
-    function showToast(message, type='success'){
-      toast.textContent = message;
-      toast.className = 'toast ' + (type==='success' ? 'toast-success' : 'toast-error');
-      requestAnimationFrame(()=> toast.classList.add('show'));
-      setTimeout(()=> toast.classList.remove('show'), 3200);
-    }
-
-    function setLoading(on){
-      if (on){
-        btn.disabled = true; btnM.disabled = true;
-        btnLabel.textContent = 'Creating…'; btnMLabel.textContent = 'Creating…';
-        spinner.style.display = 'inline-block'; spinnerM.style.display = 'inline-block';
-      } else {
-        btn.disabled = false; btnM.disabled = false;
-        btnLabel.textContent = 'Get my alert'; btnMLabel.textContent = 'Get my alert';
-        spinner.style.display = 'none'; spinnerM.style.display = 'none';
+      if (!postcode) {
+        msg.textContent = "❌ Enter a postcode.";
+        msg.className = "message error";
+        return;
       }
-    }
 
-    function hideGlobal(){ errBox.hidden = true; errBox.textContent = ''; infoBox.hidden = true; infoBox.textContent = ''; }
-    function showGlobal(el, msg){ el.hidden=false; el.textContent=msg; }
-
-    async function submitForm(){
-      hideGlobal();
-      if (!validateAll()) return;
-
-      try{
-        setLoading(true);
-        const res = await fetch('/api/watch', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({
-            email: email.value.trim(),
-            postcode: pc.value.trim(),
-            radius: Number(radius.value.trim())
-          })
+      try {
+        const res = await fetch("/api/watch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, postcode, radius })
         });
-        const j = await res.json().catch(()=>null);
-
-        if (res.ok && j && j.ok){
-          if (j.duplicates > 0){
-            showGlobal(infoBox, `Note: duplicate postcode skipped.`);
-          }
-          showToast('🎉 Alert set. We’ll email you as soon as there’s a match.');
+        const data = await res.json();
+        if (data.ok) {
+          msg.textContent = data.message || "✅ Alert created successfully!";
+          msg.className = "message success";
           form.reset();
-          [email, pc, radius].forEach(i=>i.removeAttribute('aria-invalid'));
-          [emailErr, pcErr, rErr].forEach(e=>e.textContent='');
         } else {
-          if (j && j.code === 'free_limit'){
-            showGlobal(errBox, 'Free plan supports 1 postcode. Upgrade to add more areas.');
-          } else {
-            showGlobal(errBox, (j && j.error) ? ('❌ ' + j.error) : '❌ Could not create alert.');
-          }
+          msg.textContent = data.error || "Something went wrong.";
+          msg.className = "message error";
         }
-      } catch(ex){
-        showGlobal(errBox, 'Network error: ' + (ex && ex.message ? ex.message : 'unknown'));
-      } finally {
-        setLoading(false);
+      } catch {
+        msg.textContent = "⚠️ Network error. Try again.";
+        msg.className = "message error";
       }
-    }
-
-    form.addEventListener('submit', e=>{ e.preventDefault(); submitForm(); });
-    btnM.addEventListener('click', submitForm);
-  })();
+    });
   </script>
 </body>
 </html>
