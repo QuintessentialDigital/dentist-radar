@@ -1,23 +1,124 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Admin · Dentist Radar</title>
-<link rel="stylesheet" href="style.css" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin – Dentist Radar</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-<header><div class="logo">🦷 Admin Dashboard</div></header>
-<main class="admin">
-  <button id="load">Load Alerts</button>
-  <pre id="out"></pre>
+<header class="navbar">
+  <div class="nav-inner">
+    <a class="brand" href="/"><img src="/logo.svg" alt="Dentist Radar" height="34"/></a>
+    <nav class="nav-links">
+      <a href="/pricing.html">Pricing</a>
+      <a href="/about.html">About</a>
+      <a href="/terms.html">Terms</a>
+      <a href="/privacy.html">Privacy</a>
+      <a href="/admin.html">Admin</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap page">
+  <section class="card">
+    <h1>Admin</h1>
+    <p>Quick overview of watches and a test scan trigger.</p>
+
+    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+      <button id="refreshBtn" class="btn">Refresh watches</button>
+      <button id="scanBtn" class="btn">Run scan</button>
+    </div>
+
+    <div id="adminInfo" class="banner info" hidden></div>
+    <div id="adminErr" class="banner error" hidden></div>
+
+    <div id="list" class="card" style="margin-top:12px;">
+      <h2 style="margin-top:0;">Watches</h2>
+      <div id="tableWrap" style="overflow:auto;">
+        <table id="tbl" style="width:100%; border-collapse:collapse;">
+          <thead>
+            <tr>
+              <th style="text-align:left; border-bottom:1px solid var(--line); padding:8px;">ID</th>
+              <th style="text-align:left; border-bottom:1px solid var(--line); padding:8px;">Email</th>
+              <th style="text-align:left; border-bottom:1px solid var(--line); padding:8px;">Postcode</th>
+              <th style="text-align:left; border-bottom:1px solid var(--line); padding:8px;">Radius</th>
+              <th style="text-align:left; border-bottom:1px solid var(--line); padding:8px;">Created</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
 </main>
+
+<footer class="site-footer">
+  <div class="footer-inner">
+    <div>© 2025 Dentist Radar</div>
+    <nav class="footer-links">
+      <a href="/pricing.html">Pricing</a>
+      <a href="/about.html">About</a>
+      <a href="/terms.html">Terms</a>
+      <a href="/privacy.html">Privacy</a>
+    </nav>
+  </div>
+</footer>
+
 <script>
-document.getElementById("load").onclick = async()=>{
-  const r = await fetch("/api/watches");
-  const j = await r.json();
-  document.getElementById("out").textContent = JSON.stringify(j.items,null,2);
-};
+(function(){
+  const $ = id => document.getElementById(id);
+  const info = $('adminInfo'), err = $('adminErr'), rows = $('rows');
+
+  function show(el,msg){ el.hidden=false; el.textContent=msg; }
+  function hide(el){ el.hidden=true; el.textContent=''; }
+
+  async function load(){
+    hide(info); hide(err);
+    try{
+      const res = await fetch('/api/watches');
+      const j = await res.json();
+      if(!res.ok || !j.ok) throw new Error(j.error || 'failed');
+
+      rows.innerHTML = '';
+      for(const w of j.items){
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td style="padding:8px; border-bottom:1px solid var(--line)">${w.id}</td>
+          <td style="padding:8px; border-bottom:1px solid var(--line)">${w.email}</td>
+          <td style="padding:8px; border-bottom:1px solid var(--line)">${w.postcode}</td>
+          <td style="padding:8px; border-bottom:1px solid var(--line)">${w.radius}</td>
+          <td style="padding:8px; border-bottom:1px solid var(--line)">${w.created}</td>
+        `;
+        rows.appendChild(tr);
+      }
+      show(info, 'Loaded ' + j.items.length + ' watch(es).');
+    }catch(ex){
+      show(err, ex.message);
+    }
+  }
+
+  async function scan(){
+    hide(info); hide(err);
+    try{
+      const token = ''; // optionally set here for local testing
+      const headers = token ? {'x-scan-token': token} : {};
+      const url = token ? '/api/scan' : '/api/scan?token=' + encodeURIComponent(token);
+      const res = await fetch(url, { method:'POST', headers });
+      const j = await res.json();
+      if(!res.ok || !j.ok) throw new Error(j.error || 'scan failed');
+      show(info, 'Scan OK. Total watches: ' + j.total + ' @ ' + j.time);
+    }catch(ex){
+      show(err, ex.message);
+    }
+  }
+
+  $('refreshBtn').addEventListener('click', load);
+  $('scanBtn').addEventListener('click', scan);
+
+  load();
+})();
 </script>
 </body>
 </html>
