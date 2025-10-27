@@ -22,7 +22,7 @@
       </button>
       <nav class="nav-links" aria-label="Primary">
         <a href="/">Home</a>
-        <a href="/pricing.html">Pricing</a>
+        <a href="/pricing.html" aria-current="page">Pricing</a>
         <a href="/about.html">About</a>
         <a href="/terms.html">Terms</a>
         <a href="/privacy.html">Privacy</a>
@@ -31,57 +31,54 @@
     </div>
   </header>
 
-  <main class="wrap page">
+  <main class="wrap">
     <section class="card">
       <h1>Simple, fair pricing</h1>
       <p class="lead">Start free forever. Upgrade if you want to track more areas or get faster checks — <strong>cancel anytime</strong>.</p>
 
-      <div class="pricing-grid">
+      <!-- PLAN CARDS -->
+      <div class="price-grid">
         <!-- Free -->
-        <div class="tier">
-          <h3>Free</h3>
-          <p class="price">£0</p>
+        <div class="plan-card">
+          <h2>Free</h2>
+          <p>1 postcode · Daily scan (every 24h)</p>
           <ul>
-            <li>1 postcode</li>
-            <li>Daily checks (every 24h)</li>
-            <li>Email alerts</li>
+            <li>Email alerts when availability changes</li>
             <li>Basic support</li>
           </ul>
-          <a class="btn btn-full" href="/">Get started free</a>
-          <p class="price-note">No card required</p>
+          <a class="btn" href="/">Get Started Free</a>
         </div>
 
         <!-- Pro -->
-        <div class="tier tier-featured">
-          <div class="pill">Most popular</div>
-          <h3>Pro</h3>
-          <p class="price">£4.99 <span class="price-sub">/ month</span></p>
+        <div class="plan-card highlight">
+          <h2>Pro</h2>
+          <p>Up to 5 postcodes · Every 30 minutes</p>
           <ul>
-            <li><strong>Up to 5 postcodes</strong></li>
-            <li><strong>Faster checks</strong> (every 30 mins)</li>
-            <li>Priority email alerts</li>
+            <li>Priority alerts</li>
+            <li>Faster checks</li>
             <li>Manage & delete alerts</li>
             <li>Email support</li>
           </ul>
-          <a class="btn btn-full" href="#" id="proCheckout">Upgrade to Pro</a>
-          <p class="price-note">Cancel anytime</p>
+          <a class="btn" href="#" id="proCheckout">Upgrade to Pro</a>
         </div>
 
         <!-- Family -->
-        <div class="tier">
-          <h3>Family</h3>
-          <p class="price">£8.99 <span class="price-sub">/ month</span></p>
+        <div class="plan-card">
+          <h2>Family</h2>
+          <p>Unlimited postcodes · Every 15 minutes</p>
           <ul>
-            <li><strong>Unlimited postcodes</strong></li>
-            <li><strong>Fastest checks</strong> (every 15 mins)</li>
+            <li>Fastest alerts</li>
             <li>Up to 4 family members</li>
             <li>Priority support</li>
           </ul>
-          <a class="btn btn-full" href="#" id="familyCheckout">Go Family</a>
-          <p class="price-note">Cancel anytime</p>
+          <a class="btn" href="#" id="familyCheckout">Go Family</a>
         </div>
       </div>
+    </section>
 
+    <!-- COMPARISON TABLE (no extra chips beneath) -->
+    <section class="card">
+      <h2>Compare plans</h2>
       <div class="table-wrap" style="margin-top:1rem;">
         <table class="plan-table">
           <thead>
@@ -94,7 +91,7 @@
           </thead>
           <tbody>
             <tr><td>Postcodes</td><td>1</td><td>Up to 5</td><td>Unlimited</td></tr>
-            <tr><td>Check frequency</td><td>Every 24h</td><td>Every 30 mins</td><td>Every 15 mins</td></tr>
+            <tr><td>Scan frequency</td><td>Every 24h</td><td>Every 30 mins</td><td>Every 15 mins</td></tr>
             <tr><td>Email alerts</td><td>✔</td><td>✔ (priority)</td><td>✔ (priority)</td></tr>
             <tr><td>Manage/delete alerts</td><td>—</td><td>✔</td><td>✔</td></tr>
             <tr><td>Family members</td><td>—</td><td>—</td><td>Up to 4</td></tr>
@@ -102,14 +99,9 @@
           </tbody>
         </table>
       </div>
-
-      <div style="display:flex; gap:.6rem; flex-wrap:wrap; margin-top:1rem;">
-        <span class="trust-chip">Verified NHS listings</span>
-        <span class="trust-chip">GDPR compliant</span>
-        <span class="trust-chip">No spam ever</span>
-      </div>
     </section>
 
+    <!-- CTA -->
     <section class="card cta-banner">
       <div class="cta-text">
         <h2>Start free. Upgrade when you’re ready.</h2>
@@ -126,7 +118,7 @@
     <div class="footer-inner">
       <div>© 2025 Dentist Radar</div>
       <nav class="footer-links">
-        <a href="/pricing.html">Pricing</a>
+        <a href="/pricing.html" aria-current="page">Pricing</a>
         <a href="/about.html">About</a>
         <a href="/terms.html">Terms</a>
         <a href="/privacy.html">Privacy</a>
@@ -134,7 +126,7 @@
     </div>
   </footer>
 
-  <!-- Mobile menu toggle (include this on EVERY page) -->
+  <!-- Mobile menu toggle (include on every page) -->
   <script>
     (function(){
       const toggle = document.querySelector('.nav-toggle');
