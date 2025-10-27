@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Dentist Radar</title>
   <meta name="description" content="Be first to know when an NHS dentist near you starts accepting new patients. Create postcode alerts in seconds — free plan available.">
-  <!-- Inter -->
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -41,14 +40,14 @@
         <p class="lead">We monitor public NHS sources and email you the moment a nearby practice starts accepting new NHS patients.</p>
         <div class="nhs-note">
           <span class="nhs-dot" aria-hidden="true"></span>
-          Data is sourced from publicly available NHS pages. Please confirm directly with the practice before you travel.
+          Data is sourced from publicly available NHS pages. Please confirm with the practice before you travel.
         </div>
 
         <!-- FORM -->
         <form id="alertForm" class="form-grid" novalidate>
           <div class="f-group">
             <input id="email" name="email" type="email" autocomplete="email"
-                  class="f-input" placeholder=" " required aria-describedby="emailHelp emailErr">
+                   class="f-input" placeholder=" " required aria-describedby="emailHelp emailErr">
             <label for="email" class="f-label">Email</label>
             <div id="emailHelp" class="help">We’ll send alerts here.</div>
             <div id="emailErr" class="field-err" role="alert" aria-live="polite"></div>
@@ -56,17 +55,15 @@
 
           <div class="f-group">
             <input id="postcode" name="postcode" type="text"
-                  class="f-input f-uppercase" placeholder=" " required aria-describedby="pcHelp pcErr">
+                   class="f-input f-uppercase" placeholder=" " required aria-describedby="pcHelp pcErr">
             <label for="postcode" class="f-label">Postcode(s)</label>
-            <div id="pcHelp" class="help">
-              <strong>Free plan supports 1 postcode.</strong> (e.g., <code>RG41</code> or <code>RG41 3XX</code>)
-            </div>
+            <div id="pcHelp" class="help"><strong>Free plan supports 1 postcode.</strong> (e.g., RG41 or RG41 3XX)</div>
             <div id="pcErr" class="field-err" role="alert" aria-live="polite"></div>
           </div>
 
           <div class="f-group">
             <input id="radius" name="radius" type="number" min="1" max="30" step="1" value="10"
-                  class="f-input" placeholder=" " required aria-describedby="rHelp rErr">
+                   class="f-input" placeholder=" " required aria-describedby="rHelp rErr">
             <label for="radius" class="f-label">Radius (miles)</label>
             <div id="rHelp" class="help">We’ll check practices within this distance (1–30 miles).</div>
             <div id="rErr" class="field-err" role="alert" aria-live="polite"></div>
@@ -82,33 +79,15 @@
         </form>
       </div>
 
-      <!-- OPTIONAL HEADER ILLUSTRATION (desktop only) -->
-      <div class="hero-art" aria-hidden="true">
-        <svg viewBox="0 0 280 220" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <linearGradient id="g1" x1="0" x2="1" y1="0" y2="1">
-              <stop offset="0" stop-color="#e8f0ff"/>
-              <stop offset="1" stop-color="#f6fbff"/>
-            </linearGradient>
-          </defs>
-          <rect x="0" y="0" width="280" height="220" rx="16" fill="url(#g1)"/>
-          <g stroke="#2563eb" fill="none" stroke-width="2" opacity=".6">
-            <circle cx="60" cy="80" r="26"/>
-            <path d="M40 120h40M45 135h30M50 150h20"/>
-            <rect x="140" y="40" width="86" height="60" rx="8"/>
-            <path d="M150 50h30M150 65h56M150 80h56"/>
-            <path d="M150 95h44"/>
-          </g>
-          <g fill="#0b3b6b" opacity=".08">
-            <circle cx="240" cy="24" r="8"/><circle cx="24" cy="194" r="6"/><circle cx="210" cy="200" r="10"/>
-          </g>
-        </svg>
+      <!-- HERO PHOTO (upload /public/img/hero-dentist.jpg) -->
+      <div class="hero-photo" aria-hidden="true">
+        <img src="/img/hero-dentist.jpg" alt="" loading="eager" decoding="async">
       </div>
     </section>
 
     <!-- HOW IT WORKS -->
     <section class="card section-gap">
-      <h2>How it works</h2>
+      <h2 class="section-title">How it works</h2>
       <div class="how">
         <div class="step"><strong>1.</strong> Enter your area</div>
         <div class="step"><strong>2.</strong> We watch automatically</div>
@@ -118,7 +97,7 @@
 
     <!-- WHY TRUST US -->
     <section class="card trust">
-      <h2>Why thousands trust Dentist Radar</h2>
+      <h2 class="section-title">Why thousands trust Dentist Radar</h2>
       <ul class="trust-points">
         <li>
           <img src="/icons/shield.svg" alt="" class="trust-icon" />
@@ -131,7 +110,7 @@
           <img src="/icons/lock.svg" alt="" class="trust-icon" />
           <div>
             <h3>GDPR & Privacy Compliant</h3>
-            <p>Your data is protected. We use encrypted storage and send alerts via <strong>Postmark</strong>, a UK-compliant, secure email service.</p>
+            <p>Your data is protected. We use encrypted storage and send alerts via <strong>Postmark</strong>, a UK-compliant email service.</p>
           </div>
         </li>
         <li>
@@ -145,14 +124,14 @@
           <img src="/icons/heart.svg" alt="" class="trust-icon" />
           <div>
             <h3>No Spam. Ever.</h3>
-            <p>We only send alerts you’ve requested. You can unsubscribe with a single click. No marketing emails. No hidden fees.</p>
+            <p>We only send alerts you’ve requested. Unsubscribe in a single click. No marketing emails.</p>
           </div>
         </li>
         <li>
           <img src="/icons/building.svg" alt="" class="trust-icon" />
           <div>
             <h3>Built in the UK</h3>
-            <p>Created and hosted in the United Kingdom to help families find real NHS dental care faster — built by parents, for parents.</p>
+            <p>Created and hosted in the United Kingdom to help families find NHS dental care faster.</p>
           </div>
         </li>
       </ul>
@@ -193,7 +172,7 @@
   </script>
 
   <script>
-  // Form validation + submit
+  // Form validation + submit (unchanged)
   (function(){
     const $ = id => document.getElementById(id);
     const form   = $('alertForm');
@@ -206,8 +185,8 @@
     const btnLabel = btn.querySelector('.btn-label'); const spinner = btn.querySelector('.spinner');
 
     const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const fullUK=/^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/;  // RG41 3XX / W1A 1HQ
-    const outward=/^[A-Z]{1,2}\d[A-Z\d]?$/;              // RG41 / W1A / EC1
+    const fullUK=/^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/;
+    const outward=/^[A-Z]{1,2}\d[A-Z\d]?$/;
 
     const validPostcodeToken = tok => {
       const t = tok.replace(/\s+/g,'').toUpperCase();
