@@ -4,119 +4,136 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Admin – Dentist Radar</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta name="description" content="Admin dashboard for Dentist Radar." />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-<header class="navbar">
-  <div class="nav-inner">
-    <a class="brand" href="/"><img src="/logo.svg" alt="Dentist Radar" height="52"/></a>
-    <nav class="nav-links">
-      <a href="/pricing.html">Pricing</a>
-      <a href="/about.html">About</a>
-      <a href="/terms.html">Terms</a>
-      <a href="/privacy.html">Privacy</a>
-      <a href="/admin.html">Admin</a>
-    </nav>
-  </div>
-</header>
-
-<main class="wrap page">
-  <section class="card">
-    <h1>Admin</h1>
-    <p>Quick overview of watches and a test scan trigger.</p>
-
-    <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
-      <button id="refreshBtn" class="btn">Refresh watches</button>
-      <button id="scanBtn" class="btn">Run scan</button>
+  <!-- NAVBAR -->
+  <header class="navbar">
+    <div class="nav-inner">
+      <a class="brand" href="/" aria-label="Dentist Radar">
+        <img src="/logo.svg" alt="Dentist Radar" width="340" height="68" />
+      </a>
+      <button class="nav-toggle" aria-label="Open menu" aria-expanded="false">
+        <span class="nav-burger"></span>
+      </button>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/">Home</a>
+        <a href="/pricing.html">Pricing</a>
+        <a href="/about.html">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="/admin.html" aria-current="page">Admin</a>
+      </nav>
     </div>
+  </header>
 
-    <div id="adminInfo" class="banner info" hidden></div>
-    <div id="adminErr" class="banner error" hidden></div>
+  <main class="wrap page">
+    <section class="card">
+      <h1>Admin</h1>
+      <p class="lead">Quick view of alerts and a manual scan trigger for testing.</p>
 
-    <div id="list" class="card" style="margin-top:12px;">
-      <h2 style="margin-top:0;">Watches</h2>
-      <div style="overflow:auto;">
-        <table style="width:100%; border-collapse:collapse;">
+      <div style="display:flex; gap:.6rem; flex-wrap:wrap; margin:.6rem 0 1rem;">
+        <button class="btn" id="loadWatches">Load Alerts</button>
+        <button class="btn btn-outline" id="runScan">Run Scan</button>
+        <span id="adminMsg" class="banner info" hidden></span>
+      </div>
+
+      <div class="table-wrap">
+        <table class="plan-table" id="watchTable">
           <thead>
             <tr>
-              <th style="text-align:left; border-bottom:1px solid var(--line); padding:8px;">ID</th>
-              <th style="text-align:left; border-bottom:1px solid var(--line); padding:8px;">Email</th>
-              <th style="text-align:left; border-bottom:1px solid var(--line); padding:8px;">Postcode</th>
-              <th style="text-align:left; border-bottom:1px solid var(--line); padding:8px;">Radius</th>
-              <th style="text-align:left; border-bottom:1px solid var(--line); padding:8px;">Created</th>
+              <th>Email</th>
+              <th>Postcode</th>
+              <th>Radius</th>
+              <th>Created</th>
             </tr>
           </thead>
-          <tbody id="rows"></tbody>
+          <tbody id="watchBody">
+            <tr><td colspan="4" style="text-align:center;color:#666;">No data yet.</td></tr>
+          </tbody>
         </table>
       </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div>© 2025 Dentist Radar</div>
+      <nav class="footer-links">
+        <a href="/pricing.html">Pricing</a>
+        <a href="/about.html">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+      </nav>
     </div>
-  </section>
-</main>
+  </footer>
 
-<footer class="site-footer">
-  <div class="footer-inner">
-    <div>© 2025 Dentist Radar</div>
-    <nav class="footer-links">
-      <a href="/pricing.html">Pricing</a>
-      <a href="/about.html">About</a>
-      <a href="/terms.html">Terms</a>
-      <a href="/privacy.html">Privacy</a>
-    </nav>
-  </div>
-</footer>
-
-<script>
-(function(){
-  const $ = id => document.getElementById(id);
-  const info = $('adminInfo'), err = $('adminErr'), rows = $('rows');
-
-  function show(el,msg){ el.hidden=false; el.textContent=msg; }
-  function hide(el){ el.hidden=true; el.textContent=''; }
-
-  async function load(){
-    hide(info); hide(err);
-    try{
-      const res = await fetch('/api/watches');
-      const j = await res.json();
-      if(!res.ok || !j.ok) throw new Error(j.error || 'failed');
-
-      rows.innerHTML = '';
-      for(const w of j.items){
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td style="padding:8px; border-bottom:1px solid var(--line)">${w.id}</td>
-          <td style="padding:8px; border-bottom:1px solid var(--line)">${w.email}</td>
-          <td style="padding:8px; border-bottom:1px solid var(--line)">${w.postcode}</td>
-          <td style="padding:8px; border-bottom:1px solid var(--line)">${w.radius}</td>
-          <td style="padding:8px; border-bottom:1px solid var(--line)">${w.created}</td>
-        `;
-        rows.appendChild(tr);
+  <!-- Mobile menu toggle -->
+  <script>
+    (function(){
+      const toggle = document.querySelector('.nav-toggle');
+      const links  = document.querySelector('.nav-links');
+      if (toggle && links){
+        toggle.addEventListener('click', ()=>{
+          const open = links.classList.toggle('open');
+          toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
       }
-      show(info, 'Loaded ' + j.items.length + ' watch(es).');
-    }catch(ex){
-      show(err, ex.message);
-    }
-  }
+    })();
+  </script>
 
-  async function scan(){
-    hide(info); hide(err);
-    try{
-      const token = ''; // optional for local; in production call with ?token=SCAN_TOKEN or header
-      const headers = token ? {'x-scan-token': token} : {};
-      const url = token ? '/api/scan' : '/api/scan?token=' + encodeURIComponent(token);
-      const res = await fetch(url, { method:'POST', headers });
-      const j = await res.json();
-      if(!res.ok || !j.ok) throw new Error(j.error || 'scan failed');
-      show(info, 'Scan OK. Total watches: ' + j.total + ' @ ' + j.time);
-    }catch(ex){
-      show(err, ex.message);
+  <!-- Admin logic -->
+  <script>
+    const msg = document.getElementById('adminMsg');
+    function showMsg(text, ok=true){
+      msg.textContent = text;
+      msg.className = 'banner ' + (ok ? 'info' : 'error');
+      msg.hidden = false;
+      setTimeout(()=>{ msg.hidden = true; }, 4000);
     }
-  }
 
-  $('refreshBtn').addEventListener('click', load);
-  $('scanBtn').addEventListener('click', scan);
-  load();
-})();
-</script>
+    document.getElementById('loadWatches')?.addEventListener('click', async ()=>{
+      try{
+        const res = await fetch('/api/watches');
+        const j = await res.json();
+        const tbody = document.getElementById('watchBody');
+        tbody.innerHTML = '';
+        if (!j.items || !j.items.length){
+          tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;">No alerts yet.</td></tr>';
+          return;
+        }
+        const rows = j.items.map(w=>{
+          const d = w.created ? new Date(w.created).toLocaleString('en-GB') : '';
+          return `<tr>
+            <td>${w.email || ''}</td>
+            <td>${w.postcode || ''}</td>
+            <td>${w.radius ?? ''}</td>
+            <td>${d}</td>
+          </tr>`;
+        }).join('');
+        tbody.innerHTML = rows;
+      }catch(ex){
+        showMsg('Failed to load alerts: ' + (ex?.message||'unknown'), false);
+      }
+    });
+
+    document.getElementById('runScan')?.addEventListener('click', async ()=>{
+      try{
+        const res = await fetch('/api/scan', { method:'POST' });
+        const j = await res.json().catch(()=>null);
+        if (res.ok && j && j.ok){
+          showMsg('Scan started: ' + (j.time || 'OK'));
+        } else {
+          showMsg('Scan failed: ' + (j?.error || 'unknown'), false);
+        }
+      }catch(ex){
+        showMsg('Scan error: ' + (ex?.message||'unknown'), false);
+      }
+    });
+  </script>
 </body>
 </html>
