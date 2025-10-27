@@ -1,14 +1,38 @@
 {
   "name": "dentist-radar",
-  "version": "1.7.0",
+  "version": "2.1.0",
+  "description": "Dentist Radar – NHS Dentist Availability Alert Micro-SaaS.",
   "type": "module",
   "main": "server.js",
-  "scripts": { "start": "node server.js" },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "lint": "eslint .",
+    "format": "prettier --write ."
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
-    "better-sqlite3": "^9.4.0",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.0",
+    "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "express-rate-limit": "^7.1.5"
-  }
+    "express-rate-limit": "^6.11.2",
+    "mongodb": "^6.8.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.14.0",
+    "nodemon": "^3.1.4",
+    "prettier": "^3.3.3"
+  },
+  "keywords": [
+    "dentist",
+    "nhs",
+    "availability",
+    "alerts",
+    "micro-saas",
+    "express",
+    "mongodb"
+  ],
+  "author": "Dentist Radar Team",
+  "license": "MIT"
 }
