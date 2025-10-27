@@ -33,7 +33,7 @@
 
   <main class="wrap page">
     <section class="card">
-      <h1 style="margin:0 0 .5rem;">Simple, fair pricing</h1>
+      <h1>Simple, fair pricing</h1>
       <p class="lead">Start free forever. Upgrade if you want to track more areas or get faster checks — <strong>cancel anytime</strong>.</p>
 
       <div class="pricing-grid">
@@ -82,23 +82,13 @@
         </div>
       </div>
 
-      <div class="trust-bullets">
-        <div class="trust-chip"><img src="/icons/shield.svg" alt="" /> Verified NHS data</div>
-        <div class="trust-chip"><img src="/icons/lock.svg" alt="" /> GDPR compliant</div>
-        <div class="trust-chip"><img src="/icons/timer.svg" alt="" /> Automatic checks</div>
-        <div class="trust-chip"><img src="/icons/heart.svg" alt="" /> No spam ever</div>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2 style="margin:0 0 .75rem;">Compare plans</h2>
-      <div class="table-wrap">
+      <div class="table-wrap" style="margin-top:1rem;">
         <table class="plan-table">
           <thead>
             <tr>
               <th>Feature</th>
               <th>Free</th>
-              <th>Pro</hith>
+              <th>Pro</th>
               <th>Family</th>
             </tr>
           </thead>
@@ -112,7 +102,12 @@
           </tbody>
         </table>
       </div>
-      <p class="hint" style="margin-top:.6rem;">You can stay on Free as long as you like.</p>
+
+      <div style="display:flex; gap:.6rem; flex-wrap:wrap; margin-top:1rem;">
+        <span class="trust-chip">Verified NHS listings</span>
+        <span class="trust-chip">GDPR compliant</span>
+        <span class="trust-chip">No spam ever</span>
+      </div>
     </section>
 
     <section class="card cta-banner">
@@ -139,29 +134,30 @@
     </div>
   </footer>
 
+  <!-- Mobile menu toggle (include this on EVERY page) -->
   <script>
-    // Mobile menu
-    const toggle = document.querySelector('.nav-toggle');
-    const links  = document.querySelector('.nav-links');
-    if (toggle && links){
-      toggle.addEventListener('click', ()=>{
-        const open = links.classList.toggle('open');
-        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-      });
-    }
+    (function(){
+      const toggle = document.querySelector('.nav-toggle');
+      const links  = document.querySelector('.nav-links');
+      if (toggle && links){
+        toggle.addEventListener('click', ()=>{
+          const open = links.classList.toggle('open');
+          toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+      }
+    })();
+  </script>
 
-    // Stripe links (replace with your live Checkout URLs)
+  <!-- Stripe links (replace with real Checkout URLs when ready) -->
+  <script>
     document.getElementById('proCheckout')?.addEventListener('click', (e)=> {
-      const url = '#';
-      if (url === '#'){ e.preventDefault(); alert('Connect Stripe Checkout URL for Pro.'); }
+      const url = '#'; if (url === '#'){ e.preventDefault(); alert('Add your Stripe Pro checkout URL.'); }
     });
     document.getElementById('familyCheckout')?.addEventListener('click', (e)=> {
-      const url = '#';
-      if (url === '#'){ e.preventDefault(); alert('Connect Stripe Checkout URL for Family.'); }
+      const url = '#'; if (url === '#'){ e.preventDefault(); alert('Add your Stripe Family checkout URL.'); }
     });
     document.getElementById('proCheckout2')?.addEventListener('click', (e)=> {
-      const url = '#';
-      if (url === '#'){ e.preventDefault(); alert('Connect Stripe Checkout URL for Pro.'); }
+      const url = '#'; if (url === '#'){ e.preventDefault(); alert('Add your Stripe Pro checkout URL.'); }
     });
   </script>
 </body>
