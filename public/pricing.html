@@ -4,71 +4,223 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Pricing – Dentist Radar</title>
-  <link rel="stylesheet" href="style.css" />
+  <meta name="description" content="Simple pricing. Start free. Upgrade for more postcodes and faster checks. Cancel anytime.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-<header class="navbar">
-  <div class="nav-inner">
-    <a class="brand" href="/"><img src="/logo.svg" alt="Dentist Radar" height="52"/></a>
-    <nav class="nav-links">
-      <a href="/pricing.html">Pricing</a>
-      <a href="/about.html">About</a>
-      <a href="/terms.html">Terms</a>
-      <a href="/privacy.html">Privacy</a>
-      <a href="/admin.html">Admin</a>
-    </nav>
-  </div>
-</header>
+  <header class="navbar">
+    <div class="nav-inner">
+      <a class="brand" href="/" aria-label="Dentist Radar">
+        <img src="/logo.svg" alt="Dentist Radar" width="300" height="64" />
+      </a>
 
-<main class="wrap page">
-  <section class="card">
-    <h1>Pricing</h1>
-    <p>Start free. Upgrade when you want to track more areas or need faster checks.</p>
+      <!-- Mobile toggle -->
+      <button class="nav-toggle" aria-label="Open menu" aria-expanded="false">
+        <span class="nav-burger"></span>
+      </button>
 
-    <div class="pricing-grid">
-      <div class="tier">
-        <h3>Free</h3>
-        <div class="price">£0</div>
-        <ul>
-          <li>1 postcode</li>
-          <li>Daily checks</li>
-          <li>Email alerts</li>
-        </ul>
-      </div>
-      <div class="tier">
-        <h3>Pro</h3>
-        <div class="price">£4.99 / month</div>
-        <ul>
-          <li>More postcodes</li>
-          <li>Faster checks (every 30 mins)</li>
-          <li>Priority alert emails</li>
-          <li>Manage & delete alerts</li>
-        </ul>
-      </div>
-      <div class="tier">
-        <h3>Family</h3>
-        <div class="price">£8.99 / month</div>
-        <ul>
-          <li>Up to 4 family members</li>
-          <li>Unlimited postcodes</li>
-          <li>Fastest checks (every 15 mins)</li>
-          <li>Priority support</li>
-        </ul>
-      </div>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/pricing.html">Pricing</a>
+        <a href="/about.html">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="/admin.html">Admin</a>
+      </nav>
     </div>
-  </section>
-</main>
+  </header>
 
-<footer class="site-footer">
-  <div class="footer-inner">
-    <div>© 2025 Dentist Radar</div>
-    <nav class="footer-links">
-      <a href="/pricing.html">Pricing</a>
-      <a href="/about.html">About</a>
-      <a href="/terms.html">Terms</a>
-      <a href="/privacy.html">Privacy</a>
-    </nav>
-  </div>
-</footer>
+  <main class="wrap page">
+    <section class="card">
+      <h1 style="margin:0 0 .5rem;">Simple, fair pricing</h1>
+      <p class="lead">Start free. Upgrade when you want to track more areas or get faster checks — <strong>cancel anytime</strong>.</p>
+
+      <div class="pricing-grid">
+        <!-- Free -->
+        <div class="tier">
+          <h3>Free</h3>
+          <p class="price">£0</p>
+          <ul>
+            <li>1 postcode</li>
+            <li>Daily checks (every 24h)</li>
+            <li>Email alerts</li>
+            <li>Basic support</li>
+          </ul>
+          <a class="btn btn-full" href="/">Get started free</a>
+          <p class="price-note">No card required</p>
+        </div>
+
+        <!-- Pro -->
+        <div class="tier tier-featured">
+          <div class="pill">Most popular</div>
+          <h3>Pro</h3>
+          <p class="price">£4.99 <span class="price-sub">/ month</span></p>
+          <ul>
+            <li><strong>Up to 5 postcodes</strong></li>
+            <li><strong>Faster checks</strong> (every 30 mins)</li>
+            <li>Priority email alerts</li>
+            <li>Manage & delete alerts</li>
+            <li>Email support</li>
+          </ul>
+          <!-- Replace href with your Stripe Checkout URL -->
+          <a class="btn btn-full" href="#" id="proCheckout">Upgrade to Pro</a>
+          <p class="price-note">Cancel anytime</p>
+        </div>
+
+        <!-- Family -->
+        <div class="tier">
+          <h3>Family</h3>
+          <p class="price">£8.99 <span class="price-sub">/ month</span></p>
+          <ul>
+            <li><strong>Unlimited postcodes</strong></li>
+            <li><strong>Fastest checks</strong> (every 15 mins)</li>
+            <li>Up to 4 family members</li>
+            <li>Priority support</li>
+          </ul>
+          <!-- Replace href with your Stripe Checkout URL -->
+          <a class="btn btn-full" href="#" id="familyCheckout">Go Family</a>
+          <p class="price-note">Cancel anytime</p>
+        </div>
+      </div>
+
+      <div class="trust-bullets">
+        <div class="trust-chip"><img src="/icons/shield.svg" alt="" /> Verified NHS data</div>
+        <div class="trust-chip"><img src="/icons/lock.svg" alt="" /> GDPR compliant</div>
+        <div class="trust-chip"><img src="/icons/timer.svg" alt="" /> Automatic checks</div>
+        <div class="trust-chip"><img src="/icons/heart.svg" alt="" /> No spam ever</div>
+      </div>
+    </section>
+
+    <!-- Comparison -->
+    <section class="card">
+      <h2 style="margin:0 0 .75rem;">Compare plans</h2>
+      <div class="table-wrap">
+        <table class="plan-table">
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th>Free</th>
+              <th>Pro</th>
+              <th>Family</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Postcodes</td>
+              <td>1</td>
+              <td>Up to 5</td>
+              <td>Unlimited</td>
+            </tr>
+            <tr>
+              <td>Check frequency</td>
+              <td>Every 24h</td>
+              <td>Every 30 mins</td>
+              <td>Every 15 mins</td>
+            </tr>
+            <tr>
+              <td>Email alerts</td>
+              <td>✔</td>
+              <td>✔ (priority)</td>
+              <td>✔ (priority)</td>
+            </tr>
+            <tr>
+              <td>Manage/delete alerts</td>
+              <td>—</td>
+              <td>✔</td>
+              <td>✔</td>
+            </tr>
+            <tr>
+              <td>Family members</td>
+              <td>—</td>
+              <td>—</td>
+              <td>Up to 4</td>
+            </tr>
+            <tr>
+              <td>Support</td>
+              <td>Basic</td>
+              <td>Email</td>
+              <td>Priority</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="hint" style="margin-top:.6rem;">You can stay on Free as long as you like.</p>
+    </section>
+
+    <!-- FAQ -->
+    <section class="card">
+      <h2 style="margin:0 0 .75rem;">Frequently asked questions</h2>
+      <div class="faq">
+        <details>
+          <summary>How do you get your data?</summary>
+          <p>We monitor <strong>official NHS Find a Dentist pages</strong> on a schedule. When a practice appears to accept new NHS patients, we email you.</p>
+        </details>
+        <details>
+          <summary>Will you send marketing emails?</summary>
+          <p>No. We only send the alerts you requested, plus essential service messages. You can unsubscribe in one click.</p>
+        </details>
+        <details>
+          <summary>Can I cancel anytime?</summary>
+          <p>Yes. Subscriptions are month-to-month via Stripe. You can cancel anytime from your receipt email or by contacting support.</p>
+        </details>
+        <details>
+          <summary>Which areas do you cover?</summary>
+          <p>We cover England where NHS dentist listings are publicly available. Add your postcode and radius; we’ll monitor nearby practices.</p>
+        </details>
+      </div>
+    </section>
+
+    <section class="card cta-banner">
+      <div class="cta-text">
+        <h2>Start free. Upgrade when you’re ready.</h2>
+        <p>No risk, no spam, and you can cancel anytime.</p>
+      </div>
+      <div class="cta-actions">
+        <a class="btn" href="/">Create a free alert</a>
+        <!-- Replace with Stripe Pro checkout -->
+        <a class="btn btn-outline" href="#" id="proCheckout2">Upgrade to Pro</a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div>© 2025 Dentist Radar</div>
+      <nav class="footer-links">
+        <a href="/pricing.html">Pricing</a>
+        <a href="/about.html">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+      </nav>
+    </div>
+  </footer>
+
+  <script>
+    // Mobile menu toggle
+    const toggle = document.querySelector('.nav-toggle');
+    const links  = document.querySelector('.nav-links');
+    if (toggle && links){
+      toggle.addEventListener('click', ()=>{
+        const open = links.classList.toggle('open');
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+    }
+
+    // Stripe checkout placeholders – replace "#" with your live Stripe Checkout URL
+    document.getElementById('proCheckout')?.addEventListener('click', (e)=> {
+      const url = '#'; // TODO: set Stripe Checkout URL
+      if (url === '#'){ e.preventDefault(); alert('Connect Stripe Checkout URL for Pro.'); }
+    });
+    document.getElementById('familyCheckout')?.addEventListener('click', (e)=> {
+      const url = '#'; // TODO: set Stripe Checkout URL
+      if (url === '#'){ e.preventDefault(); alert('Connect Stripe Checkout URL for Family.'); }
+    });
+    document.getElementById('proCheckout2')?.addEventListener('click', (e)=> {
+      const url = '#'; // TODO: set Stripe Checkout URL
+      if (url === '#'){ e.preventDefault(); alert('Connect Stripe Checkout URL for Pro.'); }
+    });
+  </script>
 </body>
 </html>
