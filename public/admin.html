@@ -4,13 +4,12 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Admin – Dentist Radar</title>
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 <header class="navbar">
   <div class="nav-inner">
-    <a class="brand" href="/"><img src="/logo.svg" alt="Dentist Radar" height="34"/></a>
+    <a class="brand" href="/"><img src="/logo.svg" alt="Dentist Radar" height="52"/></a>
     <nav class="nav-links">
       <a href="/pricing.html">Pricing</a>
       <a href="/about.html">About</a>
@@ -36,8 +35,8 @@
 
     <div id="list" class="card" style="margin-top:12px;">
       <h2 style="margin-top:0;">Watches</h2>
-      <div id="tableWrap" style="overflow:auto;">
-        <table id="tbl" style="width:100%; border-collapse:collapse;">
+      <div style="overflow:auto;">
+        <table style="width:100%; border-collapse:collapse;">
           <thead>
             <tr>
               <th style="text-align:left; border-bottom:1px solid var(--line); padding:8px;">ID</th>
@@ -102,7 +101,7 @@
   async function scan(){
     hide(info); hide(err);
     try{
-      const token = ''; // optionally set here for local testing
+      const token = ''; // optional for local; in production call with ?token=SCAN_TOKEN or header
       const headers = token ? {'x-scan-token': token} : {};
       const url = token ? '/api/scan' : '/api/scan?token=' + encodeURIComponent(token);
       const res = await fetch(url, { method:'POST', headers });
@@ -116,7 +115,6 @@
 
   $('refreshBtn').addEventListener('click', load);
   $('scanBtn').addEventListener('click', scan);
-
   load();
 })();
 </script>
