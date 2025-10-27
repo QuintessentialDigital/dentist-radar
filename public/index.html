@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Dentist Radar</title>
   <meta name="description" content="Be first to know when an NHS dentist near you starts accepting new patients. Create postcode alerts in seconds — free plan available.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -33,14 +33,23 @@
 
   <!-- MAIN -->
   <main class="wrap">
-    <!-- HERO -->
+    <!-- HERO (no photo) -->
     <section class="card hero">
       <div>
         <h1>Be first to know about NHS dentist openings</h1>
         <p class="lead">We monitor public NHS sources and email you the moment a nearby practice starts accepting new NHS patients.</p>
+
+        <!-- minimal trust strip inside hero -->
         <div class="nhs-note">
           <span class="nhs-dot" aria-hidden="true"></span>
           Data is sourced from publicly available NHS pages. Please confirm with the practice before you travel.
+        </div>
+
+        <!-- quick trust mini-badges -->
+        <div style="display:flex; flex-wrap:wrap; gap:.5rem; margin:.9rem 0 0;">
+          <span class="trust-chip">Verified NHS listings</span>
+          <span class="trust-chip">GDPR & privacy first</span>
+          <span class="trust-chip">No spam, unsubscribe anytime</span>
         </div>
 
         <!-- FORM -->
@@ -78,11 +87,6 @@
           <div id="info" class="banner info" hidden></div>
         </form>
       </div>
-
-      <!-- HERO PHOTO (upload /public/img/hero-dentist.jpg) -->
-      <div class="hero-photo" aria-hidden="true">
-        <img src="/img/hero-dentist.jpg" alt="" loading="eager" decoding="async">
-      </div>
     </section>
 
     <!-- HOW IT WORKS -->
@@ -99,41 +103,10 @@
     <section class="card trust">
       <h2 class="section-title">Why thousands trust Dentist Radar</h2>
       <ul class="trust-points">
-        <li>
-          <img src="/icons/shield.svg" alt="" class="trust-icon" />
-          <div>
-            <h3>Verified NHS Data</h3>
-            <p>We monitor <strong>official NHS Find a Dentist pages</strong> every hour to give you accurate, up-to-date information — straight from the source.</p>
-          </div>
-        </li>
-        <li>
-          <img src="/icons/lock.svg" alt="" class="trust-icon" />
-          <div>
-            <h3>GDPR & Privacy Compliant</h3>
-            <p>Your data is protected. We use encrypted storage and send alerts via <strong>Postmark</strong>, a UK-compliant email service.</p>
-          </div>
-        </li>
-        <li>
-          <img src="/icons/timer.svg" alt="" class="trust-icon" />
-          <div>
-            <h3>Always Up to Date</h3>
-            <p>Our system scans NHS data automatically — <strong>every 60 minutes on free plans</strong> and up to every 15 minutes for Pro users.</p>
-          </div>
-        </li>
-        <li>
-          <img src="/icons/heart.svg" alt="" class="trust-icon" />
-          <div>
-            <h3>No Spam. Ever.</h3>
-            <p>We only send alerts you’ve requested. Unsubscribe in a single click. No marketing emails.</p>
-          </div>
-        </li>
-        <li>
-          <img src="/icons/building.svg" alt="" class="trust-icon" />
-          <div>
-            <h3>Built in the UK</h3>
-            <p>Created and hosted in the United Kingdom to help families find NHS dental care faster.</p>
-          </div>
-        </li>
+        <li><img src="/icons/shield.svg" alt="" class="trust-icon" /><div><h3>Verified NHS Data</h3><p>We monitor <strong>official NHS pages</strong> to give up-to-date information.</p></div></li>
+        <li><img src="/icons/lock.svg" alt="" class="trust-icon" /><div><h3>GDPR & Privacy</h3><p>Encrypted storage, reputable email delivery, and no spam.</p></div></li>
+        <li><img src="/icons/timer.svg" alt="" class="trust-icon" /><div><h3>Automatic Checks</h3><p>Every 60 minutes on Free; faster on Pro.</p></div></li>
+        <li><img src="/icons/heart.svg" alt="" class="trust-icon" /><div><h3>Built in the UK</h3><p>By parents, for parents — focused on real outcomes.</p></div></li>
       </ul>
 
       <div class="trust-footer">
@@ -156,109 +129,107 @@
     </div>
   </footer>
 
-  <!-- Scripts -->
+  <!-- Mobile menu toggle (include this on EVERY page) -->
   <script>
-  // Mobile menu toggle
-  (function(){
-    const toggle = document.querySelector('.nav-toggle');
-    const links  = document.querySelector('.nav-links');
-    if (toggle && links){
-      toggle.addEventListener('click', ()=>{
-        const open = links.classList.toggle('open');
-        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-      });
-    }
-  })();
+    (function(){
+      const toggle = document.querySelector('.nav-toggle');
+      const links  = document.querySelector('.nav-links');
+      if (toggle && links){
+        toggle.addEventListener('click', ()=>{
+          const open = links.classList.toggle('open');
+          toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+      }
+    })();
   </script>
 
+  <!-- Form validation + submit -->
   <script>
-  // Form validation + submit (unchanged)
-  (function(){
-    const $ = id => document.getElementById(id);
-    const form   = $('alertForm');
-    const btn    = $('createBtn');
-    const errBox = $('err'), infoBox = $('info');
-    const email  = $('email');
-    const pc     = $('postcode');
-    const radius = $('radius');
-    const emailErr = $('emailErr'); const pcErr = $('pcErr'); const rErr = $('rErr');
-    const btnLabel = btn.querySelector('.btn-label'); const spinner = btn.querySelector('.spinner');
+    (function(){
+      const $ = id => document.getElementById(id);
+      const form   = $('alertForm');
+      const btn    = $('createBtn');
+      const errBox = $('err'), infoBox = $('info');
+      const email  = $('email');
+      const pc     = $('postcode');
+      const radius = $('radius');
+      const emailErr = $('emailErr'); const pcErr = $('pcErr'); const rErr = $('rErr');
+      const btnLabel = btn.querySelector('.btn-label'); const spinner = btn.querySelector('.spinner');
 
-    const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const fullUK=/^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/;
-    const outward=/^[A-Z]{1,2}\d[A-Z\d]?$/;
+      const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const fullUK=/^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/;
+      const outward=/^[A-Z]{1,2}\d[A-Z\d]?$/;
 
-    const validPostcodeToken = tok => {
-      const t = tok.replace(/\s+/g,'').toUpperCase();
-      return fullUK.test(t) || outward.test(t);
-    };
+      const validPostcodeToken = tok => {
+        const t = tok.replace(/\s+/g,'').toUpperCase();
+        return fullUK.test(t) || outward.test(t);
+      };
 
-    const fieldError=(el,msgEl,msg)=>{ el.setAttribute('aria-invalid','true'); msgEl.textContent=msg||''; };
-    const fieldOK=(el,msgEl)=>{ el.removeAttribute('aria-invalid'); msgEl.textContent=''; };
-    const hideGlobal=()=>{ errBox.hidden=true; errBox.textContent=''; infoBox.hidden=true; infoBox.textContent=''; };
-    const showGlobal=(el,html)=>{ el.hidden=false; el.innerHTML=html; };
+      const fieldError=(el,msgEl,msg)=>{ el.setAttribute('aria-invalid','true'); msgEl.textContent=msg||''; };
+      const fieldOK=(el,msgEl)=>{ el.removeAttribute('aria-invalid'); msgEl.textContent=''; };
+      const hideGlobal=()=>{ errBox.hidden=true; errBox.textContent=''; infoBox.hidden=true; infoBox.textContent=''; };
+      const showGlobal=(el,html)=>{ el.hidden=false; el.innerHTML=html; };
 
-    pc.addEventListener('input', e=>{
-      const v=e.target.value.toUpperCase().replace(/\s+/g,' ').replace(/,\s*/g, ', ');
-      e.target.value=v;
-    });
+      pc.addEventListener('input', e=>{
+        const v=e.target.value.toUpperCase().replace(/\s+/g,' ').replace(/,\s*/g, ', ');
+        e.target.value=v;
+      });
 
-    function validate(){
-      let bad=false;
-      const e=email.value.trim();
-      if(!e || !emailRe.test(e)){ fieldError(email,emailErr,'Please enter a valid email.'); bad=true; } else fieldOK(email,emailErr);
-      const r=Number(radius.value.trim());
-      if(!Number.isInteger(r)||r<1||r>30){ fieldError(radius,rErr,'Radius must be 1–30 miles.'); bad=true; } else fieldOK(radius,rErr);
-      const tokens=pc.value.split(',').map(s=>s.trim()).filter(Boolean);
-      if(!tokens.length){ fieldError(pc,pcErr,'Enter a postcode.'); bad=true; }
-      else if(tokens.length>1){ fieldError(pc,pcErr,'Free plan supports 1 postcode.'); showGlobal(errBox,'Free plan supports 1 postcode. <a href="/pricing.html">Upgrade</a> to add more areas.'); bad=true; }
-      else{
-        const t=tokens[0];
-        if(!validPostcodeToken(t)){ fieldError(pc,pcErr,'Invalid postcode. Use full (RG41 3XX) or outward (RG41).'); bad=true; }
-        else fieldOK(pc,pcErr);
-      }
-      return !bad;
-    }
-
-    function setLoading(on){
-      if(on){ btn.disabled=true; btnLabel.textContent='Creating…'; spinner.style.display='inline-block'; }
-      else  { btn.disabled=false; btnLabel.textContent='Get My Alert'; spinner.style.display='none'; }
-    }
-
-    async function submitForm(){
-      hideGlobal();
-      if(!validate()) return;
-      try{
-        setLoading(true);
-        const res=await fetch('/api/watch',{ method:'POST', headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({ email:email.value.trim(), postcode:pc.value.trim(), radius:Number(radius.value.trim()) })});
-        const j=await res.json().catch(()=>null);
-        if(res.ok && j && j.ok){
-          if(j.duplicates>0){ showGlobal(infoBox,'Note: duplicate alert skipped for this email/postcode.'); }
-          else{ infoBox.hidden=true; }
-          showGlobal(infoBox,'🎉 Alert set. We’ll email you as soon as there’s a match.');
-          form.reset(); [email,pc,radius].forEach(i=>i.removeAttribute('aria-invalid')); [emailErr,pcErr,rErr].forEach(e=>e.textContent='');
-        }else{
-          if(j && j.code==='free_limit'){ showGlobal(errBox,'Free plan supports 1 postcode. <a href="/pricing.html">Upgrade</a> to add more areas.'); }
-          else{ showGlobal(errBox,(j && j.error)?('❌ '+j.error):'❌ Could not create alert.'); }
+      function validate(){
+        let bad=false;
+        const e=email.value.trim();
+        if(!e || !emailRe.test(e)){ fieldError(email,emailErr,'Please enter a valid email.'); bad=true; } else fieldOK(email,emailErr);
+        const r=Number(radius.value.trim());
+        if(!Number.isInteger(r)||r<1||r>30){ fieldError(radius,rErr,'Radius must be 1–30 miles.'); bad=true; } else fieldOK(radius,rErr);
+        const tokens=pc.value.split(',').map(s=>s.trim()).filter(Boolean);
+        if(!tokens.length){ fieldError(pc,pcErr,'Enter a postcode.'); bad=true; }
+        else if(tokens.length>1){ fieldError(pc,pcErr,'Free plan supports 1 postcode.'); showGlobal(errBox,'Free plan supports 1 postcode. <a href="/pricing.html">Upgrade</a>.'); bad=true; }
+        else{
+          const t=tokens[0];
+          if(!validPostcodeToken(t)){ fieldError(pc,pcErr,'Invalid postcode. Use RG41 or RG41 3XX.'); bad=true; }
+          else fieldOK(pc,pcErr);
         }
-      }catch(ex){ showGlobal(errBox,'Network error: '+(ex?.message||'unknown')); }
-      finally{ setLoading(false); }
-    }
+        return !bad;
+      }
 
-    form.addEventListener('submit', e=>{ e.preventDefault(); submitForm(); });
-  })();
+      function setLoading(on){
+        if(on){ btn.disabled=true; btnLabel.textContent='Creating…'; spinner.style.display='inline-block'; }
+        else  { btn.disabled=false; btnLabel.textContent='Get My Alert'; spinner.style.display='none'; }
+      }
+
+      async function submitForm(){
+        hideGlobal();
+        if(!validate()) return;
+        try{
+          setLoading(true);
+          const res=await fetch('/api/watch',{ method:'POST', headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({ email:email.value.trim(), postcode:pc.value.trim(), radius:Number(radius.value.trim()) })});
+          const j=await res.json().catch(()=>null);
+          if(res.ok && j && j.ok){
+            if(j.duplicates>0){ showGlobal(infoBox,'Note: duplicate alert skipped for this email/postcode.'); }
+            showGlobal(infoBox,'🎉 Alert set. We’ll email you as soon as there’s a match.');
+            form.reset(); [email,pc,radius].forEach(i=>i.removeAttribute('aria-invalid')); [emailErr,pcErr,rErr].forEach(e=>e.textContent='');
+          }else{
+            if(j && j.code==='free_limit'){ showGlobal(errBox,'Free plan supports 1 postcode. <a href="/pricing.html">Upgrade</a>.'); }
+            else{ showGlobal(errBox,(j && j.error)?('❌ '+j.error):'❌ Could not create alert.'); }
+          }
+        }catch(ex){ showGlobal(errBox,'Network error: '+(ex?.message||'unknown')); }
+        finally{ setLoading(false); }
+      }
+
+      form.addEventListener('submit', e=>{ e.preventDefault(); submitForm(); });
+    })();
   </script>
 
   <!-- Trust “last scan” -->
   <script>
-  (async()=>{
-    const el=document.getElementById('scanTime'); if(!el) return;
-    try{
-      const res=await fetch('/health'); const j=await res.json().catch(()=>null);
-      el.textContent=(j&&j.ok&&j.time)? new Date(j.time).toLocaleString('en-GB',{dateStyle:'medium', timeStyle:'short'}) : 'Unavailable';
-    }catch{ el.textContent='Unavailable'; }
-  })();
+    (async()=>{
+      const el=document.getElementById('scanTime'); if(!el) return;
+      try{
+        const res=await fetch('/health'); const j=await res.json().catch(()=>null);
+        el.textContent=(j&&j.ok&&j.time)? new Date(j.time).toLocaleString('en-GB',{dateStyle:'medium', timeStyle:'short'}) : 'Unavailable';
+      }catch{ el.textContent='Unavailable'; }
+    })();
   </script>
 </body>
 </html>
