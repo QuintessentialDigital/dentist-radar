@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Dentist Radar</title>
   <meta name="description" content="Be first to know when an NHS dentist near you starts accepting new patients. Create postcode alerts in seconds — free plan available.">
+
   <!-- Inter font -->
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/style.css" />
 </head>
@@ -25,6 +27,7 @@
       </button>
 
       <nav class="nav-links" aria-label="Primary">
+        <a href="/">Home</a>
         <a href="/pricing.html">Pricing</a>
         <a href="/about.html">About</a>
         <a href="/terms.html">Terms</a>
@@ -142,14 +145,6 @@
     </section>
   </main>
 
-  <!-- MOBILE STICKY CTA -->
-  <div class="sticky-cta">
-    <button id="createBtnMobile" class="btn btn-full" type="button">
-      <span class="btn-label">Get my alert</span>
-      <span class="spinner" aria-hidden="true"></span>
-    </button>
-  </div>
-
   <!-- FOOTER -->
   <footer class="site-footer">
     <div class="footer-inner">
@@ -185,8 +180,6 @@
 
     const form   = $('alertForm');
     const btn    = $('createBtn');
-    const btnM   = $('createBtnMobile');
-    const toast  = $('toast');
     const errBox = $('err'), infoBox = $('info');
 
     const email  = $('email');
@@ -199,8 +192,6 @@
 
     const btnLabel = btn.querySelector('.btn-label');
     const spinner  = btn.querySelector('.spinner');
-    const btnMLabel= btnM.querySelector('.btn-label');
-    const spinnerM = btnM.querySelector('.spinner');
 
     const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const fullUK  = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/;
@@ -219,13 +210,13 @@
 
     function setLoading(on){
       if (on){
-        btn.disabled = true; btnM.disabled = true;
-        btnLabel.textContent = 'Creating…'; btnMLabel.textContent = 'Creating…';
-        spinner.style.display = 'inline-block'; spinnerM.style.display = 'inline-block';
+        btn.disabled = true;
+        btnLabel.textContent = 'Creating…';
+        spinner.style.display = 'inline-block';
       } else {
-        btn.disabled = false; btnM.disabled = false;
-        btnLabel.textContent = 'Get my alert'; btnMLabel.textContent = 'Get my alert';
-        spinner.style.display = 'none'; spinnerM.style.display = 'none';
+        btn.disabled = false;
+        btnLabel.textContent = 'Get my alert';
+        spinner.style.display = 'none';
       }
     }
 
@@ -302,7 +293,6 @@
     }
 
     form.addEventListener('submit', e=>{ e.preventDefault(); submitForm(); });
-    document.getElementById('createBtnMobile').addEventListener('click', submitForm);
   })();
   </script>
 
@@ -327,7 +317,7 @@
   })();
   </script>
 
-  <!-- Toast container (if you want toast feedback later) -->
+  <!-- Toast container (kept for future use) -->
   <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 </body>
 </html>
