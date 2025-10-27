@@ -12,7 +12,8 @@
   <header class="navbar">
     <div class="nav-inner">
       <a class="brand" href="/" aria-label="Dentist Radar">
-        <img src="/logo.svg" alt="Dentist Radar" width="280" height="52" />
+        <!-- Bigger, crisp logo -->
+        <img src="/logo.svg" alt="Dentist Radar" width="320" height="64" />
       </a>
       <nav class="nav-links">
         <a href="/pricing.html">Pricing</a>
@@ -31,27 +32,33 @@
         <p class="lead">We monitor public NHS sources and email you the moment a nearby practice starts accepting new NHS patients.</p>
         <div class="nhs-note">
           <span class="nhs-dot" aria-hidden="true"></span>
-          Data is sourced from publicly available NHS pages. Please double-check with the practice before you travel.
+          Data is sourced from publicly available NHS pages. Please confirm directly with the practice before you travel.
         </div>
       </div>
 
+      <!-- NOTE: placeholder=" " is intentional (single space). Labels do the work. -->
       <form id="alertForm" class="form-grid" novalidate>
         <div class="f-group">
-          <input id="email" name="email" type="email" required inputmode="email" autocomplete="email" placeholder=" " class="f-input" aria-describedby="emailHelp emailErr"/>
+          <input id="email" name="email" type="email" autocomplete="email"
+                 class="f-input" placeholder=" " required aria-describedby="emailHelp emailErr">
           <label for="email" class="f-label">Email</label>
           <div id="emailHelp" class="help">We’ll send alerts here.</div>
           <div id="emailErr" class="field-err" role="alert" aria-live="polite"></div>
         </div>
 
         <div class="f-group">
-          <input id="postcode" name="postcode" type="text" required inputmode="text" placeholder=" " class="f-input f-uppercase" aria-describedby="pcHelp pcErr"/>
+          <input id="postcode" name="postcode" type="text"
+                 class="f-input f-uppercase" placeholder=" " required aria-describedby="pcHelp pcErr">
           <label for="postcode" class="f-label">Postcode(s)</label>
-          <div id="pcHelp" class="help"><strong>Free plan supports 1 postcode.</strong> (e.g., <code>RG41</code> or <code>RG41 3XX</code>)</div>
+          <div id="pcHelp" class="help">
+            <strong>Free plan supports 1 postcode.</strong> (e.g., <code>RG41</code> or <code>RG41 3XX</code>)
+          </div>
           <div id="pcErr" class="field-err" role="alert" aria-live="polite"></div>
         </div>
 
         <div class="f-group">
-          <input id="radius" name="radius" type="number" required inputmode="numeric" min="1" max="30" step="1" value="10" placeholder=" " class="f-input" aria-describedby="rHelp rErr"/>
+          <input id="radius" name="radius" type="number" min="1" max="30" step="1" value="10"
+                 class="f-input" placeholder=" " required aria-describedby="rHelp rErr">
           <label for="radius" class="f-label">Radius (miles)</label>
           <div id="rHelp" class="help">We’ll check practices within this distance (1–30 miles).</div>
           <div id="rErr" class="field-err" role="alert" aria-live="polite"></div>
@@ -75,17 +82,9 @@
         <div class="step"><strong>3.</strong> We email you when there’s availability</div>
       </div>
     </section>
-
-    <section class="card section-gap">
-      <h2>Why people use Dentist Radar</h2>
-      <ul class="trust-list">
-        <li><strong>Made in the UK.</strong> Built for NHS patients.</li>
-        <li><strong>Privacy first.</strong> We only store what’s needed for alerts.</li>
-        <li><strong>Transparent.</strong> We monitor public NHS pages; you confirm directly with the practice.</li>
-      </ul>
-    </section>
   </main>
 
+  <!-- Mobile sticky button uses the same submit logic -->
   <div class="sticky-cta">
     <button id="createBtnMobile" class="btn btn-full" type="button">
       <span class="btn-label">Get my alert</span>
@@ -130,13 +129,13 @@
     const btnMLabel= btnM.querySelector('.btn-label');
     const spinnerM = btnM.querySelector('.spinner');
 
-    // Correct regex (no extra escaping)
-    const emailRe = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
-    const fullUK  = /^[A-Z]{1,2}\\d[A-Z\\d]?\\s*\\d[A-Z]{2}$/;
-    const outward = /^[A-Z]{1,2}\\d[A-Z\\d]?$/;
+    // ✅ Correct regex (NO double backslashes because this is plain JS, not a string in HTML)
+    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const fullUK  = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/; // RG41 3XX / W1A 1HQ
+    const outward = /^[A-Z]{1,2}\d[A-Z\d]?$/;              // RG41 / W1A / EC1
 
     function validPostcodeToken(tok){
-      const t = tok.replace(/\\s+/g,'').toUpperCase();
+      const t = tok.replace(/\s+/g,'').toUpperCase();
       return fullUK.test(t) || outward.test(t);
     }
 
@@ -157,6 +156,12 @@
         spinner.style.display = 'none'; spinnerM.style.display = 'none';
       }
     }
+
+    // Keep inputs neat as you type
+    pc.addEventListener('input', e=>{
+      const v = e.target.value.toUpperCase().replace(/\s+/g,' ').replace(/,\s*/g, ', ');
+      e.target.value = v;
+    });
 
     function validateAll(){
       let bad = false;
@@ -182,11 +187,6 @@
       }
       return !bad;
     }
-
-    pc.addEventListener('input', e=>{
-      const v = e.target.value.toUpperCase().replace(/\\s+/g,' ').replace(/,\\s*/g, ', ');
-      e.target.value = v;
-    });
 
     function showToast(message, type='success'){
       toast.textContent = message;
@@ -237,7 +237,7 @@
     }
 
     form.addEventListener('submit', e=>{ e.preventDefault(); submitForm(); });
-    document.getElementById('createBtnMobile').addEventListener('click', submitForm);
+    btnM.addEventListener('click', submitForm);
   })();
   </script>
 </body>
