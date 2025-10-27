@@ -1,4 +1,4 @@
-// Dentist Radar — Production Server v1.6 (floating-label UI edition)
+// Dentist Radar — Production Server v1.7 (floating-label UI + duplicate note + free-limit prompt)
 import express from "express";
 import cors from "cors";
 import RateLimit from "express-rate-limit";
@@ -21,99 +21,95 @@ app.use(express.static(path.join(__dirname, "public")));
 const db = new Database(path.join(process.cwd(), "data.sqlite"));
 db.pragma("journal_mode = WAL");
 
-// ---------- TABLES ----------
+/* ---------- TABLES ---------- */
 db.prepare(`
   CREATE TABLE IF NOT EXISTS watches (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT NOT NULL,
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    email    TEXT NOT NULL,
     postcode TEXT NOT NULL,
-    radius INTEGER NOT NULL DEFAULT 10,
-    created TEXT NOT NULL DEFAULT (datetime('now'))
+    radius   INTEGER NOT NULL DEFAULT 10,
+    created  TEXT NOT NULL DEFAULT (datetime('now'))
 )`).run();
 
 db.prepare(`CREATE UNIQUE INDEX IF NOT EXISTS idx_email_pc ON watches(email, postcode)`).run();
 
 db.prepare(`
   CREATE TABLE IF NOT EXISTS analytics_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    type TEXT NOT NULL,
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
+    type    TEXT NOT NULL,   -- 'view' | 'alert_created'
     created TEXT NOT NULL DEFAULT (datetime('now'))
 )`).run();
 
 db.prepare(`
   CREATE TABLE IF NOT EXISTS manage_tokens (
-    email TEXT NOT NULL,
-    token TEXT NOT NULL,
+    email   TEXT NOT NULL,
+    token   TEXT NOT NULL,
     expires TEXT NOT NULL,
     created TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(email)
 )`).run();
 
-const recordEvent = (type) => {
+function recordEvent(type) {
   try { db.prepare("INSERT INTO analytics_events(type) VALUES (?)").run(String(type)); } catch {}
-};
+}
 
-// ---------- EMAIL ----------
+/* ---------- EMAIL (Postmark) ---------- */
 const POSTMARK_TOKEN = process.env.POSTMARK_TOKEN || "";
-const FROM_EMAIL     = process.env.FROM_EMAIL || "";                  // e.g. alerts@dentistradar.co.uk
+const FROM_EMAIL     = process.env.FROM_EMAIL || ""; // e.g. alerts@dentistradar.co.uk
 const BASE_URL       = process.env.BASE_URL || "https://www.dentistradar.co.uk";
 
 async function sendEmail(to, subject, text) {
   if (!POSTMARK_TOKEN || !FROM_EMAIL) {
     console.log("📭 Skipping email (configure POSTMARK_TOKEN & FROM_EMAIL).", { to, subject });
-    return;
+    return { ok:false, skipped:true };
   }
   const res = await fetch("https://api.postmarkapp.com/email", {
     method: "POST",
     headers: {
-      "Accept": "application/json",
-      "Content-Type": "application/json",
+      "Accept":"application/json",
+      "Content-Type":"application/json",
       "X-Postmark-Server-Token": POSTMARK_TOKEN
     },
-    body: JSON.stringify({
-      From: FROM_EMAIL,
-      To: to,
-      Subject: subject,
-      TextBody: text
-    })
+    body: JSON.stringify({ From: FROM_EMAIL, To: to, Subject: subject, TextBody: text })
   });
   if (!res.ok) {
-    const t = await res.text().catch(()=>"");
-    console.error("Postmark error:", t);
+    const err = await res.text().catch(()=> "");
+    console.error("Postmark error:", err);
+    return { ok:false, error:err };
   }
+  return { ok:true };
 }
 
-// ---------- VALIDATION ----------
+/* ---------- VALIDATION ---------- */
 const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const fullUK  = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i;  // RG41 3XX / W1A 1HQ
-const outward = /^[A-Z]{1,2}\d[A-Z\d]?$/i;               // RG41 / W1A / EC1
+const fullUK  = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i; // RG41 3XX, W1A 1HQ
+const outward = /^[A-Z]{1,2}\d[A-Z\d]?$/i;              // RG41, W1A, EC1
 const normalize = s => String(s||"").trim().toUpperCase().replace(/\s+/g, "");
 
-// ---------- POLICY ----------
+/* ---------- POLICY ---------- */
 const MAX_FREE_POSTCODES = 1;
 
-// ---------- ROUTES ----------
+/* ---------- ROUTES ---------- */
 app.get("/health", (req,res)=> res.json({ ok:true, time:new Date().toISOString() }));
 
-// Create alert
-app.post("/api/watch", async (req,res)=>{
-  try{
+// Create alert (returns {created, duplicates} and clear messages)
+app.post("/api/watch", async (req, res) => {
+  try {
     const { email, postcode, radius } = req.body || {};
 
-    if (!email || !emailRe.test(String(email))) {
+    if (!email || !emailRe.test(String(email)))
       return res.status(400).json({ ok:false, error:"Please enter a valid email." });
-    }
 
     const r = Number(radius);
-    if (!Number.isInteger(r) || r < 1 || r > 30) {
+    if (!Number.isInteger(r) || r < 1 || r > 30)
       return res.status(400).json({ ok:false, error:"Radius must be a whole number between 1 and 30." });
-    }
 
     const tokens = String(postcode||"").split(",").map(s=>s.trim()).filter(Boolean);
-    if (tokens.length === 0) return res.status(400).json({ ok:false, error:"Enter a postcode." });
-    if (tokens.length > MAX_FREE_POSTCODES) {
-      return res.status(400).json({ ok:false, error:`Free plan supports ${MAX_FREE_POSTCODES} postcode.`, code:"free_limit" });
-    }
+    if (tokens.length === 0)
+      return res.status(400).json({ ok:false, error:"Enter a postcode." });
+
+    if (tokens.length > MAX_FREE_POSTCODES)
+      return res.status(400).json({ ok:false, error:"Free plan supports 1 postcode.", code:"free_limit" });
 
     for (const t of tokens) {
       const pc = normalize(t);
@@ -122,13 +118,14 @@ app.post("/api/watch", async (req,res)=>{
     }
 
     const stmt = db.prepare("INSERT INTO watches(email, postcode, radius) VALUES (?,?,?)");
-    let created=0, dup=0;
+    let created = 0, dup = 0;
     for (const t of tokens) {
-      try { stmt.run(String(email).trim(), normalize(t), r); created++; }
-      catch(e){ if(String(e.message).includes("UNIQUE")) dup++; else throw e; }
+      const pc = normalize(t);
+      try { stmt.run(String(email).trim(), pc, r); created++; }
+      catch(e){ if (String(e.message).includes("UNIQUE")) dup++; else throw e; }
     }
 
-    if (created) {
+    if (created > 0) {
       recordEvent("alert_created");
       const list = tokens.map(normalize).join(", ");
       const subject = `Dentist Radar: alert set for ${list}`;
@@ -147,17 +144,26 @@ app.post("/api/watch", async (req,res)=>{
       await sendEmail(String(email).trim(), subject, body);
     }
 
-    res.json({ ok:true, message: created ? "✅ Alert created! We'll email you when availability changes." : "This alert already exists." });
-  }catch(e){
+    return res.json({
+      ok: true,
+      created,
+      duplicates: dup,
+      message: created
+        ? "✅ Alert created! We'll email you when availability changes."
+        : "This alert already exists."
+    });
+  } catch (e) {
     console.error("POST /api/watch", e);
-    res.status(500).json({ ok:false, error:"Server error creating alert." });
+    return res.status(500).json({ ok:false, error:"Server error creating alert." });
   }
 });
 
 // Admin list
 app.get("/api/watches", (req,res)=>{
   try{
-    const items = db.prepare("SELECT id,email,postcode,radius,created FROM watches ORDER BY id DESC LIMIT 200").all();
+    const items = db.prepare(
+      "SELECT id,email,postcode,radius,created FROM watches ORDER BY id DESC LIMIT 200"
+    ).all();
     res.json({ ok:true, items });
   }catch{
     res.status(500).json({ ok:false, error:"Failed to load alerts." });
@@ -171,13 +177,13 @@ app.get("/api/analytics", (req,res)=>{
     const views  = db.prepare("SELECT COUNT(*) AS c FROM analytics_events WHERE type='view'").get().c|0;
     const alerts = db.prepare("SELECT COUNT(*) AS c FROM analytics_events WHERE type='alert_created'").get().c|0;
     const users  = db.prepare("SELECT COUNT(DISTINCT email) AS c FROM watches").get().c|0;
-    res.json({ ok:true, analytics:{ views, alerts, users } });
+    res.json({ ok:true, analytics:{ views, alerts, users }});
   }catch{
     res.status(500).json({ ok:false, error:"Failed." });
   }
 });
 
-// Optional: secured manual scan stub
+/* Optional secured scan endpoint (stub) */
 const scanLimiter = RateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false });
 app.post("/api/scan", scanLimiter, (req,res)=>{
   const t = process.env.SCAN_TOKEN || "";
@@ -192,7 +198,8 @@ app.post("/api/scan", scanLimiter, (req,res)=>{
   }
 });
 
+// Serve index
 app.get("/", (req,res)=> res.sendFile(path.join(__dirname, "public", "index.html")));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, ()=> console.log(`✅ Dentist Radar running on ${PORT}`));
+app.listen(PORT, () => console.log(`✅ Dentist Radar running on ${PORT}`));
