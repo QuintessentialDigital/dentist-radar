@@ -2,69 +2,40 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Dentist Radar — Find an NHS Dentist Fast</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dentist Radar</title>
   <link rel="stylesheet" href="style.css" />
-  <link rel="icon" type="image/png" href="favicon.png" />
 </head>
 <body>
-  <header class="navbar">
-    <div class="nav-container">
-      <img src="logo.svg" alt="Dentist Radar" class="logo" />
-      <nav>
-        <a href="pricing.html">Pricing</a>
-        <a href="about.html">About</a>
-        <a href="terms.html">Terms</a>
-        <a href="privacy.html">Privacy</a>
-        <a href="admin.html">Admin</a>
-      </nav>
-    </div>
+  <header>
+    <img src="logo.svg" alt="Dentist Radar" class="logo">
+    <nav>
+      <a href="pricing.html">Pricing</a>
+      <a href="about.html">About</a>
+      <a href="terms.html">Terms</a>
+      <a href="privacy.html">Privacy</a>
+    </nav>
   </header>
 
-  <main class="hero">
-    <section class="form-card">
-      <h1>Find an NHS Dentist Faster</h1>
-      <p>Get instant alerts when a nearby practice starts accepting NHS patients.</p>
+  <main>
+    <section class="hero">
+      <h1>Find an NHS Dentist Fast</h1>
+      <p>Get instant alerts when a local dentist starts accepting new NHS patients.</p>
 
       <form id="alertForm">
-        <div class="input-group">
-          <label>Email address</label>
-          <input type="email" id="email" placeholder="you@example.com" required />
-        </div>
-
-        <div class="input-group">
-          <label>Postcode</label>
-          <input type="text" id="postcode" placeholder="e.g. RG41 3XX" required />
-        </div>
-
-        <div class="input-group">
-          <label>Radius (miles)</label>
-          <input type="number" id="radius" min="1" max="30" value="10" required />
-        </div>
-
-        <button type="submit" class="btn-primary">Get My Alert</button>
+        <input type="email" id="email" placeholder="Email address" required>
+        <input type="text" id="postcode" placeholder="Postcode (e.g. RG41 3XX)" required>
+        <input type="number" id="radius" value="10" min="1" max="30">
+        <button type="submit" id="getAlert">Get My Alert</button>
       </form>
 
-      <p class="hint">
-        ✅ Free plan allows 1 postcode. You can upgrade later for more.
-      </p>
-
-      <div id="message" class="message"></div>
+      <div id="message"></div>
+      <p class="hint">Free plan includes one postcode alert.</p>
     </section>
   </main>
 
   <footer>
-    <div class="footer-container">
-      <p>© 2025 Dentist Radar. Data sourced from NHS England.</p>
-      <p class="disclaimer">
-        Always confirm with the practice directly before travelling.
-      </p>
-      <div class="footer-links">
-        <a href="privacy.html">Privacy</a>
-        <a href="terms.html">Terms</a>
-        <a href="about.html">About</a>
-      </div>
-    </div>
+    <p>© 2025 Dentist Radar. Data from NHS England.</p>
   </footer>
 
   <script>
@@ -74,22 +45,20 @@
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       msg.textContent = "";
+
       const email = document.getElementById("email").value.trim();
       const postcode = document.getElementById("postcode").value.trim();
       const radius = document.getElementById("radius").value.trim();
 
-      const emailRe = /^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/;
-      if (!emailRe.test(email)) {
-        msg.textContent = "❌ Enter a valid email.";
-        msg.className = "message error";
-        return;
-      }
+      const emailRe = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
+      const fullUK = /^[A-Z]{1,2}\\d[A-Z\\d]?\\s*\\d[A-Z]{2}$/i;
+      const outward = /^[A-Z]{1,2}\\d[A-Z\\d]?$/i;
 
-      if (!postcode) {
-        msg.textContent = "❌ Enter a postcode.";
-        msg.className = "message error";
-        return;
-      }
+      if (!emailRe.test(email)) return msg.textContent = "❌ Enter a valid email.";
+      if (!postcode) return msg.textContent = "❌ Enter postcode.";
+      const pc = postcode.replace(/\s+/g, "").toUpperCase();
+      if (!fullUK.test(pc) && !outward.test(pc))
+        return msg.textContent = "❌ Invalid postcode format.";
 
       try {
         const res = await fetch("/api/watch", {
@@ -98,17 +67,9 @@
           body: JSON.stringify({ email, postcode, radius })
         });
         const data = await res.json();
-        if (data.ok) {
-          msg.textContent = data.message || "✅ Alert created successfully!";
-          msg.className = "message success";
-          form.reset();
-        } else {
-          msg.textContent = data.error || "Something went wrong.";
-          msg.className = "message error";
-        }
+        msg.textContent = data.ok ? data.message : "⚠️ " + (data.error || "Failed");
       } catch {
-        msg.textContent = "⚠️ Network error. Try again.";
-        msg.className = "message error";
+        msg.textContent = "Network error, try again.";
       }
     });
   </script>
