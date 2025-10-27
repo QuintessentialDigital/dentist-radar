@@ -11,18 +11,17 @@
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+  <!-- NAVBAR -->
   <header class="navbar">
     <div class="nav-inner">
       <a class="brand" href="/" aria-label="Dentist Radar">
-        <img src="/logo.svg" alt="Dentist Radar" width="300" height="64" />
+        <img src="/logo.svg" alt="Dentist Radar" width="340" height="68" />
       </a>
-
-      <!-- Mobile toggle -->
       <button class="nav-toggle" aria-label="Open menu" aria-expanded="false">
         <span class="nav-burger"></span>
       </button>
-
       <nav class="nav-links" aria-label="Primary">
+        <a href="/">Home</a>
         <a href="/pricing.html">Pricing</a>
         <a href="/about.html">About</a>
         <a href="/terms.html">Terms</a>
@@ -35,7 +34,7 @@
   <main class="wrap page">
     <section class="card">
       <h1 style="margin:0 0 .5rem;">Simple, fair pricing</h1>
-      <p class="lead">Start free. Upgrade when you want to track more areas or get faster checks — <strong>cancel anytime</strong>.</p>
+      <p class="lead">Start free forever. Upgrade if you want to track more areas or get faster checks — <strong>cancel anytime</strong>.</p>
 
       <div class="pricing-grid">
         <!-- Free -->
@@ -64,7 +63,6 @@
             <li>Manage & delete alerts</li>
             <li>Email support</li>
           </ul>
-          <!-- Replace href with your Stripe Checkout URL -->
           <a class="btn btn-full" href="#" id="proCheckout">Upgrade to Pro</a>
           <p class="price-note">Cancel anytime</p>
         </div>
@@ -79,7 +77,6 @@
             <li>Up to 4 family members</li>
             <li>Priority support</li>
           </ul>
-          <!-- Replace href with your Stripe Checkout URL -->
           <a class="btn btn-full" href="#" id="familyCheckout">Go Family</a>
           <p class="price-note">Cancel anytime</p>
         </div>
@@ -93,7 +90,6 @@
       </div>
     </section>
 
-    <!-- Comparison -->
     <section class="card">
       <h2 style="margin:0 0 .75rem;">Compare plans</h2>
       <div class="table-wrap">
@@ -102,74 +98,21 @@
             <tr>
               <th>Feature</th>
               <th>Free</th>
-              <th>Pro</th>
+              <th>Pro</hith>
               <th>Family</th>
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td>Postcodes</td>
-              <td>1</td>
-              <td>Up to 5</td>
-              <td>Unlimited</td>
-            </tr>
-            <tr>
-              <td>Check frequency</td>
-              <td>Every 24h</td>
-              <td>Every 30 mins</td>
-              <td>Every 15 mins</td>
-            </tr>
-            <tr>
-              <td>Email alerts</td>
-              <td>✔</td>
-              <td>✔ (priority)</td>
-              <td>✔ (priority)</td>
-            </tr>
-            <tr>
-              <td>Manage/delete alerts</td>
-              <td>—</td>
-              <td>✔</td>
-              <td>✔</td>
-            </tr>
-            <tr>
-              <td>Family members</td>
-              <td>—</td>
-              <td>—</td>
-              <td>Up to 4</td>
-            </tr>
-            <tr>
-              <td>Support</td>
-              <td>Basic</td>
-              <td>Email</td>
-              <td>Priority</td>
-            </tr>
+            <tr><td>Postcodes</td><td>1</td><td>Up to 5</td><td>Unlimited</td></tr>
+            <tr><td>Check frequency</td><td>Every 24h</td><td>Every 30 mins</td><td>Every 15 mins</td></tr>
+            <tr><td>Email alerts</td><td>✔</td><td>✔ (priority)</td><td>✔ (priority)</td></tr>
+            <tr><td>Manage/delete alerts</td><td>—</td><td>✔</td><td>✔</td></tr>
+            <tr><td>Family members</td><td>—</td><td>—</td><td>Up to 4</td></tr>
+            <tr><td>Support</td><td>Basic</td><td>Email</td><td>Priority</td></tr>
           </tbody>
         </table>
       </div>
       <p class="hint" style="margin-top:.6rem;">You can stay on Free as long as you like.</p>
-    </section>
-
-    <!-- FAQ -->
-    <section class="card">
-      <h2 style="margin:0 0 .75rem;">Frequently asked questions</h2>
-      <div class="faq">
-        <details>
-          <summary>How do you get your data?</summary>
-          <p>We monitor <strong>official NHS Find a Dentist pages</strong> on a schedule. When a practice appears to accept new NHS patients, we email you.</p>
-        </details>
-        <details>
-          <summary>Will you send marketing emails?</summary>
-          <p>No. We only send the alerts you requested, plus essential service messages. You can unsubscribe in one click.</p>
-        </details>
-        <details>
-          <summary>Can I cancel anytime?</summary>
-          <p>Yes. Subscriptions are month-to-month via Stripe. You can cancel anytime from your receipt email or by contacting support.</p>
-        </details>
-        <details>
-          <summary>Which areas do you cover?</summary>
-          <p>We cover England where NHS dentist listings are publicly available. Add your postcode and radius; we’ll monitor nearby practices.</p>
-        </details>
-      </div>
     </section>
 
     <section class="card cta-banner">
@@ -179,7 +122,6 @@
       </div>
       <div class="cta-actions">
         <a class="btn" href="/">Create a free alert</a>
-        <!-- Replace with Stripe Pro checkout -->
         <a class="btn btn-outline" href="#" id="proCheckout2">Upgrade to Pro</a>
       </div>
     </section>
@@ -198,7 +140,7 @@
   </footer>
 
   <script>
-    // Mobile menu toggle
+    // Mobile menu
     const toggle = document.querySelector('.nav-toggle');
     const links  = document.querySelector('.nav-links');
     if (toggle && links){
@@ -208,17 +150,17 @@
       });
     }
 
-    // Stripe checkout placeholders – replace "#" with your live Stripe Checkout URL
+    // Stripe links (replace with your live Checkout URLs)
     document.getElementById('proCheckout')?.addEventListener('click', (e)=> {
-      const url = '#'; // TODO: set Stripe Checkout URL
+      const url = '#';
       if (url === '#'){ e.preventDefault(); alert('Connect Stripe Checkout URL for Pro.'); }
     });
     document.getElementById('familyCheckout')?.addEventListener('click', (e)=> {
-      const url = '#'; // TODO: set Stripe Checkout URL
+      const url = '#';
       if (url === '#'){ e.preventDefault(); alert('Connect Stripe Checkout URL for Family.'); }
     });
     document.getElementById('proCheckout2')?.addEventListener('click', (e)=> {
-      const url = '#'; // TODO: set Stripe Checkout URL
+      const url = '#';
       if (url === '#'){ e.preventDefault(); alert('Connect Stripe Checkout URL for Pro.'); }
     });
   </script>
