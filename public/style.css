@@ -1,7 +1,8 @@
-/* Dentist Radar — UI v1.8 (Inter font)
-   - Navbar + mobile menu
+/* Dentist Radar — UI v1.9
+   - Inter font, consistent typography
+   - Navbar + mobile menu (stacked links)
    - Floating labels (no overlap)
-   - Cards, banners, sticky CTA, toast
+   - Cards, banners, toast
    - How it works
    - Trust section
    - Pricing page extensions
@@ -34,6 +35,7 @@ html,body{
 }
 .brand img{height:68px;max-width:none}
 @media (max-width:640px){.brand img{height:60px}}
+
 .nav-links{display:flex;gap:14px;align-items:center}
 .nav-links a{
   color:var(--brand);text-decoration:none;font-weight:600;padding:.4rem .6rem;border-radius:8px;
@@ -54,17 +56,25 @@ html,body{
 .nav-burger::before{top:-7px}
 .nav-burger::after{top:7px}
 
+/* Mobile menu panel (stacked links) */
 @media (max-width:860px){
   .nav-toggle{display:inline-block}
   .nav-links{
-    position:absolute;top:68px;right:10px;left:10px;display:none;flex-direction:column;
-    background:#fff;border:1px solid var(--border);border-radius:12px;padding:.6rem;
-    box-shadow:0 12px 28px rgba(15,23,42,.12)
+    position:absolute; top:68px; right:10px; left:10px;
+    display:none; flex-direction:column; gap:6px;
+    background:#fff; border:1px solid var(--border); border-radius:12px; padding:.6rem;
+    box-shadow:0 12px 28px rgba(15,23,42,.12); z-index:1000;
   }
   .nav-links.open{display:flex}
+  .nav-links a{
+    display:block; width:100%;
+    padding:.8rem .9rem; border-radius:10px; font-weight:600;
+    background:#fff; border:1px solid transparent;
+  }
+  .nav-links a:hover{ background:#f6f9ff; border-color:#e5efff; color:#0b3b6b; }
 }
 
-/* ===== Hero / general headings ===== */
+/* ===== Hero / headings ===== */
 .hero h1{font-size:1.9rem;font-weight:800;margin-bottom:.3rem}
 .lead{color:var(--muted);margin-bottom:.8rem}
 .nhs-note{
@@ -78,7 +88,7 @@ html,body{
 .f-group{position:relative}
 .f-input{
   width:100%;border:1px solid var(--border);border-radius:var(--radius);
-  padding:1.35rem .95rem .6rem; /* extra top for value not to touch label */
+  padding:1.35rem .95rem .6rem; /* extra top so value never touches label */
   line-height:1.25;font-size:1rem;outline:none;background:#fff;
   transition:border-color var(--transition), box-shadow var(--transition)
 }
@@ -112,13 +122,6 @@ html,body{
 .banner{margin-top:.75rem;padding:.8rem 1rem;border-radius:12px;font-size:.92rem}
 .banner.error{background:#fee2e2;color:#991b1b}
 .banner.info{background:#eff6ff;color:#1e40af}
-
-/* Sticky CTA (mobile) */
-.sticky-cta{
-  position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--border);
-  padding:.75rem 1rem;box-shadow:0 -2px 8px rgba(0,0,0,.06);display:none;z-index:35
-}
-@media (max-width:640px){.sticky-cta{display:block}.btn{font-size:1rem}}
 
 /* Toast */
 .toast{
@@ -206,6 +209,7 @@ html,body{
 .plan-table thead th { background:#f8fbff; font-weight:700; color:var(--brand); }
 .plan-table tbody tr:last-child td { border-bottom:none; }
 
+/* CTA banner */
 .cta-banner { display:grid; gap:1rem; align-items:center; grid-template-columns:1fr; }
 @media (min-width:760px){ .cta-banner { grid-template-columns: 1fr auto; } }
 .cta-text h2 { margin:0 0 .25rem; font-size:1.4rem; }
@@ -213,7 +217,5 @@ html,body{
 .btn.btn-outline { background:#fff; color:var(--brand); border:1px solid var(--border); }
 .btn.btn-outline:hover { background:#f8fafc; }
 
-/* ===== Responsive nav visibility ===== */
-@media (max-width:768px){
-  .nav-links{ /* hidden until toggled via .open */ }
-}
+/* Misc */
+@keyframes spin{to{transform:rotate(360deg)}}
