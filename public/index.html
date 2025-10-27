@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Dentist Radar</title>
   <meta name="description" content="Be first to know when an NHS dentist near you starts accepting new patients. Create postcode alerts in seconds — free plan available.">
+
+  <!-- Inter font (consistent across browsers) -->
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
   <link rel="icon" href="/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -12,10 +17,15 @@
   <header class="navbar">
     <div class="nav-inner">
       <a class="brand" href="/" aria-label="Dentist Radar">
-        <!-- Bigger, crisp logo -->
-        <img src="/logo.svg" alt="Dentist Radar" width="320" height="64" />
+        <img src="/logo.svg" alt="Dentist Radar" width="340" height="68" />
       </a>
-      <nav class="nav-links">
+
+      <!-- Mobile toggle -->
+      <button class="nav-toggle" aria-label="Open menu" aria-expanded="false">
+        <span class="nav-burger"></span>
+      </button>
+
+      <nav class="nav-links" aria-label="Primary">
         <a href="/pricing.html">Pricing</a>
         <a href="/about.html">About</a>
         <a href="/terms.html">Terms</a>
@@ -36,7 +46,7 @@
         </div>
       </div>
 
-      <!-- NOTE: placeholder=" " is intentional (single space). Labels do the work. -->
+      <!-- placeholder=" " is intentional for floating labels -->
       <form id="alertForm" class="form-grid" novalidate>
         <div class="f-group">
           <input id="email" name="email" type="email" autocomplete="email"
@@ -84,7 +94,7 @@
     </section>
   </main>
 
-  <!-- Mobile sticky button uses the same submit logic -->
+  <!-- Mobile sticky CTA (same handler) -->
   <div class="sticky-cta">
     <button id="createBtnMobile" class="btn btn-full" type="button">
       <span class="btn-label">Get my alert</span>
@@ -108,6 +118,16 @@
 
   <script>
   (function(){
+    // Mobile menu toggle
+    const toggle = document.querySelector('.nav-toggle');
+    const links  = document.querySelector('.nav-links');
+    if (toggle && links){
+      toggle.addEventListener('click', ()=>{
+        const open = links.classList.toggle('open');
+        toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
+    }
+
     const $ = id => document.getElementById(id);
 
     const form   = $('alertForm');
@@ -129,7 +149,7 @@
     const btnMLabel= btnM.querySelector('.btn-label');
     const spinnerM = btnM.querySelector('.spinner');
 
-    // ✅ Correct regex (NO double backslashes because this is plain JS, not a string in HTML)
+    // Correct regex
     const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const fullUK  = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/; // RG41 3XX / W1A 1HQ
     const outward = /^[A-Z]{1,2}\d[A-Z\d]?$/;              // RG41 / W1A / EC1
@@ -157,7 +177,7 @@
       }
     }
 
-    // Keep inputs neat as you type
+    // Tidy postcode while typing
     pc.addEventListener('input', e=>{
       const v = e.target.value.toUpperCase().replace(/\s+/g,' ').replace(/,\s*/g, ', ');
       e.target.value = v;
