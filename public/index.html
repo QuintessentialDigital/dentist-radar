@@ -33,60 +33,50 @@
 
   <!-- MAIN -->
   <main class="wrap">
-    <!-- HERO (no photo) -->
-    <section class="card hero">
-      <div>
-        <h1>Be first to know about NHS dentist openings</h1>
-        <p class="lead">We monitor public NHS sources and email you the moment a nearby practice starts accepting new NHS patients.</p>
+    <!-- HERO (no photo, no mini badges; tight full-width) -->
+    <section class="hero">
+      <h1>Be first to know about NHS dentist openings</h1>
+      <p class="lead">We monitor public NHS sources and email you the moment a nearby practice starts accepting new NHS patients.</p>
 
-        <!-- minimal trust strip inside hero -->
-        <div class="nhs-note">
-          <span class="nhs-dot" aria-hidden="true"></span>
-          Data is sourced from publicly available NHS pages. Please confirm with the practice before you travel.
-        </div>
-
-        <!-- quick trust mini-badges -->
-        <div style="display:flex; flex-wrap:wrap; gap:.5rem; margin:.9rem 0 0;">
-          <span class="trust-chip">Verified NHS listings</span>
-          <span class="trust-chip">GDPR & privacy first</span>
-          <span class="trust-chip">No spam, unsubscribe anytime</span>
-        </div>
-
-        <!-- FORM -->
-        <form id="alertForm" class="form-grid" novalidate>
-          <div class="f-group">
-            <input id="email" name="email" type="email" autocomplete="email"
-                   class="f-input" placeholder=" " required aria-describedby="emailHelp emailErr">
-            <label for="email" class="f-label">Email</label>
-            <div id="emailHelp" class="help">We’ll send alerts here.</div>
-            <div id="emailErr" class="field-err" role="alert" aria-live="polite"></div>
-          </div>
-
-          <div class="f-group">
-            <input id="postcode" name="postcode" type="text"
-                   class="f-input f-uppercase" placeholder=" " required aria-describedby="pcHelp pcErr">
-            <label for="postcode" class="f-label">Postcode(s)</label>
-            <div id="pcHelp" class="help"><strong>Free plan supports 1 postcode.</strong> (e.g., RG41 or RG41 3XX)</div>
-            <div id="pcErr" class="field-err" role="alert" aria-live="polite"></div>
-          </div>
-
-          <div class="f-group">
-            <input id="radius" name="radius" type="number" min="1" max="30" step="1" value="10"
-                   class="f-input" placeholder=" " required aria-describedby="rHelp rErr">
-            <label for="radius" class="f-label">Radius (miles)</label>
-            <div id="rHelp" class="help">We’ll check practices within this distance (1–30 miles).</div>
-            <div id="rErr" class="field-err" role="alert" aria-live="polite"></div>
-          </div>
-
-          <button id="createBtn" class="btn" type="submit">
-            <span class="btn-label">Get My Alert</span>
-            <span class="spinner" aria-hidden="true"></span>
-          </button>
-
-          <div id="err" class="banner error" hidden></div>
-          <div id="info" class="banner info" hidden></div>
-        </form>
+      <div class="nhs-note" style="margin-top:.85rem;">
+        <span class="nhs-dot" aria-hidden="true"></span>
+        Data is sourced from publicly available NHS pages. Please confirm with the practice before you travel.
       </div>
+
+      <!-- FORM -->
+      <form id="alertForm" class="form-grid" novalidate>
+        <div class="f-group">
+          <input id="email" name="email" type="email" autocomplete="email"
+                 class="f-input" placeholder=" " required aria-describedby="emailHelp emailErr">
+          <label for="email" class="f-label">Email</label>
+          <div id="emailHelp" class="help">We’ll send alerts here.</div>
+          <div id="emailErr" class="field-err" role="alert" aria-live="polite"></div>
+        </div>
+
+        <div class="f-group">
+          <input id="postcode" name="postcode" type="text"
+                 class="f-input f-uppercase" placeholder=" " required aria-describedby="pcHelp pcErr">
+          <label for="postcode" class="f-label">Postcode(s)</label>
+          <div id="pcHelp" class="help"><strong>Free plan supports 1 postcode.</strong> (e.g., RG41 or RG41 3XX)</div>
+          <div id="pcErr" class="field-err" role="alert" aria-live="polite"></div>
+        </div>
+
+        <div class="f-group">
+          <input id="radius" name="radius" type="number" min="1" max="30" step="1" value="10"
+                 class="f-input" placeholder=" " required aria-describedby="rHelp rErr">
+          <label for="radius" class="f-label">Radius (miles)</label>
+          <div id="rHelp" class="help">We’ll check practices within this distance (1–30 miles).</div>
+          <div id="rErr" class="field-err" role="alert" aria-live="polite"></div>
+        </div>
+
+        <button id="createBtn" class="btn" type="submit">
+          <span class="btn-label">Get My Alert</span>
+          <span class="spinner" aria-hidden="true"></span>
+        </button>
+
+        <div id="err" class="banner error" hidden></div>
+        <div id="info" class="banner info" hidden></div>
+      </form>
     </section>
 
     <!-- HOW IT WORKS -->
@@ -129,7 +119,7 @@
     </div>
   </footer>
 
-  <!-- Mobile menu toggle (include this on EVERY page) -->
+  <!-- Mobile menu toggle -->
   <script>
     (function(){
       const toggle = document.querySelector('.nav-toggle');
@@ -183,7 +173,7 @@
         if(!Number.isInteger(r)||r<1||r>30){ fieldError(radius,rErr,'Radius must be 1–30 miles.'); bad=true; } else fieldOK(radius,rErr);
         const tokens=pc.value.split(',').map(s=>s.trim()).filter(Boolean);
         if(!tokens.length){ fieldError(pc,pcErr,'Enter a postcode.'); bad=true; }
-        else if(tokens.length>1){ fieldError(pc,pcErr,'Free plan supports 1 postcode.'); showGlobal(errBox,'Free plan supports 1 postcode. <a href="/pricing.html">Upgrade</a>.'); bad=true; }
+        else if(tokens.length>1){ fieldError(pc,pcErr,'Free plan supports 1 postcode. <a href="/pricing.html">Upgrade</a>.'); bad=true; }
         else{
           const t=tokens[0];
           if(!validPostcodeToken(t)){ fieldError(pc,pcErr,'Invalid postcode. Use RG41 or RG41 3XX.'); bad=true; }
