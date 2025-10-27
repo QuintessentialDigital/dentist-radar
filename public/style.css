@@ -138,10 +138,10 @@ p { margin: .3rem 0 .9rem; color: var(--text-light); }
 }
 
 /* HERO */
-.hero {
-  display: grid;
-  gap: 1.2rem;
-  align-items: center;
+
+/* --- Hero: single-column on all viewports (no right whitespace) --- */
+.hero{
+  display: block;             /* was grid; switch to block for full-width flow */
   background: var(--card);
   border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -149,27 +149,11 @@ p { margin: .3rem 0 .9rem; color: var(--text-light); }
   margin-bottom: 1.4rem;
 }
 
-@media (min-width: 900px) {
-  .hero { grid-template-columns: 1fr 1fr; padding: 2rem; }
+/* remove any previous desktop two-column overrides */
+@media (min-width: 900px){
+  .hero{ display: block; padding: 2rem; }
 }
 
-.hero-photo {
-  border-radius: var(--radius);
-  overflow: hidden;
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow);
-}
-.hero-photo img { display: block; width: 100%; height: auto; }
-
-.nhs-note {
-  background: var(--brand-light);
-  border-left: 4px solid var(--brand);
-  padding: .5rem .8rem;
-  border-radius: 8px;
-  font-size: .9rem;
-  margin-top: .8rem;
-  color: var(--text);
-}
 
 /* CARD SECTIONS */
 .card {
