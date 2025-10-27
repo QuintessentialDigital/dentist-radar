@@ -130,18 +130,33 @@
     const btnMLabel= btnM.querySelector('.btn-label');
     const spinnerM = btnM.querySelector('.spinner');
 
-    // ✅ Correct regex (no extra escaping)
-    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const fullUK  = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/;
-    const outward = /^[A-Z]{1,2}\d[A-Z\d]?$/;
+    // Correct regex (no extra escaping)
+    const emailRe = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
+    const fullUK  = /^[A-Z]{1,2}\\d[A-Z\\d]?\\s*\\d[A-Z]{2}$/;
+    const outward = /^[A-Z]{1,2}\\d[A-Z\\d]?$/;
 
     function validPostcodeToken(tok){
-      const t = tok.replace(/\s+/g,'').toUpperCase();
+      const t = tok.replace(/\\s+/g,'').toUpperCase();
       return fullUK.test(t) || outward.test(t);
     }
 
     function fieldError(inputEl, errEl, msg){ inputEl.setAttribute('aria-invalid','true'); errEl.textContent = msg || ''; }
     function fieldOK(inputEl, errEl){ inputEl.removeAttribute('aria-invalid'); errEl.textContent = ''; }
+
+    function hideGlobal(){ errBox.hidden = true; errBox.textContent = ''; infoBox.hidden = true; infoBox.textContent = ''; }
+    function showGlobal(el, msg){ el.hidden=false; el.innerHTML = msg; }
+
+    function setLoading(on){
+      if (on){
+        btn.disabled = true; btnM.disabled = true;
+        btnLabel.textContent = 'Creating…'; btnMLabel.textContent = 'Creating…';
+        spinner.style.display = 'inline-block'; spinnerM.style.display = 'inline-block';
+      } else {
+        btn.disabled = false; btnM.disabled = false;
+        btnLabel.textContent = 'Get my alert'; btnMLabel.textContent = 'Get my alert';
+        spinner.style.display = 'none'; spinnerM.style.display = 'none';
+      }
+    }
 
     function validateAll(){
       let bad = false;
@@ -156,8 +171,11 @@
 
       const tokens = pc.value.split(',').map(s=>s.trim()).filter(Boolean);
       if (!tokens.length){ fieldError(pc, pcErr, 'Enter a postcode.'); bad = true; }
-      else if (tokens.length > 1){ fieldError(pc, pcErr, 'Free plan supports 1 postcode.'); bad = true; }
-      else {
+      else if (tokens.length > 1){
+        fieldError(pc, pcErr, 'Free plan supports 1 postcode.');
+        showGlobal(errBox, 'Free plan supports 1 postcode. <a href="/pricing.html" style="text-decoration:underline;color:#0b3b6b;">Upgrade to add more areas</a>.');
+        bad = true;
+      } else {
         const t = tokens[0];
         if (!validPostcodeToken(t)){ fieldError(pc, pcErr, 'Invalid postcode. Use full (RG41 3XX) or outward (RG41).'); bad = true; }
         else fieldOK(pc, pcErr);
@@ -166,7 +184,7 @@
     }
 
     pc.addEventListener('input', e=>{
-      const v = e.target.value.toUpperCase().replace(/\s+/g,' ').replace(/,\s*/g, ', ');
+      const v = e.target.value.toUpperCase().replace(/\\s+/g,' ').replace(/,\\s*/g, ', ');
       e.target.value = v;
     });
 
@@ -176,21 +194,6 @@
       requestAnimationFrame(()=> toast.classList.add('show'));
       setTimeout(()=> toast.classList.remove('show'), 3200);
     }
-
-    function setLoading(on){
-      if (on){
-        btn.disabled = true; btnM.disabled = true;
-        btnLabel.textContent = 'Creating…'; btnMLabel.textContent = 'Creating…';
-        spinner.style.display = 'inline-block'; spinnerM.style.display = 'inline-block';
-      } else {
-        btn.disabled = false; btnM.disabled = false;
-        btnLabel.textContent = 'Get my alert'; btnMLabel.textContent = 'Get my alert';
-        spinner.style.display = 'none'; spinnerM.style.display = 'none';
-      }
-    }
-
-    function hideGlobal(){ errBox.hidden = true; errBox.textContent = ''; infoBox.hidden = true; infoBox.textContent = ''; }
-    function showGlobal(el, msg){ el.hidden=false; el.textContent=msg; }
 
     async function submitForm(){
       hideGlobal();
@@ -211,7 +214,9 @@
 
         if (res.ok && j && j.ok){
           if (j.duplicates > 0){
-            showGlobal(infoBox, `Note: duplicate postcode skipped.`);
+            showGlobal(infoBox, 'Note: duplicate alert skipped for this email/postcode.');
+          } else {
+            infoBox.hidden = true;
           }
           showToast('🎉 Alert set. We’ll email you as soon as there’s a match.');
           form.reset();
@@ -219,7 +224,7 @@
           [emailErr, pcErr, rErr].forEach(e=>e.textContent='');
         } else {
           if (j && j.code === 'free_limit'){
-            showGlobal(errBox, 'Free plan supports 1 postcode. Upgrade to add more areas.');
+            showGlobal(errBox, 'Free plan supports 1 postcode. <a href="/pricing.html" style="text-decoration:underline;color:#0b3b6b;">Upgrade to add more areas</a>.');
           } else {
             showGlobal(errBox, (j && j.error) ? ('❌ ' + j.error) : '❌ Could not create alert.');
           }
