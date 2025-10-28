@@ -1,42 +1,81 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>About — Dentist Radar</title>
-  <link rel="stylesheet" href="/style.css"/>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>About – Dentist Radar</title>
+  <meta name="description" content="Dentist Radar helps families find NHS dentist availability faster with simple email alerts." />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+  <!-- NAVBAR -->
+  <header class="navbar">
+    <div class="nav-inner">
+      <a class="brand" href="/" aria-label="Dentist Radar">
+        <img src="/logo.svg" alt="Dentist Radar" width="340" height="68" />
+      </a>
+      <button class="nav-toggle" aria-label="Open menu" aria-expanded="false">
+        <span class="nav-burger"></span>
+      </button>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/">Home</a>
+        <a href="/pricing.html">Pricing</a>
+        <a href="/about.html" aria-current="page">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="/admin.html">Admin</a>
+      </nav>
+    </div>
+  </header>
 
-<header>
-  <div class="container navbar">
-    <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
-    <button class="menu-toggle" id="menu-toggle">☰</button>
-    <ul class="nav-links" id="nav-links">
-      <li><a href="/">Home</a></li>
-      <li><a href="/pricing.html">Pricing</a></li>
-      <li><a class="active" href="/about.html">About</a></li>
-      <li><a href="/terms.html">Terms</a></li>
-      <li><a href="/privacy.html">Privacy</a></li>
-    </ul>
-  </div>
-</header>
+  <main class="wrap page">
+    <section class="card">
+      <h1>About Dentist Radar</h1>
+      <p class="lead">Finding an NHS dentist shouldn’t feel impossible. We monitor official NHS listings and email you when a nearby practice starts accepting new patients.</p>
 
-<main class="section">
-  <div class="container">
-    <h1>About Dentist Radar</h1>
-    <p>We help patients quickly find NHS dentists accepting new patients. We monitor verified NHS sources and send alerts as soon as we detect openings near you.</p>
-  </div>
-</main>
+      <p>We built Dentist Radar after experiencing the same frustration ourselves. The goal is simple: <strong>save you time and stress</strong> by checking NHS pages regularly and notifying you — so you don’t have to keep refreshing websites.</p>
 
-<footer>
-  <div class="container">
-    <p>© 2025 Dentist Radar · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
-  </div>
-</footer>
+      <ul class="trust-points" style="margin-top:1rem;">
+        <li><img class="trust-icon" src="/icons/shield.svg" alt=""><div><h3>Verified NHS data</h3><p>We use publicly available NHS pages as our source.</p></div></li>
+        <li><img class="trust-icon" src="/icons/timer.svg" alt=""><div><h3>Automatic checks</h3><p>We check on a schedule and email you only when there’s a change.</p></div></li>
+        <li><img class="trust-icon" src="/icons/lock.svg" alt=""><div><h3>Privacy first</h3><p>GDPR aware. No spam. Unsubscribe any time.</p></div></li>
+      </ul>
+    </section>
 
-<script>
-  document.getElementById('menu-toggle')?.addEventListener('click',()=>document.getElementById('nav-links')?.classList.toggle('open'));
-</script>
+    <section class="card">
+      <h2>Contact</h2>
+      <p>Email: <a href="mailto:support@dentistradar.co.uk">support@dentistradar.co.uk</a></p>
+      <p>United Kingdom</p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div>© 2025 Dentist Radar</div>
+      <nav class="footer-links">
+        <a href="/pricing.html">Pricing</a>
+        <a href="/about.html" aria-current="page">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+      </nav>
+    </div>
+  </footer>
+
+  <!-- Mobile menu toggle -->
+  <script>
+    (function(){
+      const toggle = document.querySelector('.nav-toggle');
+      const links  = document.querySelector('.nav-links');
+      if (toggle && links){
+        toggle.addEventListener('click', ()=>{
+          const open = links.classList.toggle('open');
+          toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+      }
+    })();
+  </script>
 </body>
 </html>
