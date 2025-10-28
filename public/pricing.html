@@ -7,8 +7,9 @@
   <link rel="stylesheet" href="/style.css"/>
 </head>
 <body>
+
 <header>
-  <nav class="navbar">
+  <div class="container navbar">
     <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
     <button class="menu-toggle" id="menu-toggle">☰</button>
     <ul class="nav-links" id="nav-links">
@@ -18,67 +19,77 @@
       <li><a href="/terms.html">Terms</a></li>
       <li><a href="/privacy.html">Privacy</a></li>
     </ul>
-  </nav>
+  </div>
 </header>
 
 <main class="hero">
-  <h1>Compare plans</h1>
-  <p>Start free. Upgrade for more postcodes and faster checks.</p>
-
-  <div class="section grid">
-    <div class="card">
-      <h2>Free</h2>
-      <p>• 1 postcode</p>
-      <p>• Daily checks</p>
-      <p>• Email alerts</p>
-      <button class="btn" onclick="location.href='/'">Get started free</button>
-    </div>
-
-    <div class="card">
-      <h2>Pro <span class="pill">£4.99 one-time</span></h2>
-      <p>• Up to 5 postcodes</p>
-      <p>• Hourly checks</p>
-      <p>• Early notifications</p>
-      <input id="proEmail" type="email" placeholder="you@example.com"/>
-      <button id="proBtn" class="btn">Upgrade to Pro</button>
-      <p id="proMsg" class="message muted"></p>
-    </div>
-
-    <div class="card">
-      <h2>Family <span class="pill">£9.99 one-time</span></h2>
-      <p>• Up to 12 postcodes</p>
-      <p>• Shared alerts</p>
-      <p>• Priority notifications</p>
-      <input id="famEmail" type="email" placeholder="you@example.com"/>
-      <button id="famBtn" class="btn">Go Family</button>
-      <p id="famMsg" class="message muted"></p>
-    </div>
+  <div class="container">
+    <h1>Compare plans</h1>
+    <p>Start free. Upgrade for more postcodes and faster checks.</p>
   </div>
 </main>
 
+<section class="section">
+  <div class="container">
+    <div class="pricing-grid">
+      <div class="pricing-card">
+        <h2>Free</h2>
+        <p>• 1 postcode</p>
+        <p>• Daily checks</p>
+        <p>• Email alerts</p>
+        <button class="btn" onclick="location.href='/'">Get started free</button>
+      </div>
+
+      <div class="pricing-card">
+        <h2>Pro <span class="pill">£4.99 one-time</span></h2>
+        <p>• Up to 5 postcodes</p>
+        <p>• Hourly checks</p>
+        <p>• Early notifications</p>
+        <input id="proEmail" type="email" placeholder="you@example.com"/>
+        <button id="proBtn" class="btn">Upgrade to Pro</button>
+        <p id="proMsg" class="message muted"></p>
+      </div>
+
+      <div class="pricing-card">
+        <h2>Family <span class="pill">£9.99 one-time</span></h2>
+        <p>• Up to 12 postcodes (share)</p>
+        <p>• Hourly checks</p>
+        <p>• Priority notifications</p>
+        <input id="famEmail" type="email" placeholder="you@example.com"/>
+        <button id="famBtn" class="btn">Go Family</button>
+        <p id="famMsg" class="message muted"></p>
+      </div>
+    </div>
+  </div>
+</section>
+
 <footer>
-  <p>© 2025 Dentist Radar · <a href="/about.html">About</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+  <div class="container">
+    <p>© 2025 Dentist Radar · <a href="/about.html">About</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+  </div>
 </footer>
 
 <script>
-document.getElementById('menu-toggle')?.addEventListener('click',()=>document.getElementById('nav-links')?.classList.toggle('open'));
-const emailRe=/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/;
-function bind(plan){
- const btn=document.getElementById(plan+'Btn');
- const inp=document.getElementById(plan==='pro'?'proEmail':'famEmail');
- const msg=document.getElementById(plan==='pro'?'proMsg':'famMsg');
- btn?.addEventListener('click',async()=>{
-  const email=(inp.value||'').trim();
-  if(!emailRe.test(email)){msg.textContent='Enter a valid email';msg.style.color='#d00';return;}
-  msg.textContent='Preparing checkout…';msg.style.color='#444';
-  try{
-   const res=await fetch('/api/checkout/'+plan,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
-   const j=await res.json().catch(()=>null);
-   if(res.ok&&j?.url)location.href=j.url;else msg.textContent='Upgrade failed — try later';
-  }catch{msg.textContent='Network error';}
- });
-}
-bind('pro');bind('family');
+  document.getElementById('menu-toggle')?.addEventListener('click',()=>document.getElementById('nav-links')?.classList.toggle('open'));
+  const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  function bind(plan){
+    const btn=document.getElementById(plan+'Btn');
+    const inp=document.getElementById(plan==='pro'?'proEmail':'famEmail');
+    const msg=document.getElementById(plan==='pro'?'proMsg':'famMsg');
+    btn?.addEventListener('click', async ()=>{
+      const email=(inp.value||'').trim();
+      if(!emailRe.test(email)){ msg.textContent='Please enter a valid email.'; msg.style.color='#d00'; return; }
+      msg.textContent='Preparing checkout…'; msg.style.color='#444';
+      try{
+        const res=await fetch('/api/checkout/'+plan,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+        const j=await res.json().catch(()=>null);
+        if(res.ok && j?.url){ location.href=j.url; }
+        else if(j?.error==='stripe_not_configured'){ msg.textContent='Checkout not configured yet.'; msg.style.color='#d00'; }
+        else { msg.textContent='Upgrade failed — try later.'; msg.style.color='#d00'; }
+      }catch{ msg.textContent='Network error — try again.'; msg.style.color='#d00'; }
+    });
+  }
+  bind('pro'); bind('family');
 </script>
 </body>
 </html>
