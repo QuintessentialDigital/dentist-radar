@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Checkout cancelled — Dentist Radar</title>
+  <link rel="icon" href="/favicon.svg"/>
+  <link rel="stylesheet" href="/style.css"/>
+</head>
+<body>
+  <header>
+    <nav class="navbar">
+      <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
+      <button class="menu-toggle" id="menu-toggle">☰</button>
+      <ul class="nav-links" id="nav-links">
+        <li><a class="active" href="/pricing.html">Pricing</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="hero">
+    <h1>No worries</h1>
+    <p>You can continue on the free plan and upgrade anytime.</p>
+    <button class="btn-secondary" onclick="location.href='/pricing.html'">Back to pricing</button>
+  </main>
+
+  <footer><p>© 2025 Dentist Radar</p></footer>
+  <script>document.getElementById('menu-toggle')?.addEventListener('click',()=>document.getElementById('nav-links').classList.toggle('open'));</script>
+</body>
+</html>
