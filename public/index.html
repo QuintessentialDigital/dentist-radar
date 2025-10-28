@@ -2,57 +2,64 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Dentist Radar – Find an NHS Dentist Near You</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dentist Radar — Be first to know about NHS dentist openings</title>
   <link rel="icon" href="/favicon.svg" />
   <link rel="stylesheet" href="/style.css" />
 </head>
-
 <body>
   <header>
     <nav class="navbar">
-      <a href="/" class="logo">
-        <img src="/logo.svg" alt="Dentist Radar" />
-      </a>
+      <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
       <button class="menu-toggle" id="menu-toggle">☰</button>
       <ul class="nav-links" id="nav-links">
+        <li><a class="active" href="/">Home</a></li>
         <li><a href="/pricing.html">Pricing</a></li>
         <li><a href="/about.html">About</a></li>
-        <li><a href="/terms.html">Terms</a></li>
-        <li><a href="/privacy.html">Privacy</a></li>
       </ul>
     </nav>
   </header>
 
   <main class="hero">
-    <h1>Be first to know when an NHS dentist opens near you</h1>
-    <p>Stop calling around — we’ll alert you as soon as a local practice starts accepting patients.</p>
+    <h1>Be first to know when NHS dentists open</h1>
+    <p>We track NHS dental practices and alert you instantly when they start accepting new patients.</p>
 
-    <form id="alert-form" class="alert-form">
-      <label>Email</label>
-      <input type="email" id="email" placeholder="you@email.com" required />
-      <label>Postcode(s)</label>
-      <input type="text" id="postcodes" placeholder="e.g. RG41, RG40" required />
-      <label>Radius (miles)</label>
-      <input type="number" id="radius" value="5" min="1" max="50" />
-      <button type="submit" id="submit-btn">GET MY ALERT</button>
-      <p id="message" class="message"></p>
+    <form id="alertForm" class="alert-form">
+      <input id="email" type="email" placeholder="Your email" required />
+      <input id="postcode" type="text" placeholder="Postcode" required />
+      <input id="radius" type="number" placeholder="Radius (miles)" min="1" max="50" />
+      <button type="submit" class="btn">Get My Alert</button>
     </form>
 
-    <section class="trust">
-      <h2>Why thousands trust Dentist Radar</h2>
-      <ul>
-        <li>✔ Verified NHS listings, updated automatically</li>
-        <li>✔ Simple, secure, and GDPR compliant</li>
-        <li>✔ No spam — just alerts that matter</li>
-      </ul>
-    </section>
+    <p id="msg" class="message"></p>
   </main>
 
   <footer>
     <p>© 2025 Dentist Radar · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
   </footer>
 
-  <script src="/app.js"></script>
+  <script>
+    const emailRe = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+    const msg = document.getElementById('msg');
+    document.getElementById('alertForm').addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const email = document.getElementById('email').value.trim();
+      const postcode = document.getElementById('postcode').value.trim();
+      const radius = parseInt(document.getElementById('radius').value || 5);
+      if(!emailRe.test(email)) return msg.textContent='Please enter a valid email.';
+      msg.textContent='Creating alert...';
+      try{
+        const res = await fetch('/api/watch/create',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({email,postcode,radius})
+        });
+        const j = await res.json();
+        msg.textContent = j.ok ? (j.msg || 'Alert created!') : j.error || 'Error';
+      }catch{
+        msg.textContent='Network error. Try again.';
+      }
+    });
+  </script>
 </body>
 </html>
