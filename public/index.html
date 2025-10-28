@@ -68,10 +68,35 @@
 </footer>
 
 <script>
-  // Desktop: no burger; Mobile: burger toggles
+  // Mobile menu only; hidden on desktop via CSS
   const toggle=document.getElementById('menu-toggle');
   const links=document.getElementById('nav-links');
   toggle?.addEventListener('click',()=>links?.classList.toggle('open'));
+
+  // Form handler (unchanged)
+  const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  const msg=document.getElementById('msg');
+  document.getElementById('alertForm')?.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const email=document.getElementById('email').value.trim();
+    const postcode=document.getElementById('postcode').value.trim();
+    const radius=(document.getElementById('radius').value||'5').trim();
+    if(!emailRe.test(email)){ msg.textContent='Please enter a valid email.'; return; }
+    msg.textContent='Creating alert…';
+    try{
+      const res=await fetch('/api/watch/create',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({email,postcode,radius})
+      });
+      const j=await res.json().catch(()=>null);
+      if(res.status===402 && j?.error==='upgrade_required'){ msg.textContent=j.message||'Free plan supports 1 postcode. Upgrade'; return; }
+      if(res.ok && j?.ok){ msg.textContent=j.msg||'Alert created'; e.target.reset(); return; }
+      msg.textContent = j?.error==='invalid_postcode' ? 'Please enter a valid UK postcode.' :
+                        j?.error==='invalid_email' ? 'Please enter a valid email.' :
+                        j?.error || 'Error creating alert. Try again.';
+    }catch{ msg.textContent='Network error. Try again.'; }
+  });
 </script>
 </body>
 </html>
