@@ -1,38 +1,92 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Terms — Dentist Radar</title>
-  <link rel="icon" href="/favicon.svg"/>
-  <link rel="stylesheet" href="/style.css"/>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Terms – Dentist Radar</title>
+  <meta name="description" content="Terms of Service for Dentist Radar." />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <header>
-    <nav class="navbar">
-      <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
-      <button class="menu-toggle" id="menu-toggle">☰</button>
-      <ul class="nav-links" id="nav-links">
-        <li><a href="/">Home</a></li>
-        <li><a href="/pricing.html">Pricing</a></li>
-        <li><a href="/about.html">About</a></li>
-        <li><a class="active" href="/terms.html">Terms</a></li>
-        <li><a href="/privacy.html">Privacy</a></li>
-      </ul>
-    </nav>
+  <!-- NAVBAR -->
+  <header class="navbar">
+    <div class="nav-inner">
+      <a class="brand" href="/" aria-label="Dentist Radar">
+        <img src="/logo.svg" alt="Dentist Radar" width="340" height="68" />
+      </a>
+      <button class="nav-toggle" aria-label="Open menu" aria-expanded="false">
+        <span class="nav-burger"></span>
+      </button>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/">Home</a>
+        <a href="/pricing.html">Pricing</a>
+        <a href="/about.html">About</a>
+        <a href="/terms.html" aria-current="page">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="/admin.html">Admin</a>
+      </nav>
+    </div>
   </header>
 
-  <main class="hero">
-    <h1>Terms</h1>
-    <p>We provide availability alerts based on detected changes in public sources. Availability can change quickly — please call practices to confirm before travelling.</p>
-    <ul style="text-align:left;max-width:640px;margin:1rem auto 0">
-      <li>Free plan includes one postcode with daily checks</li>
-      <li>Paid plans increase coverage and frequency</li>
-      <li>Refunds: if nothing is detected in 30 days, contact support</li>
-    </ul>
+  <main class="wrap page">
+    <section class="card">
+      <h1>Terms of Service</h1>
+      <p class="lead">Effective: 27 October 2025</p>
+
+      <h2 class="section-title">1. Who we are</h2>
+      <p>Dentist Radar (“we”, “us”) provides email alerts about publicly available NHS dentist listings. We do not provide medical or dental advice and we are not affiliated with the NHS.</p>
+
+      <h2 class="section-title">2. Using the service</h2>
+      <ul>
+        <li>You must provide a valid email address to receive alerts.</li>
+        <li>You agree not to misuse the website or attempt to disrupt our service.</li>
+        <li>We may change or suspend features for maintenance or improvements.</li>
+      </ul>
+
+      <h2 class="section-title">3. Accuracy & availability</h2>
+      <p>We rely on publicly available NHS pages and make reasonable efforts to check frequently, but we cannot guarantee accuracy, completeness, or continuous availability. Always confirm directly with a practice before travelling.</p>
+
+      <h2 class="section-title">4. Plans & billing</h2>
+      <p>Free plan is free forever with feature limits (e.g., one postcode and slower checks). Paid plans renew monthly until cancelled. You can cancel any time and your plan will continue until the end of the billing period.</p>
+
+      <h2 class="section-title">5. Privacy</h2>
+      <p>Your use is also governed by our <a href="/privacy.html">Privacy Policy</a>. We aim to handle personal data responsibly and in line with UK GDPR.</p>
+
+      <h2 class="section-title">6. Liability</h2>
+      <p>To the maximum extent permitted by law, we are not liable for indirect or consequential losses. Our total liability is limited to the amount you paid to us in the 3 months before the claim.</p>
+
+      <h2 class="section-title">7. Contact</h2>
+      <p>Questions? Email <a href="mailto:support@dentistradar.co.uk">support@dentistradar.co.uk</a>.</p>
+    </section>
   </main>
 
-  <footer><p>© 2025 Dentist Radar</p></footer>
-  <script>document.getElementById('menu-toggle')?.addEventListener('click',()=>document.getElementById('nav-links').classList.toggle('open'));</script>
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div>© 2025 Dentist Radar</div>
+      <nav class="footer-links">
+        <a href="/pricing.html">Pricing</a>
+        <a href="/about.html">About</a>
+        <a href="/terms.html" aria-current="page">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+      </nav>
+    </div>
+  </footer>
+
+  <!-- Mobile menu toggle -->
+  <script>
+    (function(){
+      const toggle = document.querySelector('.nav-toggle');
+      const links  = document.querySelector('.nav-links');
+      if (toggle && links){
+        toggle.addEventListener('click', ()=>{
+          const open = links.classList.toggle('open');
+          toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+      }
+    })();
+  </script>
 </body>
 </html>
