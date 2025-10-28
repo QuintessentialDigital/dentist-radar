@@ -9,7 +9,6 @@
 </head>
 <body>
 
-<!-- Header (v1.6) -->
 <header>
   <div class="container navbar">
     <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
@@ -24,24 +23,21 @@
   </div>
 </header>
 
-<!-- Hero -->
 <main class="hero">
   <div class="container">
     <h1>Be first to know when NHS dentists open</h1>
     <p>We track NHS dental practices and alert you as soon as one nearby starts accepting new patients.</p>
 
-    <!-- IMPORTANT: IDs must match the script below -->
     <form id="alertForm" class="alert-form" novalidate>
-      <div class="input"><input id="email" type="email" placeholder="Your email" required/></div>
-      <div class="input"><input id="postcode" type="text" placeholder="Postcode" required/></div>
-      <div class="input"><input id="radius" type="number" placeholder="Radius (miles)" min="1" max="50" value="5"/></div>
+      <div class="input"><input id="email" type="email" placeholder="Your email" required></div>
+      <div class="input"><input id="postcode" type="text" placeholder="Postcode" required></div>
+      <div class="input"><input id="radius" type="number" placeholder="Radius (miles)" min="1" max="50" value="5"></div>
       <button type="submit" class="btn">GET MY ALERT</button>
     </form>
     <p id="msg" class="message"></p>
   </div>
 </main>
 
-<!-- How it works (keep the version you liked) -->
 <section class="section">
   <div class="container">
     <h2>How it works</h2>
@@ -54,7 +50,6 @@
   </div>
 </section>
 
-<!-- Trust -->
 <section class="section">
   <div class="container">
     <h2>Why thousands trust Dentist Radar</h2>
@@ -66,7 +61,6 @@
   </div>
 </section>
 
-<!-- Footer -->
 <footer>
   <div class="container">
     <p>© 2025 Dentist Radar · <a href="/about.html">About</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
@@ -74,53 +68,10 @@
 </footer>
 
 <script>
-  // Mobile menu (hidden on desktop via CSS)
   const toggle = document.getElementById('menu-toggle');
   const links  = document.getElementById('nav-links');
   toggle?.addEventListener('click', ()=> links?.classList.toggle('open'));
-
-  // === FORM BINDING (works with your current server.js) ===
-  const form = document.getElementById('alertForm');
-  const msg  = document.getElementById('msg');
-  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-
-  function val(x){ return (x||'').trim(); }
-
-  form?.addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const email    = val(document.getElementById('email')?.value);
-    const postcode = val(document.getElementById('postcode')?.value);
-    const radius   = Number(val(document.getElementById('radius')?.value || '5')) || 5;
-
-    if(!emailRe.test(email)){ msg.textContent = 'Please enter a valid email.'; return; }
-    if(!postcode){ msg.textContent = 'Please enter a UK postcode.'; return; }
-
-    msg.textContent = 'Creating alert…';
-    try{
-      const res = await fetch('/api/watch/create', {
-        method:'POST',
-        headers:{ 'Content-Type':'application/json' },
-        body: JSON.stringify({ email, postcode, radius })
-      });
-      const j = await res.json().catch(()=>null);
-
-      if(res.status === 402 && j?.error === 'upgrade_required'){
-        msg.textContent = j.message || 'Free plan supports 1 postcode. Upgrade';
-        return;
-      }
-      if(res.ok && j?.ok){
-        msg.textContent = j.msg || 'Alert created';
-        form.reset();
-        return;
-      }
-      msg.textContent =
-        j?.error === 'invalid_postcode' ? 'Please enter a valid UK postcode.' :
-        j?.error === 'invalid_email'   ? 'Please enter a valid email.' :
-        j?.error || 'Could not create alert. Please try again.';
-    }catch(err){
-      msg.textContent = 'Network error. Please try again.';
-    }
-  });
 </script>
+<script src="/app.js" defer></script>
 </body>
 </html>
