@@ -1,4 +1,19 @@
-<svg width="160" height="40" viewBox="0 0 160 40" xmlns="http://www.w3.org/2000/svg">
-  <text x="0" y="28" font-family="Inter, Segoe UI, Arial" font-size="26" font-weight="700" fill="#1a73e8">Dentist</text>
-  <text x="102" y="28" font-family="Inter, Segoe UI, Arial" font-size="26" font-weight="700" fill="#00c389">Radar</text>
+<svg width="320" height="68" viewBox="0 0 320 68" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b3b6b"/><stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <!-- tooth/radar icon -->
+  <g transform="translate(8,8)">
+    <path d="M24 4c8 0 14 6 14 14 0 15-10 26-14 34-4-8-14-19-14-34 0-8 6-14 14-14z" fill="url(#g)"/>
+    <circle cx="24" cy="18" r="10" fill="white" opacity=".9"/>
+    <circle cx="24" cy="18" r="3" fill="#0b3b6b"/>
+    <path d="M24 6a12 12 0 1 1 0 24" fill="none" stroke="#fff" stroke-width="2" opacity=".7"/>
+  </g>
+  <!-- wordmark -->
+  <text x="76" y="42" font-family="Inter, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif"
+        font-size="30" font-weight="800" fill="#0b3b6b" letter-spacing="-0.5">Dentist</text>
+  <text x="180" y="42" font-family="Inter, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif"
+        font-size="30" font-weight="800" fill="#2563eb" letter-spacing="-0.5">Radar</text>
 </svg>
