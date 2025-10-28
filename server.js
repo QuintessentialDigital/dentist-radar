@@ -1,130 +1,210 @@
-// Dentist Radar — full working server.js
 import express from 'express';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import { MongoClient } from 'mongodb';
-import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
+import { MongoClient } from 'mongodb';
+import cors from 'cors';
+import helmet from 'helmet';
+import compression from 'compression';
+import morgan from 'morgan';
+import fetch from 'node-fetch';
+import Stripe from 'stripe';
+import { fileURLToPath } from 'url';
+
 dotenv.config();
-
-const app = express();
-app.use(express.json());
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+
+app.disable('x-powered-by');
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(compression());
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h' }));
+app.use(morgan('tiny'));
+
+// ---------- ENV ----------
 const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGO_URI;
-if (!MONGO_URI) throw new Error('Missing MONGO_URI in environment');
+const MONGO_URI = process.env.MONGO_URI || '';
+const DB_NAME = process.env.DB_NAME || 'dentist_radar';
 
-const client = new MongoClient(MONGO_URI);
-await client.connect();
-const db = client.db('dentistradar');
-const alerts = db.collection('alerts');
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+const SCAN_TOKEN = process.env.SCAN_TOKEN || '';
+const PUBLIC_ORIGIN = process.env.PUBLIC_ORIGIN || '';
 
-// Basic rate limits
-const createLimiter = rateLimit({ windowMs: 60 * 1000, max: 20 });
-const scanLimiter = rateLimit({ windowMs: 60 * 1000, max: 5 });
+const POSTMARK_TOKEN = process.env.POSTMARK_TOKEN || '';
+const FROM_EMAIL = process.env.FROM_EMAIL || 'alerts@dentistradar.co.uk';
+const POSTMARK_STREAM = process.env.POSTMARK_STREAM || 'outbound';
 
-// --- Serve static frontend ---
-app.use(express.static(path.join(__dirname, 'public')));
+// Stripe (optional)
+const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY || '';
+const STRIPE_PRICE_PRO = process.env.STRIPE_PRICE_PRO || '';       // e.g. price_…
+const STRIPE_PRICE_FAMILY = process.env.STRIPE_PRICE_FAMILY || ''; // e.g. price_…
+const STRIPE_SUCCESS_URL = (process.env.STRIPE_SUCCESS_URL || `${PUBLIC_ORIGIN}/success.html`) || '';
+const STRIPE_CANCEL_URL = (process.env.STRIPE_CANCEL_URL || `${PUBLIC_ORIGIN}/cancel.html`) || '';
 
-// --- Health check ---
-app.get('/health', async (req, res) => {
+const stripe = STRIPE_SECRET_KEY ? new Stripe(STRIPE_SECRET_KEY) : null;
+
+if (!MONGO_URI) console.warn('⚠️  MONGO_URI missing — DB writes will fail');
+
+// ---------- DB ----------
+let db, alertsCol, usersCol;
+if (MONGO_URI) {
+  const client = new MongoClient(MONGO_URI);
+  await client.connect();
+  db = client.db(DB_NAME);
+  alertsCol = db.collection('alerts');
+  usersCol = db.collection('users');
+
+  await alertsCol.createIndex({ email: 1, postcode: 1 }, { unique: true });
+  await usersCol.createIndex({ email: 1 }, { unique: true });
+
+  console.log('✅ Mongo connected');
+}
+
+// ---------- Helpers ----------
+function normEmail(v = '') { return String(v).trim().toLowerCase(); }
+function normPostcode(v = '') { return String(v).trim().toUpperCase().replace(/\s+/g, ''); }
+function validateEmail(e = '') { return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(e); }
+function validateUKPostcode(pc = '') {
+  const v = String(pc).trim().toUpperCase();
+  const re = /^(GIR ?0AA|(?:[A-Z]{1,2}\d[A-Z\d]? ?\d[A-Z]{2}))$/i;
+  return re.test(v);
+}
+
+async function ensureUser(email) {
+  if (!usersCol) return;
+  const e = normEmail(email);
+  await usersCol.updateOne(
+    { email: e },
+    { $setOnInsert: { email: e, plan: 'free', created: new Date() } },
+    { upsert: true }
+  );
+}
+
+// Email helpers
+async function sendEmail({ to, subject, text }) {
+  if (!POSTMARK_TOKEN) { console.log('[email] skipped (no POSTMARK_TOKEN)'); return; }
   try {
-    res.json({ ok: true, time: new Date().toISOString() });
-  } catch {
-    res.status(500).json({ ok: false });
+    const r = await fetch('https://api.postmarkapp.com/email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Postmark-Server-Token': POSTMARK_TOKEN },
+      body: JSON.stringify({
+        From: FROM_EMAIL,
+        To: to,
+        Subject: subject,
+        TextBody: text,
+        MessageStream: POSTMARK_STREAM
+      })
+    });
+    console.log('[email] status', r.status);
+  } catch (e) {
+    console.error('[email] error', e);
   }
-});
+}
 
-// --- API: Create alert ---
-app.post('/api/watch', createLimiter, async (req, res) => {
+function welcomeEmail({ postcode, radius }) {
+  return [
+    'Thanks — your alert is active.',
+    '',
+    'We’ll email you when a nearby NHS practice starts accepting new patients.',
+    `Postcode: ${postcode}`,
+    `Radius: ${radius} miles`,
+    '',
+    'Please call the practice to confirm availability before travelling.',
+    '',
+    '— Dentist Radar'
+  ].join('\n');
+}
+
+// ---------- Routes ----------
+app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+
+// Create alert (Free plan = 1 postcode total)
+app.post('/api/watch/create', async (req, res) => {
   try {
-    const { email, postcode, radius } = req.body || {};
-    if (!email || !postcode) {
-      return res.status(400).json({ ok: false, error: 'Missing email or postcode' });
-    }
+    if (!alertsCol) return res.status(500).json({ ok: false, error: 'db_unavailable' });
 
-    const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRe.test(email)) {
-      return res.status(400).json({ ok: false, error: 'Please enter a valid email.' });
-    }
+    const { email, postcode, radius = 5 } = req.body || {};
+    const e = normEmail(email);
+    const pc = normPostcode(postcode);
+    const r = Number(radius) || 5;
 
-    const tokens = postcode.split(',').map(p => p.trim().toUpperCase()).filter(Boolean);
-    if (!tokens.length) {
-      return res.status(400).json({ ok: false, error: 'Please enter a valid postcode.' });
-    }
+    if (!validateEmail(e)) return res.status(400).json({ ok: false, error: 'invalid_email' });
+    if (!validateUKPostcode(pc)) return res.status(400).json({ ok: false, error: 'invalid_postcode' });
 
-    // Free plan: only 1 postcode
-    if (tokens.length > 1) {
-      return res.status(403).json({
+    await ensureUser(e);
+
+    // already have this exact alert?
+    const dup = await alertsCol.findOne({ email: e, postcode: pc });
+    if (dup) return res.json({ ok: true, msg: 'Alert already exists' });
+
+    // enforce Free = 1 postcode
+    const existingCount = await alertsCol.countDocuments({ email: e });
+    if (existingCount >= 1) {
+      return res.status(402).json({
         ok: false,
-        code: 'free_limit',
-        error: 'Free plan supports 1 postcode. Please upgrade to Pro.'
+        error: 'upgrade_required',
+        message: 'Free plan supports 1 postcode. Upgrade'
       });
     }
 
-    // If already has 1 alert -> free limit
-    const count = await alerts.countDocuments({ email });
-    if (count >= 1) {
-      return res.status(403).json({
-        ok: false,
-        code: 'free_limit',
-        error: 'Free plan supports 1 postcode. Please upgrade to Pro.'
-      });
-    }
+    await alertsCol.insertOne({ email: e, postcode: pc, radius: r, plan: 'free', created: new Date() });
 
-    // Duplicate prevention
-    const exists = await alerts.findOne({ email, postcode: tokens[0] });
-    if (exists) return res.json({ ok: true, duplicates: 1 });
-
-    await alerts.insertOne({
-      email,
-      postcode: tokens[0],
-      radius: Number(radius) || 10,
-      created: new Date()
+    // welcome email (best-effort)
+    sendEmail({
+      to: e,
+      subject: 'Dentist Radar — Alert created',
+      text: welcomeEmail({ postcode: pc, radius: r })
     });
 
-    res.json({ ok: true });
+    res.json({ ok: true, msg: 'Alert created' });
   } catch (err) {
-    console.error('Error creating alert', err);
-    res.status(500).json({ ok: false, error: 'Server error' });
+    console.error(err);
+    res.status(500).json({ ok: false, error: 'server_error' });
   }
 });
 
-// --- API: Get all watches (for admin) ---
-app.get('/api/watches', async (req, res) => {
+// Simple Postmark test
+app.get('/api/test-email', async (req, res) => {
+  const to = (req.query.to || '').trim();
+  if (!to) return res.status(400).json({ ok: false, error: 'add ?to=email@example.com' });
+  await sendEmail({ to, subject: 'Dentist Radar — test', text: 'Hello from Dentist Radar (test).' });
+  res.json({ ok: true });
+});
+
+// Stripe checkout (optional; safe fallback)
+async function createCheckout(res, priceId, customerEmail) {
+  if (!stripe || !priceId || !STRIPE_SUCCESS_URL || !STRIPE_CANCEL_URL) {
+    return res.status(501).json({ ok: false, error: 'stripe_not_configured' });
+  }
   try {
-    const items = await alerts.find().sort({ created: -1 }).toArray();
-    res.json({ ok: true, items });
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: STRIPE_SUCCESS_URL,
+      cancel_url: STRIPE_CANCEL_URL,
+      customer_email: customerEmail || undefined,
+      allow_promotion_codes: true
+    });
+    return res.json({ ok: true, url: session.url });
   } catch (e) {
-    res.status(500).json({ ok: false, error: 'Database error' });
+    console.error('[stripe] error', e);
+    return res.status(500).json({ ok: false, error: 'stripe_error' });
   }
+}
+
+app.post('/api/checkout/pro', async (req, res) => {
+  const email = (req.body?.email || '').trim();
+  return createCheckout(res, STRIPE_PRICE_PRO, email);
 });
 
-// --- API: Trigger scan manually ---
-app.post('/api/scan', scanLimiter, async (req, res) => {
-  const token = process.env.SCAN_TOKEN || '';
-  if (!token || (req.query.token !== token && req.headers['x-scan-token'] !== token)) {
-    return res.status(403).json({ ok: false, error: 'forbidden' });
-  }
-
-  try {
-    // Placeholder for your scraper logic (runScan)
-    // In production this would fetch NHS listings and email alerts.
-    console.log('Manual scan triggered');
-    res.json({ ok: true, time: new Date().toISOString() });
-  } catch (e) {
-    console.error('Scan failed', e);
-    res.status(500).json({ ok: false, error: 'scan failed' });
-  }
+app.post('/api/checkout/family', async (req, res) => {
+  const email = (req.body?.email || '').trim();
+  return createCheckout(res, STRIPE_PRICE_FAMILY, email);
 });
 
-// --- Default route fallback ---
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+// Catch-all
+app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
-// --- Start server ---
-app.listen(PORT, () => {
-  console.log(`✅ Dentist Radar server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`✅ Dentist Radar running on ${PORT}`));
