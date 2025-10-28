@@ -3,17 +3,9 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Dentist Radar — Be first to know about NHS dentist openings</title>
+  <title>Dentist Radar — Find NHS Dentists Fast</title>
   <link rel="icon" href="/favicon.svg"/>
   <link rel="stylesheet" href="/style.css"/>
-  <style>
-    .section{max-width:960px;margin:2rem auto;padding:0 12px}
-    .two-col{display:grid;grid-template-columns:1fr 1fr;gap:24px}
-    .card{background:#fff;border:1px solid #eee;border-radius:10px;padding:18px}
-    .kbullets{list-style:none;padding:0;margin:0}
-    .kbullets li{margin:.4rem 0}
-    @media(max-width:960px){.two-col{grid-template-columns:1fr}}
-  </style>
 </head>
 <body>
 <header>
@@ -32,7 +24,7 @@
 
 <main class="hero">
   <h1>Be first to know when NHS dentists open</h1>
-  <p>We track NHS dental practices and alert you as soon as one nearby starts accepting new patients.</p>
+  <p>Get instant alerts the moment a local NHS dental practice starts accepting new patients.</p>
 
   <form id="alertForm" class="alert-form" novalidate>
     <input id="email" type="email" placeholder="Your email" required/>
@@ -46,19 +38,19 @@
 <section class="section">
   <h2>How it works</h2>
   <div class="two-col">
-    <div class="card"><strong>1) Set your alert</strong><br/>Add your email, postcode and radius.</div>
-    <div class="card"><strong>2) We monitor</strong><br/>We check NHS availability at regular intervals.</div>
-    <div class="card"><strong>3) Get notified</strong><br/>We email you as soon as we detect openings.</div>
-    <div class="card"><strong>4) You book</strong><br/>Call the practice to confirm before travelling.</div>
+    <div class="card"><strong>1. Set your alert</strong>Add your email, postcode and radius.</div>
+    <div class="card"><strong>2. We monitor</strong>We track NHS data continuously.</div>
+    <div class="card"><strong>3. Get notified</strong>You’ll get an email when a match is found.</div>
+    <div class="card"><strong>4. Book quickly</strong>Call the practice to confirm availability.</div>
   </div>
 </section>
 
 <section class="section">
   <h2>Why thousands trust Dentist Radar</h2>
   <ul class="kbullets">
-    <li>✔ Verified NHS listings</li>
-    <li>✔ GDPR-compliant, minimal data</li>
-    <li>✔ No spam — just useful alerts</li>
+    <li>✔ Verified NHS sources</li>
+    <li>✔ GDPR compliant</li>
+    <li>✔ No spam — just real alerts</li>
   </ul>
 </section>
 
@@ -67,37 +59,24 @@
 </footer>
 
 <script>
-  // burger
-  document.getElementById('menu-toggle')?.addEventListener('click',()=>document.getElementById('nav-links')?.classList.toggle('open'));
-
-  const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-  const msg=document.getElementById('msg');
-
-  document.getElementById('alertForm')?.addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const email=document.getElementById('email').value.trim();
-    const postcode=document.getElementById('postcode').value.trim();
-    const radius=(document.getElementById('radius').value||'5').trim();
-    if(!emailRe.test(email)){ msg.textContent='Please enter a valid email.'; return; }
-    msg.textContent='Creating alert…';
-    try{
-      const res=await fetch('/api/watch/create',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({email,postcode,radius})
-      });
-      const j=await res.json().catch(()=>null);
-
-      if(res.status===402 && j?.error==='upgrade_required'){
-        msg.textContent = j.message || 'Free plan supports 1 postcode. Upgrade';
-        return;
-      }
-      if(res.ok && j?.ok){ msg.textContent=j.msg||'Alert created'; e.target.reset(); return; }
-      msg.textContent = j?.error==='invalid_postcode' ? 'Please enter a valid UK postcode.' :
-                        j?.error==='invalid_email' ? 'Please enter a valid email.' :
-                        j?.error || 'Error creating alert. Try again.';
-    }catch{ msg.textContent='Network error. Try again.'; }
-  });
+document.getElementById('menu-toggle')?.addEventListener('click',()=>document.getElementById('nav-links')?.classList.toggle('open'));
+const emailRe=/^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$/;
+const msg=document.getElementById('msg');
+document.getElementById('alertForm')?.addEventListener('submit',async e=>{
+ e.preventDefault();
+ const email=document.getElementById('email').value.trim();
+ const postcode=document.getElementById('postcode').value.trim();
+ const radius=(document.getElementById('radius').value||'5').trim();
+ if(!emailRe.test(email)){msg.textContent='Please enter a valid email.';return;}
+ msg.textContent='Creating alert…';
+ try{
+  const res=await fetch('/api/watch/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,postcode,radius})});
+  const j=await res.json().catch(()=>null);
+  if(res.status===402&&j?.error==='upgrade_required'){msg.textContent=j.message||'Free plan supports 1 postcode. Upgrade.';return;}
+  if(res.ok&&j?.ok){msg.textContent=j.msg||'Alert created';e.target.reset();return;}
+  msg.textContent=j?.error==='invalid_postcode'?'Please enter a valid UK postcode.':j?.error==='invalid_email'?'Please enter a valid email.':j?.error||'Error creating alert.';
+ }catch{msg.textContent='Network error. Try again.';}
+});
 </script>
 </body>
 </html>
