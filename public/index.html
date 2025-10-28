@@ -1,77 +1,148 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Dentist Radar — Be first to know about NHS dentist openings</title>
-  <link rel="icon" href="/favicon.svg"/>
-  <link rel="stylesheet" href="/style.css"/>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dentist Radar</title>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <header class="navbar">
+    <a class="brand" href="/">🦷 <span>Dentist&nbsp;Radar</span></a>
+    <nav class="nav-links">
+      <a href="/about.html">About</a>
+      <a href="/pricing.html">Pricing</a>
+      <a href="/admin.html">Admin</a>
+    </nav>
+  </header>
 
-<header>
-  <div class="container navbar">
-    <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
-    <button class="menu-toggle" id="menu-toggle" aria-label="Open menu">☰</button>
-    <ul class="nav-links" id="nav-links">
-      <li><a class="active" href="/">Home</a></li>
-      <li><a href="/pricing.html">Pricing</a></li>
-      <li><a href="/about.html">About</a></li>
-      <li><a href="/terms.html">Terms</a></li>
-      <li><a href="/privacy.html">Privacy</a></li>
-    </ul>
-  </div>
-</header>
+  <main class="wrap">
+    <section class="card hero">
+      <div class="hero-text">
+        <h1>Find an NHS dentist faster</h1>
+        <p class="lead">We watch public NHS pages and email you the moment a nearby practice appears to accept new NHS patients.</p>
+      </div>
 
-<main class="hero">
-  <div class="container">
-    <h1>Be first to know when NHS dentists open</h1>
-    <p>We track NHS dental practices and alert you as soon as one nearby starts accepting new patients.</p>
+      <form id="alertForm" class="form-grid" novalidate>
+        <!-- Email -->
+        <div class="f-group">
+          <input id="email" name="email" type="email" required
+                 inputmode="email" autocomplete="email" placeholder=" "
+                 aria-describedby="emailHelp" class="f-input"/>
+          <label for="email" class="f-label">Email</label>
+          <div id="emailHelp" class="help">We’ll send alerts here.</div>
+        </div>
 
-    <form id="alertForm" class="alert-form" novalidate>
-      <div class="input"><input id="email" type="email" placeholder="Your email" required></div>
-      <div class="input"><input id="postcode" type="text" placeholder="Postcode" required></div>
-      <div class="input"><input id="radius" type="number" placeholder="Radius (miles)" min="1" max="50" value="5"></div>
-      <button type="submit" class="btn">GET MY ALERT</button>
-    </form>
-    <p id="msg" class="message"></p>
-  </div>
-</main>
+        <!-- Postcodes -->
+        <div class="f-group">
+          <input id="postcode" name="postcode" type="text" required
+                 inputmode="latin" placeholder=" "
+                 aria-describedby="pcHelp" class="f-input"/>
+          <label for="postcode" class="f-label">Postcode(s)</label>
+          <div id="pcHelp" class="help">
+            Multiple allowed — separate with commas (e.g., <code>RG41, RG1</code>). Accepts full postcodes or outward codes.
+          </div>
+        </div>
 
-<section class="section">
-  <div class="container">
-    <h2>How it works</h2>
-    <div class="grid">
-      <div class="card"><strong>1) Set your alert</strong>Add your email, postcode and radius.</div>
-      <div class="card"><strong>2) We monitor</strong>We check NHS availability at regular intervals.</div>
-      <div class="card"><strong>3) Get notified</strong>We email you as soon as we detect openings.</div>
-      <div class="card"><strong>4) You book</strong>Call the practice to confirm before travelling.</div>
+        <!-- Radius -->
+        <div class="f-group">
+          <input id="radius" name="radius" type="number" required
+                 inputmode="numeric" min="1" max="30" step="1" value="10"
+                 placeholder=" " class="f-input"/>
+          <label for="radius" class="f-label">Radius (miles)</label>
+          <div class="help">1–30 miles.</div>
+        </div>
+
+        <button id="createBtn" class="btn" type="submit">Create alert</button>
+        <div id="ok" class="banner success" hidden></div>
+        <div id="err" class="banner error" hidden></div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>How it works</h2>
+      <div class="how">
+        <div class="step"><strong>1.</strong> Tell us your areas (postcodes)</div>
+        <div class="step"><strong>2.</strong> We watch automatically (faster on Pro)</div>
+        <div class="step"><strong>3.</strong> You get an email when there’s availability</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div>© 2025 Dentist Radar</div>
+      <nav class="footer-links">
+        <a href="/about.html">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+      </nav>
     </div>
-  </div>
-</section>
+  </footer>
 
-<section class="section">
-  <div class="container">
-    <h2>Why thousands trust Dentist Radar</h2>
-    <ul class="kbullets">
-      <li>✔ Verified NHS listings</li>
-      <li>✔ GDPR-compliant, minimal data</li>
-      <li>✔ No spam — just useful alerts</li>
-    </ul>
-  </div>
-</section>
+  <script>
+  (function(){
+    const $ = (id)=>document.getElementById(id);
+    const ok = $('ok'), err = $('err'), btn = $('createBtn'), form = $('alertForm');
 
-<footer>
-  <div class="container">
-    <p>© 2025 Dentist Radar · <a href="/about.html">About</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
-  </div>
-</footer>
+    const fullUK = /^[A-Z]{1,2}\\d[A-Z\\d]?\\s*\\d[A-Z]{2}$/;   // e.g., RG41 3XX, W1A 1HQ
+    const outward = /^[A-Z]{1,2}\\d[A-Z\\d]?$/;                 // e.g., RG41, W1A, EC1
+    function validPostcodeToken(tok){
+      const t = tok.replace(/\\s+/g,'').toUpperCase();
+      return fullUK.test(t) || outward.test(t);
+    }
+    function validate(email, postcode, radius){
+      // Email
+      if (!email || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return 'Please enter a valid email.';
+      // Radius (1–30)
+      const r = Number(radius);
+      if (!Number.isInteger(r) || r < 1 || r > 30) return 'Radius must be a whole number between 1 and 30.';
+      // Postcodes (comma-separated)
+      const tokens = postcode.split(',').map(s=>s.trim()).filter(Boolean);
+      if (!tokens.length) return 'Enter at least one postcode.';
+      for (const t of tokens){
+        if (!validPostcodeToken(t)) return 'Invalid postcode: "'+t+'". Use full postcode (e.g., RG41 3XX) or outward (e.g., RG41).';
+      }
+      return null;
+    }
+    function show(el, msg){ el.hidden = false; el.textContent = msg; }
+    function hide(el){ el.hidden = true; el.textContent = ''; }
 
-<script>
-  const toggle = document.getElementById('menu-toggle');
-  const links  = document.getElementById('nav-links');
-  toggle?.addEventListener('click', ()=> links?.classList.toggle('open'));
-</script>
-<script src="/app.js" defer></script>
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      hide(ok); hide(err);
+
+      const email = $('email').value.trim();
+      const radius = $('radius').value.trim();
+      // Normalize postcodes: uppercase, collapse spaces within tokens
+      const postcode = $('postcode').value.split(',')
+        .map(s => s.trim().toUpperCase().replace(/\\s+/g,''))
+        .filter(Boolean).join(', ');
+
+      const problem = validate(email, postcode, radius);
+      if (problem){ show(err, problem); return; }
+
+      try{
+        btn.disabled = true; btn.textContent = 'Creating…';
+        const res = await fetch('/api/watch', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ email, postcode, radius: Number(radius) })
+        });
+        const j = await res.json().catch(()=>null);
+        if (res.ok && j && j.ok){
+          show(ok, '✅ Alert created! We’ll email you when a match appears.');
+          form.reset();
+        }else{
+          show(err, (j && j.error) ? ('❌ ' + j.error) : '❌ Could not create alert.');
+        }
+      }catch(ex){
+        show(err, 'Network error: ' + ex.message);
+      }finally{
+        btn.disabled = false; btn.textContent = 'Create alert';
+      }
+    });
+  })();
+  </script>
 </body>
 </html>
