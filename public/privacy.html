@@ -1,39 +1,93 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Privacy — Dentist Radar</title>
-  <link rel="icon" href="/favicon.svg"/>
-  <link rel="stylesheet" href="/style.css"/>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Privacy – Dentist Radar</title>
+  <meta name="description" content="Privacy Policy for Dentist Radar (UK GDPR aware)." />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <header>
-    <nav class="navbar">
-      <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
-      <button class="menu-toggle" id="menu-toggle">☰</button>
-      <ul class="nav-links" id="nav-links">
-        <li><a href="/">Home</a></li>
-        <li><a href="/pricing.html">Pricing</a></li>
-        <li><a href="/about.html">About</a></li>
-        <li><a href="/terms.html">Terms</a></li>
-        <li><a class="active" href="/privacy.html">Privacy</a></li>
-      </ul>
-    </nav>
+  <!-- NAVBAR -->
+  <header class="navbar">
+    <div class="nav-inner">
+      <a class="brand" href="/" aria-label="Dentist Radar">
+        <img src="/logo.svg" alt="Dentist Radar" width="340" height="68" />
+      </a>
+      <button class="nav-toggle" aria-label="Open menu" aria-expanded="false">
+        <span class="nav-burger"></span>
+      </button>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/">Home</a>
+        <a href="/pricing.html">Pricing</a>
+        <a href="/about.html">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html" aria-current="page">Privacy</a>
+        <a href="/admin.html">Admin</a>
+      </nav>
+    </div>
   </header>
 
-  <main class="hero">
-    <h1>Privacy</h1>
-    <p>We collect your email, postcode(s), and radius to provide alerts. We process the minimum data required to run this service.</p>
-    <ul style="text-align:left;max-width:640px;margin:1rem auto 0">
-      <li><strong>Use:</strong> alerts and essential service emails only</li>
-      <li><strong>Storage:</strong> reputable cloud providers; restricted access</li>
-      <li><strong>Unsubscribe:</strong> one-click link in emails</li>
-      <li><strong>Cookies:</strong> basic analytics; no advertising cookies</li>
-    </ul>
+  <main class="wrap page">
+    <section class="card">
+      <h1>Privacy Policy</h1>
+      <p class="lead">Effective: 27 October 2025</p>
+
+      <h2 class="section-title">What we collect</h2>
+      <ul>
+        <li>Your email address (to send alerts).</li>
+        <li>Your postcode(s) and search radius (to look up nearby practices).</li>
+        <li>Basic usage logs to keep the service reliable and secure.</li>
+      </ul>
+
+      <h2 class="section-title">How we use data</h2>
+      <ul>
+        <li>To send the alerts you requested when availability changes.</li>
+        <li>To improve the service (aggregate, non-identifying stats).</li>
+        <li>To keep systems secure and prevent abuse.</li>
+      </ul>
+
+      <h2 class="section-title">Sharing</h2>
+      <p>We don’t sell your data. We may use reputable processors (e.g., email delivery) to operate the service. They are contractually bound to protect your data.</p>
+
+      <h2 class="section-title">Retention</h2>
+      <p>We keep your alert details while your alert is active. You can request deletion via <a href="mailto:support@dentistradar.co.uk">support@dentistradar.co.uk</a> or unsubscribe from emails to stop alerts.</p>
+
+      <h2 class="section-title">Your rights</h2>
+      <p>You can request access, correction, deletion, or portability of your data under UK GDPR. Contact: <a href="mailto:support@dentistradar.co.uk">support@dentistradar.co.uk</a>.</p>
+
+      <h2 class="section-title">Contact</h2>
+      <p>For questions about this policy or your data, email <a href="mailto:support@dentistradar.co.uk">support@dentistradar.co.uk</a>.</p>
+    </section>
   </main>
 
-  <footer><p>© 2025 Dentist Radar</p></footer>
-  <script>document.getElementById('menu-toggle')?.addEventListener('click',()=>document.getElementById('nav-links').classList.toggle('open'));</script>
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div>© 2025 Dentist Radar</div>
+      <nav class="footer-links">
+        <a href="/pricing.html">Pricing</a>
+        <a href="/about.html">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html" aria-current="page">Privacy</a>
+      </nav>
+    </div>
+  </footer>
+
+  <!-- Mobile menu toggle -->
+  <script>
+    (function(){
+      const toggle = document.querySelector('.nav-toggle');
+      const links  = document.querySelector('.nav-links');
+      if (toggle && links){
+        toggle.addEventListener('click', ()=>{
+          const open = links.classList.toggle('open');
+          toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+      }
+    })();
+  </script>
 </body>
 </html>
