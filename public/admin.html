@@ -1,83 +1,138 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Admin — Dentist Radar</title>
-  <link rel="icon" href="/favicon.svg"/>
-  <link rel="stylesheet" href="/style.css"/>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin – Dentist Radar</title>
+  <meta name="description" content="Admin dashboard for Dentist Radar." />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
-  <header>
-    <nav class="navbar">
-      <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
-      <button class="menu-toggle" id="menu-toggle">☰</button>
-      <ul class="nav-links" id="nav-links">
-        <li><a href="/">Home</a></li>
-        <li><a href="/pricing.html">Pricing</a></li>
-        <li><a href="/about.html">About</a></li>
-        <li><a href="/terms.html">Terms</a></li>
-        <li><a href="/privacy.html">Privacy</a></li>
-        <li><a class="active" href="/admin.html">Admin</a></li>
-      </ul>
-    </nav>
+  <!-- NAVBAR -->
+  <header class="navbar">
+    <div class="nav-inner">
+      <a class="brand" href="/" aria-label="Dentist Radar">
+        <img src="/logo.svg" alt="Dentist Radar" width="340" height="68" />
+      </a>
+      <button class="nav-toggle" aria-label="Open menu" aria-expanded="false">
+        <span class="nav-burger"></span>
+      </button>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/">Home</a>
+        <a href="/pricing.html">Pricing</a>
+        <a href="/about.html">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="/admin.html" aria-current="page">Admin</a>
+      </nav>
+    </div>
   </header>
 
-  <main class="hero" style="max-width:980px;margin:auto">
-    <h1>Admin</h1>
-    <div class="alert-form">
-      <p id="banner" class="message"></p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="btn" id="load">Load Alerts</button>
-        <button class="btn-secondary" id="scan">Run Scan</button>
-        <span id="kpis" class="message"></span>
+  <main class="wrap page">
+    <section class="card">
+      <h1>Admin</h1>
+      <p class="lead">Quick view of alerts and a manual scan trigger for testing.</p>
+
+      <div style="display:flex; gap:.6rem; flex-wrap:wrap; margin:.6rem 0 1rem;">
+        <button class="btn" id="loadWatches">Load Alerts</button>
+        <button class="btn btn-outline" id="runScan">Run Scan</button>
+        <span id="adminMsg" class="banner info" hidden></span>
       </div>
 
-      <div style="overflow:auto;margin-top:12px">
-        <table class="table" id="tbl">
+      <div class="table-wrap">
+        <table class="plan-table" id="watchTable">
           <thead>
-            <tr><th>Email</th><th>Postcode</th><th>Radius</th><th>Plan</th><th>Created</th><th>Last scanned</th></tr>
+            <tr>
+              <th>Email</th>
+              <th>Postcode</th>
+              <th>Radius</th>
+              <th>Created</th>
+            </tr>
           </thead>
-          <tbody></tbody>
+          <tbody id="watchBody">
+            <tr><td colspan="4" style="text-align:center;color:#666;">No data yet.</td></tr>
+          </tbody>
         </table>
       </div>
-    </div>
+    </section>
   </main>
 
-  <footer><p>© 2025 Dentist Radar</p></footer>
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div>© 2025 Dentist Radar</div>
+      <nav class="footer-links">
+        <a href="/pricing.html">Pricing</a>
+        <a href="/about.html">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+      </nav>
+    </div>
+  </footer>
 
+  <!-- Mobile menu toggle -->
   <script>
-    const menuToggle=document.getElementById('menu-toggle');
-    const navLinks=document.getElementById('nav-links');
-    menuToggle?.addEventListener('click',()=>navLinks.classList.toggle('open'));
+    (function(){
+      const toggle = document.querySelector('.nav-toggle');
+      const links  = document.querySelector('.nav-links');
+      if (toggle && links){
+        toggle.addEventListener('click', ()=>{
+          const open = links.classList.toggle('open');
+          toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+      }
+    })();
+  </script>
 
-    const $=s=>document.querySelector(s);
-    function show(m,c='#0a0'){ const b=$('#banner'); b.textContent=m; b.style.color=c; }
+  <!-- Admin logic -->
+  <script>
+    const msg = document.getElementById('adminMsg');
+    function showMsg(text, ok=true){
+      msg.textContent = text;
+      msg.className = 'banner ' + (ok ? 'info' : 'error');
+      msg.hidden = false;
+      setTimeout(()=>{ msg.hidden = true; }, 4000);
+    }
 
-    $('#load')?.addEventListener('click', async ()=>{
-      const pw = localStorage.getItem('admin_pw') || prompt('Admin password:') || '';
-      if (pw) localStorage.setItem('admin_pw', pw);
-      const res = await fetch('/api/watches', { headers:{'x-admin': pw} });
-      const j = await res.json().catch(()=>null);
-      if(!res.ok || !j?.ok){ return show('Auth failed or load error','#d00'); }
-      const tb = $('#tbl tbody'); tb.innerHTML='';
-      (j.items||[]).forEach(w=>{
-        const tr=document.createElement('tr');
-        const c=w.created?new Date(w.created).toLocaleString('en-GB'):'';
-        const ls=w.lastScannedAt?new Date(w.lastScannedAt).toLocaleString('en-GB'):'—';
-        tr.innerHTML=`<td>${w.email||''}</td><td>${w.postcode||''}</td><td>${w.radius||''}</td><td>${w.plan||'free'}</td><td>${c}</td><td>${ls}</td>`;
-        tb.appendChild(tr);
-      });
-      show('Loaded alerts');
-      $('#kpis').textContent = `Alerts: ${j.items?.length||0}${j.paidUsers?(' · Paid users: '+j.paidUsers):''}`;
+    document.getElementById('loadWatches')?.addEventListener('click', async ()=>{
+      try{
+        const res = await fetch('/api/watches');
+        const j = await res.json();
+        const tbody = document.getElementById('watchBody');
+        tbody.innerHTML = '';
+        if (!j.items || !j.items.length){
+          tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;">No alerts yet.</td></tr>';
+          return;
+        }
+        const rows = j.items.map(w=>{
+          const d = w.created ? new Date(w.created).toLocaleString('en-GB') : '';
+          return `<tr>
+            <td>${w.email || ''}</td>
+            <td>${w.postcode || ''}</td>
+            <td>${w.radius ?? ''}</td>
+            <td>${d}</td>
+          </tr>`;
+        }).join('');
+        tbody.innerHTML = rows;
+      }catch(ex){
+        showMsg('Failed to load alerts: ' + (ex?.message||'unknown'), false);
+      }
     });
 
-    $('#scan')?.addEventListener('click', async ()=>{
-      const tok = localStorage.getItem('scan_token') || prompt('SCAN_TOKEN:') || '';
-      if (tok) localStorage.setItem('scan_token', tok);
-      const res = await fetch('/api/scan?token='+encodeURIComponent(tok), { method:'POST' });
-      const j = await res.json().catch(()=>null);
-      if(res.ok && j?.ok) show('Scan started: '+(j.time||'OK')); else show('Scan failed','#d00');
+    document.getElementById('runScan')?.addEventListener('click', async ()=>{
+      try{
+        const res = await fetch('/api/scan', { method:'POST' });
+        const j = await res.json().catch(()=>null);
+        if (res.ok && j && j.ok){
+          showMsg('Scan started: ' + (j.time || 'OK'));
+        } else {
+          showMsg('Scan failed: ' + (j?.error || 'unknown'), false);
+        }
+      }catch(ex){
+        showMsg('Scan error: ' + (ex?.message||'unknown'), false);
+      }
     });
   </script>
 </body>
