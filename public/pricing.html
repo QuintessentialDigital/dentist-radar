@@ -1,329 +1,156 @@
-/* --------------------------------------------------
-   Dentist Radar — Modern UI v2.1
-   Consistent, mobile-first, clean look
-   (Includes pricing grid + hero single-column)
--------------------------------------------------- */
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pricing – Dentist Radar</title>
+  <meta name="description" content="Simple pricing. Start free. Upgrade for more postcodes and faster checks. Cancel anytime.">
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- NAVBAR -->
+  <header class="navbar">
+    <div class="nav-inner">
+      <a class="brand" href="/" aria-label="Dentist Radar">
+        <img src="/logo.svg" alt="Dentist Radar" width="340" height="68" />
+      </a>
+      <button class="nav-toggle" aria-label="Open menu" aria-expanded="false">
+        <span class="nav-burger"></span>
+      </button>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/">Home</a>
+        <a href="/pricing.html" aria-current="page">Pricing</a>
+        <a href="/about.html">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+        <a href="/admin.html">Admin</a>
+      </nav>
+    </div>
+  </header>
 
-/* THEME TOKENS */
-:root {
-  --brand: #0056b3;
-  --brand-light: #e8f1ff;
-  --brand-strong: #0b3b6b;
-  --text: #1a1a1a;
-  --text-light: #555;
-  --border: #e3e7ee;
-  --bg: #f9fafb;
-  --card: #fff;
-  --radius: 14px;
-  --transition: 0.25s ease;
-  --shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
-  --max-width: 950px;
-}
+  <main class="wrap">
+    <section class="card">
+      <h1>Simple, fair pricing</h1>
+      <p class="lead">Start free forever. Upgrade if you want to track more areas or get faster checks — <strong>cancel anytime</strong>.</p>
 
-/* BASE */
-html, body {
-  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  margin: 0; padding: 0;
-  color: var(--text);
-  background: var(--bg);
-  line-height: 1.5;
-  scroll-behavior: smooth;
-}
+      <!-- PLAN CARDS -->
+      <div class="price-grid">
+        <!-- Free -->
+        <div class="plan-card">
+          <h2>Free</h2>
+          <p>1 postcode · Daily scan (every 24h)</p>
+          <ul>
+            <li>Email alerts when availability changes</li>
+            <li>Basic support</li>
+          </ul>
+          <a class="btn" href="/">Get Started Free</a>
+        </div>
 
-img { max-width: 100%; height: auto; }
-a { color: var(--brand); text-decoration: none; }
-a:hover { text-decoration: underline; }
+        <!-- Pro -->
+        <div class="plan-card highlight">
+          <h2>Pro</h2>
+          <p>Up to 5 postcodes · Every 30 minutes</p>
+          <ul>
+            <li>Priority alerts</li>
+            <li>Faster checks</li>
+            <li>Manage & delete alerts</li>
+            <li>Email support</li>
+          </ul>
+          <a class="btn" href="#" id="proCheckout">Upgrade to Pro</a>
+        </div>
 
-h1, h2, h3 {
-  color: var(--brand-strong);
-  letter-spacing: -.015em;
-  margin: 0 0 .4rem;
-}
+        <!-- Family -->
+        <div class="plan-card">
+          <h2>Family</h2>
+          <p>Unlimited postcodes · Every 15 minutes</p>
+          <ul>
+            <li>Fastest alerts</li>
+            <li>Up to 4 family members</li>
+            <li>Priority support</li>
+          </ul>
+          <a class="btn" href="#" id="familyCheckout">Go Family</a>
+        </div>
+      </div>
+    </section>
 
-h1 { font-size: 1.95rem; font-weight: 800; }
-h2 { font-size: 1.45rem; font-weight: 800; }
-h3 { font-size: 1.05rem; font-weight: 700; }
+    <!-- COMPARISON TABLE (no extra chips beneath) -->
+    <section class="card">
+      <h2>Compare plans</h2>
+      <div class="table-wrap" style="margin-top:1rem;">
+        <table class="plan-table">
+          <thead>
+            <tr>
+              <th>Feature</th>
+              <th>Free</th>
+              <th>Pro</th>
+              <th>Family</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>Postcodes</td><td>1</td><td>Up to 5</td><td>Unlimited</td></tr>
+            <tr><td>Scan frequency</td><td>Every 24h</td><td>Every 30 mins</td><td>Every 15 mins</td></tr>
+            <tr><td>Email alerts</td><td>✔</td><td>✔ (priority)</td><td>✔ (priority)</td></tr>
+            <tr><td>Manage/delete alerts</td><td>—</td><td>✔</td><td>✔</td></tr>
+            <tr><td>Family members</td><td>—</td><td>—</td><td>Up to 4</td></tr>
+            <tr><td>Support</td><td>Basic</td><td>Email</td><td>Priority</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
 
-@media (min-width: 900px) {
-  h1 { font-size: 2.1rem; }
-  h2 { font-size: 1.6rem; }
-}
+    <!-- CTA -->
+    <section class="card cta-banner">
+      <div class="cta-text">
+        <h2>Start free. Upgrade when you’re ready.</h2>
+        <p>No risk, no spam, and you can cancel anytime.</p>
+      </div>
+      <div class="cta-actions">
+        <a class="btn" href="/">Create a free alert</a>
+        <a class="btn btn-outline" href="#" id="proCheckout2">Upgrade to Pro</a>
+      </div>
+    </section>
+  </main>
 
-p { margin: .3rem 0 .9rem; color: var(--text-light); }
-.lead { font-size: 1.05rem; color: var(--text); }
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div>© 2025 Dentist Radar</div>
+      <nav class="footer-links">
+        <a href="/pricing.html" aria-current="page">Pricing</a>
+        <a href="/about.html">About</a>
+        <a href="/terms.html">Terms</a>
+        <a href="/privacy.html">Privacy</a>
+      </nav>
+    </div>
+  </footer>
 
-.wrap {
-  max-width: var(--max-width);
-  margin: 0 auto;
-  padding: 1.2rem;
-}
+  <!-- Mobile menu toggle (include on every page) -->
+  <script>
+    (function(){
+      const toggle = document.querySelector('.nav-toggle');
+      const links  = document.querySelector('.nav-links');
+      if (toggle && links){
+        toggle.addEventListener('click', ()=>{
+          const open = links.classList.toggle('open');
+          toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+      }
+    })();
+  </script>
 
-/* NAVBAR */
-.navbar {
-  background: #fff;
-  border-bottom: 1px solid var(--border);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-  position: sticky; top: 0; z-index: 100;
-}
-
-.nav-inner {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  max-width: var(--max-width);
-  margin: 0 auto;
-  padding: .6rem 1.2rem;
-}
-
-.brand img { display: block; height: auto; max-height: 62px; }
-
-.nav-links {
-  display: flex;
-  gap: 1rem;
-  align-items: center;
-}
-.nav-links a {
-  color: var(--text);
-  font-weight: 600;
-  padding: .35rem .55rem;
-  border-radius: 6px;
-  transition: background .2s;
-}
-.nav-links a:hover {
-  background: var(--brand-light);
-  color: var(--brand-strong);
-}
-
-/* Mobile menu */
-.nav-toggle {
-  background: none;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  width: 44px; height: 44px;
-  display: none; cursor: pointer;
-}
-.nav-burger {
-  display: block;
-  width: 24px; height: 2px;
-  background: var(--brand-strong);
-  position: relative; margin: 20px auto 0;
-}
-.nav-burger::before, .nav-burger::after {
-  content: "";
-  position: absolute;
-  width: 24px; height: 2px;
-  background: var(--brand-strong);
-  left: 0;
-}
-.nav-burger::before { top: -7px; }
-.nav-burger::after { top: 7px; }
-
-@media (max-width: 860px) {
-  .nav-toggle { display: inline-block; }
-  .nav-links {
-    position: absolute;
-    top: 68px; right: 10px; left: 10px;
-    display: none;
-    flex-direction: column;
-    gap: .6rem;
-    background: #fff;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: .7rem;
-    box-shadow: var(--shadow);
-  }
-  .nav-links.open { display: flex; }
-  .nav-links a {
-    padding: .9rem .8rem;
-    font-size: 1.05rem;
-  }
-}
-
-/* HERO — single column (no right whitespace) */
-.hero{
-  display: block;
-  background: var(--card);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 1.6rem;
-  margin-bottom: 1.4rem;
-}
-@media (min-width: 900px){
-  .hero{ display: block; padding: 2rem; }
-}
-
-.nhs-note {
-  background: var(--brand-light);
-  border-left: 4px solid var(--brand);
-  padding: .5rem .8rem;
-  border-radius: 8px;
-  font-size: .9rem;
-  margin-top: .8rem;
-  color: var(--text);
-}
-.nhs-dot{width:6px; height:6px; border-radius:50%; background:var(--brand); display:inline-block; margin-right:.5rem;}
-
-/* CARD SECTIONS */
-.card {
-  background: var(--card);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 1.5rem;
-  margin-bottom: 1.2rem;
-}
-.section-gap { margin-top: 2rem; }
-
-/* FORM */
-.form-grid {
-  display: grid;
-  gap: 1.1rem;
-  margin-top: 1.3rem;
-}
-.f-group { position: relative; display: flex; flex-direction: column; }
-.f-input {
-  font-family: inherit;
-  font-size: 1rem;
-  padding: 1rem .9rem .9rem;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: #fff;
-  color: var(--text);
-  transition: border var(--transition), box-shadow var(--transition);
-}
-.f-input:focus {
-  border-color: var(--brand);
-  box-shadow: 0 0 0 3px rgba(0,86,179,0.12);
-  outline: none;
-}
-.f-label {
-  position: absolute;
-  left: .9rem;
-  top: .85rem;
-  color: #888;
-  font-size: .95rem;
-  transition: all .18s ease;
-  background: #fff;
-  padding: 0 .3rem;
-  pointer-events: none;
-}
-.f-input:focus + .f-label,
-.f-input:not(:placeholder-shown) + .f-label {
-  top: -.55rem;
-  left: .65rem;
-  font-size: .8rem;
-  color: var(--brand-strong);
-}
-.f-uppercase{text-transform:uppercase; letter-spacing:.25px}
-.field-err { color: #b00020; font-size: .83rem; min-height: 1rem; }
-.help { font-size: .8rem; color: #777; margin-top: .25rem; }
-
-/* BUTTONS */
-.btn {
-  display: inline-flex; align-items: center; justify-content: center; gap: .6rem;
-  border: none; background: var(--brand); color: #fff;
-  font-weight: 800; text-transform: uppercase; letter-spacing: .25px;
-  border-radius: var(--radius); cursor: pointer;
-  padding: .9rem 1.2rem; font-size: .98rem;
-  transition: filter var(--transition), transform var(--transition);
-}
-.btn:hover { filter: brightness(1.05); transform: translateY(-1px); }
-.btn-outline { background: transparent; color: var(--brand-strong); border: 2px solid var(--brand); }
-.btn-outline:hover { background: var(--brand-light); }
-.btn-full { width: 100%; }
-.spinner {
-  display: none; width: 18px; height: 18px;
-  border: 2px solid rgba(255,255,255,.4); border-top-color: #fff;
-  border-radius: 50%; animation: spin 1s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
-/* HOW IT WORKS */
-.how { display: grid; gap: .6rem; grid-template-columns: 1fr; }
-.step {
-  background: var(--brand-light);
-  border-radius: 10px;
-  padding: .75rem .9rem;
-  border: 1px solid var(--border);
-}
-@media (min-width: 700px) { .how { grid-template-columns: repeat(3,1fr); } }
-
-/* WHY TRUST US */
-.trust-points { list-style: none; margin: 0; padding: 0; display: grid; gap: 1rem; }
-.trust-points li { display: flex; gap: .8rem; align-items: flex-start; }
-.trust-icon { width: 28px; height: 28px; flex-shrink: 0; }
-.trust-footer { font-size: .85rem; color: #666; margin-top: 1rem; }
-
-/* PRICING (new, clean) */
-.price-grid {
-  display: grid; gap: 1.4rem;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  margin-top: 1.6rem;
-}
-.plan-card {
-  background: var(--card);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  padding: 1.4rem;
-  text-align: center;
-  border: 1px solid var(--border);
-}
-.plan-card h2 { font-size: 1.3rem; margin-bottom: .4rem; }
-.plan-card p { margin-bottom: .6rem; }
-.plan-card ul { list-style: none; padding: 0; margin: .7rem 0 1rem; }
-.plan-card ul li { margin: .3rem 0; color: var(--text); }
-.plan-card .btn { display: block; width: 100%; margin-top: .6rem; }
-.plan-card.highlight { border: 2px solid var(--brand); transform: scale(1.02); }
-
-/* TABLES */
-.table-wrap { overflow-x: auto; }
-.plan-table { width: 100%; border-collapse: collapse; }
-.plan-table th, .plan-table td {
-  border: 1px solid var(--border);
-  padding: .6rem;
-  text-align: center;
-  font-size: .9rem;
-}
-.plan-table th {
-  background: var(--brand-light);
-  color: var(--brand-strong);
-  font-weight: 700;
-}
-
-/* CTA Banner */
-.cta-banner {
-  display: flex; flex-direction: column; align-items: center; text-align: center;
-  gap: 1rem; background: var(--brand-light);
-  border: 1px solid var(--border); border-radius: var(--radius);
-}
-
-/* FOOTER */
-.site-footer {
-  background: #fff;
-  border-top: 1px solid var(--border);
-  padding: 1rem; margin-top: 2rem; font-size: .9rem;
-}
-.footer-inner {
-  max-width: var(--max-width); margin: 0 auto;
-  display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .6rem;
-}
-.footer-links { display: flex; gap: .8rem; flex-wrap: wrap; }
-
-/* BANNERS */
-.banner {
-  border-radius: 10px; padding: .8rem 1rem; font-weight: 500; margin-top: .8rem;
-}
-.banner.error { background: #ffecec; color: #c10000; border: 1px solid #ffbcbc; }
-.banner.info  { background: #e7f5ff; color: #004b91; border: 1px solid #cde6ff; }
-
-/* ACCESSIBILITY & COSMETIC */
-[aria-invalid="true"] { border-color: #b00020 !important; }
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: #ccc; border-radius: 8px; }
-
-/* SMALL SCREENS */
-@media (max-width: 480px){
-  .brand img { max-width: 220px; }
-  .btn { font-size: .92rem; padding: .8rem 1rem; }
-  h1 { font-size: 1.7rem; }
-  h2 { font-size: 1.3rem; }
-}
+  <!-- Stripe links (replace with real Checkout URLs when ready) -->
+  <script>
+    document.getElementById('proCheckout')?.addEventListener('click', (e)=> {
+      const url = '#'; if (url === '#'){ e.preventDefault(); alert('Add your Stripe Pro checkout URL.'); }
+    });
+    document.getElementById('familyCheckout')?.addEventListener('click', (e)=> {
+      const url = '#'; if (url === '#'){ e.preventDefault(); alert('Add your Stripe Family checkout URL.'); }
+    });
+    document.getElementById('proCheckout2')?.addEventListener('click', (e)=> {
+      const url = '#'; if (url === '#'){ e.preventDefault(); alert('Add your Stripe Pro checkout URL.'); }
+    });
+  </script>
+</body>
+</html>
