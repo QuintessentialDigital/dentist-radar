@@ -1,35 +1,59 @@
-const form = document.getElementById('alert-form');
-const msg = document.getElementById('message');
-const menuToggle = document.getElementById('menu-toggle');
-const navLinks = document.getElementById('nav-links');
+// public/app.js — UI↔API compatibility shim for Dentist Radar
+(function(){
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
-menuToggle?.addEventListener('click', ()=> navLinks.classList.toggle('open'));
+  function $(id){ return document.getElementById(id); }
+  function val(x){ return (x || '').toString().trim(); }
+  function show(msgEl, text, ok=true){ if(msgEl){ msgEl.textContent = text; msgEl.style.color = ok ? '' : '#ffd7d7'; } }
 
-form?.addEventListener('submit', async (e)=>{
-  e.preventDefault();
-  msg.textContent = 'Submitting...';
-  const email = document.getElementById('email').value.trim();
-  const postcodes = document.getElementById('postcodes').value.trim();
-  const radius = document.getElementById('radius').value.trim();
+  // Find the alert form by id OR by attributes
+  const form = $('alertForm') || document.querySelector('form.alert-form, form[data-role="alert"]');
+  if(!form) return;
 
-  const res = await fetch('/api/watch/create', {
-    method:'POST',
-    headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ email, postcodes, radius })
+  // Support both IDs and name= fallbacks
+  const getField = (id, altSel) => $(id) || form.querySelector(altSel);
+
+  const emailEl    = getField('email',    'input[name="email"], input[type="email"]');
+  const postcodeEl = getField('postcode', 'input[name="postcode"]');
+  const radiusEl   = getField('radius',   'input[name="radius"], input[type="number"]');
+  const msgEl      = $('msg') || form.nextElementSibling;
+
+  form.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+
+    const email    = val(emailEl && emailEl.value);
+    const postcode = val(postcodeEl && postcodeEl.value);
+    const radius   = Number(val((radiusEl && radiusEl.value) || '5')) || 5;
+
+    if(!emailRe.test(email))  return show(msgEl, 'Please enter a valid email.', false);
+    if(!postcode)             return show(msgEl, 'Please enter a UK postcode.', false);
+
+    show(msgEl, 'Creating alert…', true);
+
+    try{
+      const res = await fetch('/api/watch/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, postcode, radius })
+      });
+      const j = await res.json().catch(()=>null);
+
+      if(res.status === 402 && j?.error === 'upgrade_required'){
+        return show(msgEl, j.message || 'Free plan supports 1 postcode. Upgrade', false);
+      }
+      if(res.ok && j?.ok){
+        form.reset();
+        return show(msgEl, j.msg || 'Alert created', true);
+      }
+
+      const reason =
+        j?.error === 'invalid_postcode' ? 'Please enter a valid UK postcode.' :
+        j?.error === 'invalid_email'   ? 'Please enter a valid email.' :
+        j?.error || 'Could not create alert. Please try again.';
+      show(msgEl, reason, false);
+
+    }catch(err){
+      show(msgEl, 'Network error. Please try again.', false);
+    }
   });
-  const data = await res.json();
-  if (data.ok) {
-    msg.textContent = '✅ Alert created successfully!';
-    form.reset();
-  } else if (data.error === 'invalid_email') {
-    msg.textContent = '❌ Please enter a valid email.';
-  } else if (data.error === 'invalid_postcode') {
-    msg.textContent = '❌ Invalid postcode format.';
-  } else if (data.error === 'upgrade_required') {
-    msg.textContent = '⚡ Free plan allows one postcode. Upgrade for more.';
-  } else if (data.error === 'duplicate') {
-    msg.textContent = 'ℹ️ Alert already exists.';
-  } else {
-    msg.textContent = '❌ Error creating alert. Try again.';
-  }
-});
+})();
