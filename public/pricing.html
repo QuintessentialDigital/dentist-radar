@@ -1,80 +1,38 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Pricing — Dentist Radar</title>
-  <link rel="icon" href="/favicon.svg"/>
-  <link rel="stylesheet" href="/style.css"/>
-</head>
-<body>
-  <header>
-    <nav class="navbar">
-      <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
-      <button class="menu-toggle" id="menu-toggle">☰</button>
-      <ul class="nav-links" id="nav-links">
-        <li><a class="active" href="/pricing.html">Pricing</a></li>
-        <li><a href="/about.html">About</a></li>
-        <li><a href="/terms.html">Terms</a></li>
-        <li><a href="/privacy.html">Privacy</a></li>
+<main class="wrap pricing">
+  <h1>Pricing</h1>
+  <p class="lead">Simple, transparent plans. No contracts — upgrade any time.</p>
+
+  <div class="price-grid">
+    <div class="plan-card">
+      <h2>Free</h2>
+      <p>1 postcode, daily scan</p>
+      <ul>
+        <li>Email alerts when your dentist opens</li>
+        <li>Basic support</li>
       </ul>
-    </nav>
-  </header>
+      <a href="/" class="btn btn-full">Get Started Free</a>
+    </div>
 
-  <main class="hero">
-    <h1>Simple, fair pricing</h1>
-    <p>Start free. Upgrade for more postcodes and faster checks.</p>
+    <div class="plan-card highlight">
+      <h2>Pro</h2>
+      <p>5 postcodes, every 30 minutes</p>
+      <ul>
+        <li>Priority alerts</li>
+        <li>Faster scans</li>
+        <li>Pro email support</li>
+      </ul>
+      <a href="/" class="btn btn-primary">Upgrade to Pro</a>
+    </div>
 
-    <section class="alert-form" style="max-width:780px">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div class="card" style="padding:16px;background:#fff;border-radius:8px">
-          <h2 style="margin-top:0">Free</h2>
-          <p>• 1 postcode<br/>• Daily checks<br/>• Email alerts</p>
-          <button class="btn-secondary" onclick="location.href='/'" style="width:100%">Get started free</button>
-        </div>
-
-        <div class="card" style="padding:16px;background:#fff;border-radius:8px">
-          <h2 style="margin-top:0">Priority Pass <span class="pill">£4.99 one-time</span></h2>
-          <p>• Up to 5 postcodes<br/>• Hourly checks<br/>• Early delivery window</p>
-
-          <label for="upgradeEmail">Your email</label>
-          <input id="upgradeEmail" type="email" placeholder="you@example.com" required/>
-          <button id="upgradeBtn" style="margin-top:8px;width:100%" class="btn">Upgrade</button>
-          <p id="upMsg" class="message"></p>
-          <p class="message" style="opacity:.7">30-day refund if we detect nothing in your area.</p>
-        </div>
-      </div>
-    </section>
-  </main>
-
-  <footer>
-    <p>© 2025 Dentist Radar · <a href="/about.html">About</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
-  </footer>
-
-  <script>
-    const menuToggle=document.getElementById('menu-toggle');
-    const navLinks=document.getElementById('nav-links');
-    menuToggle?.addEventListener('click',()=>navLinks.classList.toggle('open'));
-
-    const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-    function show(msg,type='ok'){
-      const el=document.getElementById('upMsg');
-      el.textContent=msg;
-      el.style.color=type==='bad'?'#d00':'#0a0';
-    }
-    document.getElementById('upgradeBtn')?.addEventListener('click', async ()=>{
-      const email=(document.getElementById('upgradeEmail').value||'').trim();
-      if(!emailRe.test(email)) return show('Please enter a valid email.','bad');
-      try{
-        const res=await fetch('/api/checkout/priority',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({email})
-        });
-        const j=await res.json().catch(()=>null);
-        if(res.ok && j?.url){ location.href=j.url; } else { show('Upgrade failed — try again later.','bad'); }
-      }catch{ show('Network error — try again.','bad'); }
-    });
-  </script>
-</body>
-</html>
+    <div class="plan-card">
+      <h2>Family</h2>
+      <p>Unlimited postcodes, every 15 minutes</p>
+      <ul>
+        <li>Fastest alerts</li>
+        <li>Family dashboard</li>
+        <li>Dedicated support</li>
+      </ul>
+      <a href="/" class="btn btn-full">Go Family</a>
+    </div>
+  </div>
+</main>
