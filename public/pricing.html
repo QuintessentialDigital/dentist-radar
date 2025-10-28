@@ -1,156 +1,97 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pricing – Dentist Radar</title>
-  <meta name="description" content="Simple pricing. Start free. Upgrade for more postcodes and faster checks. Cancel anytime.">
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css" />
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Pricing — Dentist Radar</title>
+  <link rel="icon" href="/favicon.svg"/>
+  <link rel="stylesheet" href="/style.css"/>
 </head>
 <body>
-  <!-- NAVBAR -->
-  <header class="navbar">
-    <div class="nav-inner">
-      <a class="brand" href="/" aria-label="Dentist Radar">
-        <img src="/logo.svg" alt="Dentist Radar" width="340" height="68" />
-      </a>
-      <button class="nav-toggle" aria-label="Open menu" aria-expanded="false">
-        <span class="nav-burger"></span>
-      </button>
-      <nav class="nav-links" aria-label="Primary">
-        <a href="/">Home</a>
-        <a href="/pricing.html" aria-current="page">Pricing</a>
-        <a href="/about.html">About</a>
-        <a href="/terms.html">Terms</a>
-        <a href="/privacy.html">Privacy</a>
-        <a href="/admin.html">Admin</a>
-      </nav>
+
+<header>
+  <div class="container navbar">
+    <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
+    <button class="menu-toggle" id="menu-toggle">☰</button>
+    <ul class="nav-links" id="nav-links">
+      <li><a href="/">Home</a></li>
+      <li><a class="active" href="/pricing.html">Pricing</a></li>
+      <li><a href="/about.html">About</a></li>
+      <li><a href="/terms.html">Terms</a></li>
+      <li><a href="/privacy.html">Privacy</a></li>
+    </ul>
+  </div>
+</header>
+
+<main class="hero">
+  <div class="container">
+    <h1>Compare plans</h1>
+    <p>Start free. Upgrade for more postcodes and faster checks.</p>
+  </div>
+</main>
+
+<section class="section">
+  <div class="container">
+    <div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr));">
+      <div class="card">
+        <h2>Free</h2>
+        <p>• 1 postcode</p>
+        <p>• Daily checks</p>
+        <p>• Email alerts</p>
+        <button class="btn" onclick="location.href='/'">Get started free</button>
+      </div>
+
+      <div class="card">
+        <h2>Pro <span class="pill">£4.99 one-time</span></h2>
+        <p>• Up to 5 postcodes</p>
+        <p>• Hourly checks</p>
+        <p>• Early notifications</p>
+        <input id="proEmail" type="email" placeholder="you@example.com"/>
+        <button id="proBtn" class="btn">Upgrade to Pro</button>
+        <p id="proMsg" class="message" style="color:#333;"></p>
+      </div>
+
+      <div class="card">
+        <h2>Family <span class="pill">£9.99 one-time</span></h2>
+        <p>• Up to 12 postcodes (share)</p>
+        <p>• Hourly checks</p>
+        <p>• Priority notifications</p>
+        <input id="famEmail" type="email" placeholder="you@example.com"/>
+        <button id="famBtn" class="btn">Go Family</button>
+        <p id="famMsg" class="message" style="color:#333;"></p>
+      </div>
     </div>
-  </header>
+  </div>
+</section>
 
-  <main class="wrap">
-    <section class="card">
-      <h1>Simple, fair pricing</h1>
-      <p class="lead">Start free forever. Upgrade if you want to track more areas or get faster checks — <strong>cancel anytime</strong>.</p>
+<footer>
+  <div class="container">
+    <p>© 2025 Dentist Radar · <a href="/about.html">About</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+  </div>
+</footer>
 
-      <!-- PLAN CARDS -->
-      <div class="price-grid">
-        <!-- Free -->
-        <div class="plan-card">
-          <h2>Free</h2>
-          <p>1 postcode · Daily scan (every 24h)</p>
-          <ul>
-            <li>Email alerts when availability changes</li>
-            <li>Basic support</li>
-          </ul>
-          <a class="btn" href="/">Get Started Free</a>
-        </div>
-
-        <!-- Pro -->
-        <div class="plan-card highlight">
-          <h2>Pro</h2>
-          <p>Up to 5 postcodes · Every 30 minutes</p>
-          <ul>
-            <li>Priority alerts</li>
-            <li>Faster checks</li>
-            <li>Manage & delete alerts</li>
-            <li>Email support</li>
-          </ul>
-          <a class="btn" href="#" id="proCheckout">Upgrade to Pro</a>
-        </div>
-
-        <!-- Family -->
-        <div class="plan-card">
-          <h2>Family</h2>
-          <p>Unlimited postcodes · Every 15 minutes</p>
-          <ul>
-            <li>Fastest alerts</li>
-            <li>Up to 4 family members</li>
-            <li>Priority support</li>
-          </ul>
-          <a class="btn" href="#" id="familyCheckout">Go Family</a>
-        </div>
-      </div>
-    </section>
-
-    <!-- COMPARISON TABLE (no extra chips beneath) -->
-    <section class="card">
-      <h2>Compare plans</h2>
-      <div class="table-wrap" style="margin-top:1rem;">
-        <table class="plan-table">
-          <thead>
-            <tr>
-              <th>Feature</th>
-              <th>Free</th>
-              <th>Pro</th>
-              <th>Family</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td>Postcodes</td><td>1</td><td>Up to 5</td><td>Unlimited</td></tr>
-            <tr><td>Scan frequency</td><td>Every 24h</td><td>Every 30 mins</td><td>Every 15 mins</td></tr>
-            <tr><td>Email alerts</td><td>✔</td><td>✔ (priority)</td><td>✔ (priority)</td></tr>
-            <tr><td>Manage/delete alerts</td><td>—</td><td>✔</td><td>✔</td></tr>
-            <tr><td>Family members</td><td>—</td><td>—</td><td>Up to 4</td></tr>
-            <tr><td>Support</td><td>Basic</td><td>Email</td><td>Priority</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- CTA -->
-    <section class="card cta-banner">
-      <div class="cta-text">
-        <h2>Start free. Upgrade when you’re ready.</h2>
-        <p>No risk, no spam, and you can cancel anytime.</p>
-      </div>
-      <div class="cta-actions">
-        <a class="btn" href="/">Create a free alert</a>
-        <a class="btn btn-outline" href="#" id="proCheckout2">Upgrade to Pro</a>
-      </div>
-    </section>
-  </main>
-
-  <footer class="site-footer">
-    <div class="footer-inner">
-      <div>© 2025 Dentist Radar</div>
-      <nav class="footer-links">
-        <a href="/pricing.html" aria-current="page">Pricing</a>
-        <a href="/about.html">About</a>
-        <a href="/terms.html">Terms</a>
-        <a href="/privacy.html">Privacy</a>
-      </nav>
-    </div>
-  </footer>
-
-  <!-- Mobile menu toggle (include on every page) -->
-  <script>
-    (function(){
-      const toggle = document.querySelector('.nav-toggle');
-      const links  = document.querySelector('.nav-links');
-      if (toggle && links){
-        toggle.addEventListener('click', ()=>{
-          const open = links.classList.toggle('open');
-          toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-        });
-      }
-    })();
-  </script>
-
-  <!-- Stripe links (replace with real Checkout URLs when ready) -->
-  <script>
-    document.getElementById('proCheckout')?.addEventListener('click', (e)=> {
-      const url = '#'; if (url === '#'){ e.preventDefault(); alert('Add your Stripe Pro checkout URL.'); }
+<script>
+  document.getElementById('menu-toggle')?.addEventListener('click',()=>document.getElementById('nav-links')?.classList.toggle('open'));
+  const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  function bind(plan){
+    const btn=document.getElementById(plan+'Btn');
+    const inp=document.getElementById(plan==='pro'?'proEmail':'famEmail');
+    const msg=document.getElementById(plan==='pro'?'proMsg':'famMsg');
+    btn?.addEventListener('click', async ()=>{
+      const email=(inp.value||'').trim();
+      if(!emailRe.test(email)){ msg.textContent='Please enter a valid email.'; msg.style.color='#d00'; return; }
+      msg.textContent='Preparing checkout…'; msg.style.color='#333';
+      try{
+        const res=await fetch('/api/checkout/'+plan,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+        const j=await res.json().catch(()=>null);
+        if(res.ok && j?.url){ location.href=j.url; }
+        else if(j?.error==='stripe_not_configured'){ msg.textContent='Checkout not configured yet.'; msg.style.color='#d00'; }
+        else { msg.textContent='Upgrade failed — try later.'; msg.style.color='#d00'; }
+      }catch{ msg.textContent='Network error — try again.'; msg.style.color='#d00'; }
     });
-    document.getElementById('familyCheckout')?.addEventListener('click', (e)=> {
-      const url = '#'; if (url === '#'){ e.preventDefault(); alert('Add your Stripe Family checkout URL.'); }
-    });
-    document.getElementById('proCheckout2')?.addEventListener('click', (e)=> {
-      const url = '#'; if (url === '#'){ e.preventDefault(); alert('Add your Stripe Pro checkout URL.'); }
-    });
-  </script>
+  }
+  bind('pro'); bind('family');
+</script>
+<script src="/app.js" defer></script>
 </body>
 </html>
