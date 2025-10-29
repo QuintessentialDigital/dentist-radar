@@ -1,4 +1,4 @@
-// server.js — Dentist Radar v1.6.2 (stable front/back integration)
+// server.js — Dentist Radar v1.6.5
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
@@ -20,10 +20,7 @@ const POSTMARK_TOKEN = process.env.POSTMARK_TOKEN || '';
 const FROM_EMAIL = process.env.FROM_EMAIL || 'alerts@dentistradar.co.uk';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 
-if (!MONGO_URI) {
-  console.error('Missing MONGO_URI in environment');
-  process.exit(1);
-}
+if (!MONGO_URI) { console.error('Missing MONGO_URI in environment'); process.exit(1); }
 
 let client, db, watches;
 async function initDb() {
@@ -57,9 +54,7 @@ async function sendEmail(to, subject, text) {
       'Content-Type': 'application/json',
       'X-Postmark-Server-Token': POSTMARK_TOKEN
     },
-    body: JSON.stringify({
-      From: FROM_EMAIL, To: to, Subject: subject, TextBody: text, MessageStream: 'outbound'
-    })
+    body: JSON.stringify({ From: FROM_EMAIL, To: to, Subject: subject, TextBody: text, MessageStream: 'outbound' })
   }).catch(e => ({ ok: false, error: e.message }));
   try {
     if (res?.ok) return { ok: true };
@@ -84,6 +79,8 @@ app.use(cors());
 app.use(compression());
 app.use(express.json({ limit: '256kb' }));
 app.use(morgan('tiny'));
+
+// Static assets (serve HTML files from /public)
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
 // Health
@@ -112,10 +109,7 @@ app.post('/api/watch/create', async (req, res) => {
     }
 
     await watches.insertOne({ email: emailKey, postcode: pc, radius: r, createdAt: new Date(), source: 'web' });
-
-    // send welcome non-blocking
-    sendEmail(email, `Dentist Radar — alerts enabled for ${pc}`, welcomeEmailBody({ postcode: pc, radius: r }))
-      .then(()=>null).catch(()=>null);
+    sendEmail(email, `Dentist Radar — alerts enabled for ${pc}`, welcomeEmailBody({ postcode: pc, radius: r })).catch(()=>null);
 
     return res.json({ ok: true, msg: 'Alert created — check your inbox.' });
   } catch (e) {
@@ -124,7 +118,7 @@ app.post('/api/watch/create', async (req, res) => {
   }
 });
 
-// List watches (optional filter by email)
+// List watches
 app.get('/api/watches', async (req, res) => {
   try {
     const email = (req.query.email || '').toString().toLowerCase().trim();
@@ -152,7 +146,17 @@ app.post('/api/admin/test-email', async (req, res) => {
   res.status(500).json({ ok: false, error: r.error || 'email_failed' });
 });
 
-// SPA fallback
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+// ----- Explicit admin page routes (fix redirect to home) -----
+app.get('/admin', (req, res) =>
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'))
+);
+app.get('/admin.html', (req, res) =>
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'))
+);
+
+// SPA fallback for other unknown routes
+app.get('*', (req, res) =>
+  res.sendFile(path.join(__dirname, 'public', 'index.html'))
+);
 
 app.listen(PORT, () => console.log('Dentist Radar listening on', PORT));
