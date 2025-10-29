@@ -1,139 +1,83 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Admin – Dentist Radar</title>
-  <meta name="description" content="Admin dashboard for Dentist Radar." />
-  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="/style.css" />
+  <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Admin — Dentist Radar</title>
+  <link rel="icon" href="/favicon.svg"/><link rel="stylesheet" href="/style.css"/>
+  <style>
+    .admin-wrap{max-width:960px;margin:24px auto;padding:16px}
+    .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+    input,button{height:44px;padding:0 12px;border:1px solid #dcdcdc;border-radius:8px}
+    button{border:2px solid #0b63ff;background:#0b63ff;color:#fff;font-weight:700;cursor:pointer}
+    table{width:100%;border-collapse:collapse;margin-top:12px;background:#fff;border:1px solid #eee}
+    th,td{padding:8px 10px;border-bottom:1px solid #f1f1f1;text-align:left}
+    th{background:#f8f9ff}
+    .msg{margin:8px 0;font-weight:600}
+  </style>
 </head>
 <body>
-  <!-- NAVBAR -->
-  <header class="navbar">
-    <div class="nav-inner">
-      <a class="brand" href="/" aria-label="Dentist Radar">
-        <img src="/logo.svg" alt="Dentist Radar" width="340" height="68" />
-      </a>
-      <button class="nav-toggle" aria-label="Open menu" aria-expanded="false">
-        <span class="nav-burger"></span>
-      </button>
-      <nav class="nav-links" aria-label="Primary">
-        <a href="/">Home</a>
-        <a href="/pricing.html">Pricing</a>
-        <a href="/about.html">About</a>
-        <a href="/terms.html">Terms</a>
-        <a href="/privacy.html">Privacy</a>
-        <a href="/admin.html" aria-current="page">Admin</a>
-      </nav>
-    </div>
-  </header>
+<header>
+  <div class="container navbar">
+    <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
+    <button class="menu-toggle" id="menu-toggle">☰</button>
+    <ul class="nav-links" id="nav-links">
+      <li><a href="/">Home</a></li>
+      <li><a href="/pricing.html">Pricing</a></li>
+      <li><a href="/about.html">About</a></li>
+      <li><a href="/terms.html">Terms</a></li>
+      <li><a href="/privacy.html">Privacy</a></li>
+    </ul>
+  </div>
+</header>
 
-  <main class="wrap page">
-    <section class="card">
-      <h1>Admin</h1>
-      <p class="lead">Quick view of alerts and a manual scan trigger for testing.</p>
+<main class="admin-wrap">
+  <h1>Admin</h1>
+  <div class="row">
+    <input id="apw" type="password" placeholder="Admin password">
+    <button id="btnList">List latest 200</button>
+    <input id="testTo" type="email" placeholder="Test email to">
+    <button id="btnTest">Send test email</button>
+  </div>
+  <div id="amsg" class="msg"></div>
+  <div style="overflow:auto">
+    <table id="tbl"><thead><tr><th>Created</th><th>Email</th><th>Postcode</th><th>Radius</th></tr></thead><tbody></tbody></table>
+  </div>
+</main>
 
-      <div style="display:flex; gap:.6rem; flex-wrap:wrap; margin:.6rem 0 1rem;">
-        <button class="btn" id="loadWatches">Load Alerts</button>
-        <button class="btn btn-outline" id="runScan">Run Scan</button>
-        <span id="adminMsg" class="banner info" hidden></span>
-      </div>
+<footer><div class="container">
+  <p>© 2025 Dentist Radar · <a href="/about.html">About</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
+</div></footer>
 
-      <div class="table-wrap">
-        <table class="plan-table" id="watchTable">
-          <thead>
-            <tr>
-              <th>Email</th>
-              <th>Postcode</th>
-              <th>Radius</th>
-              <th>Created</th>
-            </tr>
-          </thead>
-          <tbody id="watchBody">
-            <tr><td colspan="4" style="text-align:center;color:#666;">No data yet.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
-  </main>
-
-  <footer class="site-footer">
-    <div class="footer-inner">
-      <div>© 2025 Dentist Radar</div>
-      <nav class="footer-links">
-        <a href="/pricing.html">Pricing</a>
-        <a href="/about.html">About</a>
-        <a href="/terms.html">Terms</a>
-        <a href="/privacy.html">Privacy</a>
-      </nav>
-    </div>
-  </footer>
-
-  <!-- Mobile menu toggle -->
-  <script>
-    (function(){
-      const toggle = document.querySelector('.nav-toggle');
-      const links  = document.querySelector('.nav-links');
-      if (toggle && links){
-        toggle.addEventListener('click', ()=>{
-          const open = links.classList.toggle('open');
-          toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
-        });
-      }
-    })();
-  </script>
-
-  <!-- Admin logic -->
-  <script>
-    const msg = document.getElementById('adminMsg');
-    function showMsg(text, ok=true){
-      msg.textContent = text;
-      msg.className = 'banner ' + (ok ? 'info' : 'error');
-      msg.hidden = false;
-      setTimeout(()=>{ msg.hidden = true; }, 4000);
-    }
-
-    document.getElementById('loadWatches')?.addEventListener('click', async ()=>{
-      try{
-        const res = await fetch('/api/watches');
-        const j = await res.json();
-        const tbody = document.getElementById('watchBody');
-        tbody.innerHTML = '';
-        if (!j.items || !j.items.length){
-          tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#666;">No alerts yet.</td></tr>';
-          return;
-        }
-        const rows = j.items.map(w=>{
-          const d = w.created ? new Date(w.created).toLocaleString('en-GB') : '';
-          return `<tr>
-            <td>${w.email || ''}</td>
-            <td>${w.postcode || ''}</td>
-            <td>${w.radius ?? ''}</td>
-            <td>${d}</td>
-          </tr>`;
-        }).join('');
-        tbody.innerHTML = rows;
-      }catch(ex){
-        showMsg('Failed to load alerts: ' + (ex?.message||'unknown'), false);
-      }
-    });
-
-    document.getElementById('runScan')?.addEventListener('click', async ()=>{
-      try{
-        const res = await fetch('/api/scan', { method:'POST' });
-        const j = await res.json().catch(()=>null);
-        if (res.ok && j && j.ok){
-          showMsg('Scan started: ' + (j.time || 'OK'));
-        } else {
-          showMsg('Scan failed: ' + (j?.error || 'unknown'), false);
-        }
-      }catch(ex){
-        showMsg('Scan error: ' + (ex?.message||'unknown'), false);
-      }
-    });
-  </script>
+<script>
+  document.getElementById('menu-toggle')?.addEventListener('click',()=>document.getElementById('nav-links')?.classList.toggle('open'));
+  const msg=document.getElementById('amsg'); const show=(m,ok=true)=>{msg.textContent=m;msg.style.color=ok?'#222':'#c00';};
+  document.getElementById('btnList')?.addEventListener('click',async()=>{
+    show('Loading…');
+    const password=document.getElementById('apw').value||'';
+    try{
+      const res=await fetch('/api/admin/list',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})});
+      const j=await res.json().catch(()=>null);
+      if(!res.ok||!j?.ok){show(j?.error||'Failed',false);return;}
+      show(`Loaded ${j.items.length} records.`);
+      const tb=document.querySelector('#tbl tbody'); tb.innerHTML='';
+      j.items.forEach(r=>{
+        const tr=document.createElement('tr');
+        tr.innerHTML=`<td>${new Date(r.createdAt).toLocaleString()}</td><td>${r.email}</td><td>${r.postcode}</td><td>${r.radius}</td>`;
+        tb.appendChild(tr);
+      });
+    }catch{show('Network error',false);}
+  });
+  document.getElementById('btnTest')?.addEventListener('click',async()=>{
+    show('Sending…');
+    const password=document.getElementById('apw').value||'';
+    const to=document.getElementById('testTo').value||'';
+    try{
+      const res=await fetch('/api/admin/test-email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,to})});
+      const j=await res.json().catch(()=>null);
+      if(!res.ok||!j?.ok){show(j?.error||'Failed',false);return;}
+      show('Test email sent.');
+    }catch{show('Network error',false);}
+  });
+</script>
 </body>
 </html>
