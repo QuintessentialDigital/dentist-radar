@@ -1,59 +1,43 @@
-// public/app.js — UI↔API compatibility shim for Dentist Radar
+// public/app.js — resilient UI↔API binding + mobile nav
 (function(){
-  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  const $ = id => document.getElementById(id);
+  const val = x => (x||'').toString().trim();
+  const show = (el, text, ok=true) => { if(el){ el.textContent=text; el.style.color = ok ? '' : '#ffd7d7'; } };
 
-  function $(id){ return document.getElementById(id); }
-  function val(x){ return (x || '').toString().trim(); }
-  function show(msgEl, text, ok=true){ if(msgEl){ msgEl.textContent = text; msgEl.style.color = ok ? '' : '#ffd7d7'; } }
+  // Menu
+  const t=$('menu-toggle'), n=$('nav-links');
+  t?.addEventListener('click',()=>n?.classList.toggle('open'));
 
-  // Find the alert form by id OR by attributes
-  const form = $('alertForm') || document.querySelector('form.alert-form, form[data-role="alert"]');
-  if(!form) return;
+  // Alert form
+  const form = $('alertForm') || document.querySelector('form.alert-form');
+  if(form){
+    const get = (id,sel)=>$(id)||form.querySelector(sel);
+    const emailEl=get('email','input[type="email"],[name="email"]');
+    const pcEl=get('postcode','input[name="postcode"]');
+    const rEl=get('radius','input[type="number"],[name="radius"]');
+    const msg=$('msg')||form.nextElementSibling;
 
-  // Support both IDs and name= fallbacks
-  const getField = (id, altSel) => $(id) || form.querySelector(altSel);
+    form.addEventListener('submit', async (e)=>{
+      e.preventDefault();
+      const email=val(emailEl?.value), postcode=val(pcEl?.value), radius=Number(val(rEl?.value||'5'))||5;
 
-  const emailEl    = getField('email',    'input[name="email"], input[type="email"]');
-  const postcodeEl = getField('postcode', 'input[name="postcode"]');
-  const radiusEl   = getField('radius',   'input[name="radius"], input[type="number"]');
-  const msgEl      = $('msg') || form.nextElementSibling;
+      if(!emailRe.test(email)) return show(msg,'Please enter a valid email.',false);
+      if(!postcode) return show(msg,'Please enter a UK postcode.',false);
 
-  form.addEventListener('submit', async (e)=>{
-    e.preventDefault();
+      show(msg,'Creating alert…',true);
+      try{
+        const res=await fetch('/api/watch/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,postcode,radius})});
+        const j=await res.json().catch(()=>null);
 
-    const email    = val(emailEl && emailEl.value);
-    const postcode = val(postcodeEl && postcodeEl.value);
-    const radius   = Number(val((radiusEl && radiusEl.value) || '5')) || 5;
+        if(res.status===402 && j?.error==='upgrade_required') return show(msg, j.message || 'Free plan supports 1 postcode. Upgrade', false);
+        if(res.ok && j?.ok){ form.reset(); return show(msg, j.msg || 'Alert created — check your inbox.', true); }
 
-    if(!emailRe.test(email))  return show(msgEl, 'Please enter a valid email.', false);
-    if(!postcode)             return show(msgEl, 'Please enter a UK postcode.', false);
-
-    show(msgEl, 'Creating alert…', true);
-
-    try{
-      const res = await fetch('/api/watch/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, postcode, radius })
-      });
-      const j = await res.json().catch(()=>null);
-
-      if(res.status === 402 && j?.error === 'upgrade_required'){
-        return show(msgEl, j.message || 'Free plan supports 1 postcode. Upgrade', false);
-      }
-      if(res.ok && j?.ok){
-        form.reset();
-        return show(msgEl, j.msg || 'Alert created', true);
-      }
-
-      const reason =
-        j?.error === 'invalid_postcode' ? 'Please enter a valid UK postcode.' :
-        j?.error === 'invalid_email'   ? 'Please enter a valid email.' :
-        j?.error || 'Could not create alert. Please try again.';
-      show(msgEl, reason, false);
-
-    }catch(err){
-      show(msgEl, 'Network error. Please try again.', false);
-    }
-  });
+        const reason = j?.error==='invalid_postcode' ? 'Please enter a valid UK postcode.' :
+                       j?.error==='invalid_email'   ? 'Please enter a valid email.' :
+                       j?.error || 'Could not create alert. Please try again.';
+        show(msg, reason, false);
+      }catch{ show(msg,'Network error. Please try again.',false); }
+    });
+  }
 })();
