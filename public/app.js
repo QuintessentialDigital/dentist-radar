@@ -1,13 +1,17 @@
-// public/app.js — resilient UI↔API binding + mobile nav
+// public/app.js — resilient UI↔API binding + mobile nav polish
 (function(){
   const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
   const $ = id => document.getElementById(id);
   const val = x => (x||'').toString().trim();
   const show = (el, text, ok=true) => { if(el){ el.textContent=text; el.style.color = ok ? '' : '#ffd7d7'; } };
 
-  // Menu
-  const t=$('menu-toggle'), n=$('nav-links');
-  t?.addEventListener('click',()=>n?.classList.toggle('open'));
+  // Mobile menu open/close
+  const toggle=$('menu-toggle'), links=$('nav-links');
+  toggle?.addEventListener('click',()=>links?.classList.toggle('open'));
+  // Close menu after you tap a link (mobile UX)
+  links?.querySelectorAll('a').forEach(a=>{
+    a.addEventListener('click',()=>links.classList.remove('open'));
+  });
 
   // Alert form
   const form = $('alertForm') || document.querySelector('form.alert-form');
@@ -27,17 +31,28 @@
 
       show(msg,'Creating alert…',true);
       try{
-        const res=await fetch('/api/watch/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,postcode,radius})});
+        const res=await fetch('/api/watch/create',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({email,postcode,radius})
+        });
         const j=await res.json().catch(()=>null);
 
-        if(res.status===402 && j?.error==='upgrade_required') return show(msg, j.message || 'Free plan supports 1 postcode. Upgrade', false);
-        if(res.ok && j?.ok){ form.reset(); return show(msg, j.msg || 'Alert created — check your inbox.', true); }
+        if(res.status===402 && j?.error==='upgrade_required')
+          return show(msg, j.message || 'Free plan supports 1 postcode. Upgrade', false);
+
+        if(res.ok && j?.ok){
+          form.reset();
+          return show(msg, j.msg || 'Alert created — check your inbox.', true);
+        }
 
         const reason = j?.error==='invalid_postcode' ? 'Please enter a valid UK postcode.' :
                        j?.error==='invalid_email'   ? 'Please enter a valid email.' :
                        j?.error || 'Could not create alert. Please try again.';
         show(msg, reason, false);
-      }catch{ show(msg,'Network error. Please try again.',false); }
+      }catch{
+        show(msg,'Network error. Please try again.',false);
+      }
     });
   }
 })();
