@@ -1,4 +1,4 @@
-// public/app.js — strict mobile guards + resilient UI↔API binding
+// public/app.js — resilient UI↔API binding + mobile nav
 (function(){
   const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 
@@ -6,7 +6,7 @@
   const val = x => (x||'').toString().trim();
   const show = (el, text, ok=true) => { if(el){ el.textContent=text; el.style.color = ok ? '' : '#ffd7d7'; } };
 
-  // Mobile menu open/close + close after tap
+  // Mobile menu open/close + close after link tap
   const toggle=$('menu-toggle'), links=$('nav-links');
   toggle?.addEventListener('click',()=>links?.classList.toggle('open'));
   links?.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>links.classList.remove('open')));
@@ -25,7 +25,7 @@
     });
   }
 
-  // Postcode: uppercase + normalise “OUTWARD INWARD”
+  // Postcode normaliser
   function normalizePostcode(raw){
     const t=(raw||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
     if(t.length<5) return (raw||'').toUpperCase().trim();
@@ -42,7 +42,7 @@
     pcEl.addEventListener('blur', ()=>{ pcEl.value = normalizePostcode(pcEl.value); });
   }
 
-  // Email: trim and lower-case domain on blur
+  // Email: trim + lower-case domain
   if(emailEl){
     emailEl.addEventListener('blur', ()=>{
       const t=(emailEl.value||'').trim();
