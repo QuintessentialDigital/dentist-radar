@@ -1,35 +1,70 @@
-// public/app.js — resilient UI↔API binding + mobile nav polish
+// public/app.js — strict mobile guards + resilient UI↔API binding
 (function(){
   const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
   const $ = id => document.getElementById(id);
   const val = x => (x||'').toString().trim();
   const show = (el, text, ok=true) => { if(el){ el.textContent=text; el.style.color = ok ? '' : '#ffd7d7'; } };
 
-  // Mobile menu open/close
+  // Mobile menu open/close + close after tap
   const toggle=$('menu-toggle'), links=$('nav-links');
   toggle?.addEventListener('click',()=>links?.classList.toggle('open'));
-  // Close menu after you tap a link (mobile UX)
-  links?.querySelectorAll('a').forEach(a=>{
-    a.addEventListener('click',()=>links.classList.remove('open'));
-  });
+  links?.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>links.classList.remove('open')));
 
-  // Alert form
+  // Elements
   const form = $('alertForm') || document.querySelector('form.alert-form');
-  if(form){
-    const get = (id,sel)=>$(id)||form.querySelector(sel);
-    const emailEl=get('email','input[type="email"],[name="email"]');
-    const pcEl=get('postcode','input[name="postcode"]');
-    const rEl=get('radius','input[type="number"],[name="radius"]');
-    const msg=$('msg')||form.nextElementSibling;
+  const emailEl=$('email'), pcEl=$('postcode'), rEl=$('radius');
+  const msg=$('msg')|| (form && form.nextElementSibling);
 
+  // Radius: digits only; clamp 1–50
+  if(rEl){
+    rEl.addEventListener('input', ()=>{ rEl.value = (rEl.value||'').replace(/\D+/g,''); });
+    rEl.addEventListener('blur', ()=>{
+      let n = parseInt(rEl.value||'5',10); if(isNaN(n)) n=5;
+      n=Math.max(1,Math.min(50,n)); rEl.value=String(n);
+    });
+  }
+
+  // Postcode: uppercase + normalise “OUTWARD INWARD”
+  function normalizePostcode(raw){
+    const t=(raw||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+    if(t.length<5) return (raw||'').toUpperCase().trim();
+    const head=t.slice(0,t.length-3), tail=t.slice(-3);
+    return `${head} ${tail}`.replace(/\s+/g,' ').trim();
+  }
+  function looksLikeUkPostcode(pc){
+    return /^([A-Z]{1,2}\d[A-Z\d]?)\s?\d[A-Z]{2}$/i.test((pc||'').toUpperCase());
+  }
+  if(pcEl){
+    pcEl.addEventListener('input', ()=>{
+      pcEl.value = pcEl.value.toUpperCase().replace(/[^A-Z0-9 ]/g,'').replace(/\s+/g,' ');
+    });
+    pcEl.addEventListener('blur', ()=>{ pcEl.value = normalizePostcode(pcEl.value); });
+  }
+
+  // Email: trim and lower-case domain on blur
+  if(emailEl){
+    emailEl.addEventListener('blur', ()=>{
+      const t=(emailEl.value||'').trim();
+      const parts=t.split('@');
+      emailEl.value = (parts.length===2) ? parts[0]+'@'+parts[1].toLowerCase() : t;
+    });
+  }
+
+  // Submit
+  if(form){
     form.addEventListener('submit', async (e)=>{
       e.preventDefault();
-      const email=val(emailEl?.value), postcode=val(pcEl?.value), radius=Number(val(rEl?.value||'5'))||5;
+      const email=val(emailEl?.value);
+      const postcode=normalizePostcode(val(pcEl?.value));
+      const radius=Number(val(rEl?.value||'5'))||5;
 
       if(!emailRe.test(email)) return show(msg,'Please enter a valid email.',false);
-      if(!postcode) return show(msg,'Please enter a UK postcode.',false);
+      if(!looksLikeUkPostcode(postcode)) return show(msg,'Please enter a valid UK postcode.',false);
+      if(!(radius>=1 && radius<=50)) return show(msg,'Radius must be between 1 and 50 miles.',false);
 
       show(msg,'Creating alert…',true);
+
       try{
         const res=await fetch('/api/watch/create',{
           method:'POST',
@@ -42,7 +77,7 @@
           return show(msg, j.message || 'Free plan supports 1 postcode. Upgrade', false);
 
         if(res.ok && j?.ok){
-          form.reset();
+          form.reset(); if(rEl) rEl.value='5';
           return show(msg, j.msg || 'Alert created — check your inbox.', true);
         }
 
