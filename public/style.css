@@ -1,70 +1,168 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Privacy — Dentist Radar</title>
-  <link rel="icon" href="/favicon.svg"/><link rel="stylesheet" href="/style.css"/>
-</head>
-<body>
-<header>
-  <div class="container navbar">
-    <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
-    <button class="menu-toggle" id="menu-toggle">☰</button>
-    <ul class="nav-links" id="nav-links">
-      <li><a href="/">Home</a></li>
-      <li><a href="/pricing.html">Pricing</a></li>
-      <li><a href="/about.html">About</a></li>
-      <li><a href="/terms.html">Terms</a></li>
-      <li><a class="active" href="/privacy.html">Privacy</a></li>
-    </ul>
-  </div>
-</header>
+/* =========================================================
+   Dentist Radar v1.6.7
+   - Mobile form spacing fixed (Edge/Safari)
+   - Footer always visible
+   - Consistent modern look across all browsers
+   ========================================================= */
 
-<main class="section">
-  <div class="container" style="text-align:left;max-width:860px">
-    <h1>Privacy Policy</h1>
-    <p><strong>Last updated:</strong> 29 October 2025</p>
+/* --- Reset & base typography --- */
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{
+  min-height:100%;
+  font-family:'Inter','Segoe UI',Roboto,Arial,sans-serif;
+  font-size:16px;color:#222;background:#fafafa;line-height:1.6;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+  -webkit-text-size-adjust:100%;
+}
+body{display:flex;flex-direction:column}
+img{max-width:100%;display:block}
+a{text-decoration:none;color:inherit}
+:focus-visible{outline:3px solid rgba(11,99,255,.35);outline-offset:2px}
+input,select,textarea{font-size:16px;-webkit-appearance:none;appearance:none}
+button{font-size:16px;cursor:pointer}
 
-    <h3>Who we are</h3>
-    <p>Dentist Radar is the data controller for personal data processed via this website.</p>
+/* --- Layout wrapper --- */
+.container{max-width:1080px;margin:0 auto;padding:0 16px}
 
-    <h3>What data we collect</h3>
-    <ul>
-      <li><strong>Contact:</strong> email address.</li>
-      <li><strong>Alert settings:</strong> postcode(s), search radius.</li>
-      <li><strong>Technical:</strong> IP address, device, and usage logs (for security and diagnostics).</li>
-    </ul>
+/* --- Header & Navigation --- */
+header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-index:1000}
+.navbar{height:64px;display:flex;align-items:center;justify-content:space-between}
+.logo img{height:44px;width:auto}
+.nav-links{list-style:none;display:flex;gap:1rem;align-items:center}
+.nav-links a{color:#333;font-weight:600;padding:.3rem .6rem;border-radius:6px}
+.nav-links a:hover,.nav-links a.active{color:#0b63ff;background:rgba(11,99,255,.08)}
+.menu-toggle{display:none;background:none;border:0;font-size:1.9rem;line-height:1}
 
-    <h3>Why we use your data (lawful basis)</h3>
-    <ul>
-      <li><strong>Provide alerts</strong> you requested (contract).</li>
-      <li><strong>Prevent abuse & secure</strong> the service (legitimate interests).</li>
-      <li><strong>Comply with law</strong> (legal obligation).</li>
-    </ul>
+/* --- Hero section --- */
+.hero{
+  background:linear-gradient(135deg,#0b63ff 0%,#00bfff 100%);
+  color:#fff;text-align:center
+}
+.hero .container{padding:56px 16px 40px}
+.hero h1{font-size:2.4rem;font-weight:800;margin-bottom:12px;letter-spacing:.2px}
+.hero p{font-size:1.1rem;max-width:680px;margin:0 auto 24px;opacity:.95}
 
-    <h3>Retention</h3>
-    <p>Alert data is retained while your alert is active. Inactive records may be deleted after a reasonable period. You can request deletion at any time.</p>
+/* --- Alert form (desktop) --- */
+.alert-form{
+  display:flex;flex-wrap:wrap;gap:10px;
+  justify-content:center;
+  max-width:720px;margin:0 auto;
+}
+.input{flex:1 1 200px;min-width:210px;max-width:260px}
+.input input{
+  width:100%;height:46px;padding:0 14px;
+  border:1px solid #dcdcdc;border-radius:8px;
+  font-size:1rem;background:#fff;
+  transition:border-color .15s,box-shadow .15s;
+  line-height:46px;
+}
+.input input:focus{
+  border-color:#0b63ff;
+  box-shadow:0 0 0 3px rgba(11,99,255,.18)
+}
+.btn{
+  height:46px;padding:0 22px;border-radius:8px;
+  border:2px solid #fff;background:#fff;color:#0b63ff;
+  font-weight:800;letter-spacing:.3px;
+  transition:all .15s
+}
+.btn:hover{background:#0b63ff;color:#fff;border-color:#0b63ff}
+.message{margin-top:12px;font-weight:700;color:#fff;min-height:1.2em}
 
-    <h3>Sharing</h3>
-    <p>We do not sell personal data. We use trusted processors (e.g., hosting, email delivery) under appropriate data protection terms. Data may be processed in the UK/EU and, where necessary, outside the UK/EU with safeguards.</p>
+/* --- Sections / Cards --- */
+.section{padding:48px 0}
+.section .container{text-align:center}
+.section h2{font-size:1.55rem;margin-bottom:14px;color:#111}
+.grid{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:16px;margin-top:12px
+}
+.card{
+  background:#fff;border:1px solid #eee;border-radius:12px;
+  padding:18px;text-align:left;
+  box-shadow:0 2px 6px rgba(0,0,0,.04)
+}
+.card strong{display:block;color:#0b63ff;margin-bottom:6px}
 
-    <h3>Your rights</h3>
-    <p>Under UK GDPR you have rights of access, rectification, erasure, restriction, objection, and data portability. Contact <a href="mailto:privacy@dentistradar.co.uk">privacy@dentistradar.co.uk</a>. You can complain to the ICO (<a href="https://ico.org.uk" target="_blank" rel="noopener">ico.org.uk</a>).</p>
+/* --- Trust bullets --- */
+.kbullets{
+  list-style:none;display:flex;gap:14px;justify-content:center;
+  flex-wrap:wrap;margin-top:10px
+}
+.kbullets li{
+  background:#fff;border:1px solid #eee;border-radius:10px;
+  padding:10px 14px
+}
 
-    <h3>Cookies</h3>
-    <p>We use essential cookies and minimal analytics necessary to operate and improve the service. You can control cookies in your browser settings.</p>
+/* --- Footer --- */
+footer{background:#fff;border-top:1px solid #eee;margin-top:auto}
+footer .container{
+  display:flex;align-items:center;justify-content:center;
+  gap:8px;flex-wrap:wrap;
+  min-height:64px;font-size:.95rem
+}
+footer a{color:#0b63ff}
+footer a:hover{text-decoration:underline}
 
-    <h3>Contact</h3>
-    <p>Privacy: <a href="mailto:privacy@dentistradar.co.uk">privacy@dentistradar.co.uk</a></p>
-  </div>
-</main>
+/* =========================================================
+   MOBILE — tighten inputs (Edge/Safari)
+   ========================================================= */
+@media (max-width:600px){
+  .container{padding:0 14px}
+  .navbar{height:60px}
+  .menu-toggle{display:block}
+  .nav-links{
+    display:none;position:absolute;top:60px;left:0;right:0;
+    background:#fff;border-bottom:1px solid #eee;
+    flex-direction:column;padding:12px 16px;gap:8px
+  }
+  .nav-links.open{display:flex}
+  .nav-links a{padding:10px 12px;border-radius:8px}
 
-<footer>
-  <div class="container">
-    <p>© 2025 Dentist Radar · <a href="/about.html">About</a> · <a href="/terms.html">Terms</a></p>
-  </div>
-</footer>
+  .hero .container{padding:36px 14px 28px}
+  .hero h1{font-size:1.9rem;margin-bottom:10px}
+  .hero p{font-size:1rem;margin-bottom:16px}
 
-<script src="/app.js" defer></script>
-</body>
-</html>
+  /* form stack fix for iPhone/Edge */
+  .alert-form{
+    display:flex;flex-direction:column;
+    align-items:stretch;max-width:100%;
+    gap:8px;margin:0 auto;
+  }
+  .alert-form>*{margin:0!important}
+  .input{min-width:100%;max-width:100%}
+  .input input{
+    height:52px;line-height:52px;padding:0 16px;
+    font-size:1.05rem;border-radius:10px;
+    margin:0!important
+  }
+  .input:not(:last-child){margin-bottom:0!important}
+  input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{
+    -webkit-appearance:none;margin:0
+  }
+  input[type=number]{-moz-appearance:textfield}
+  .btn{
+    height:52px;width:100%;border-radius:10px;
+    font-size:1.02rem;letter-spacing:.2px;margin:0!important
+  }
+  .message{margin-top:10px;font-size:.98rem}
+
+  .section{padding:28px 0}
+  .section h2{font-size:1.35rem;margin-bottom:10px}
+  .grid{grid-template-columns:1fr;gap:12px;margin-top:10px}
+  .card{padding:14px;border-radius:10px}
+  .kbullets{gap:10px}
+  .kbullets li{padding:8px 12px;border-radius:8px}
+
+  footer .container{
+    min-height:auto;padding:14px 0;
+    gap:10px;font-size:.95rem;text-align:center
+  }
+}
+
+/* --- Tiny phones --- */
+@media (max-width:380px){
+  .hero h1{font-size:1.7rem}
+  .input input,.btn{height:50px;line-height:50px}
+}
