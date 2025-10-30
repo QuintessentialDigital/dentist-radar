@@ -73,7 +73,8 @@ app.post("/api/watch/create", async (req,res)=>{
       return res.status(400).json({ ok:false,error:"invalid_email" });
     if(!looksLikeUkPostcode(pc))
       return res.status(400).json({ ok:false,error:"invalid_postcode" });
-    if(!rNum || isNaN(rNum))
+    // radius: must be provided and 1..30
+    if(!rNum || isNaN(rNum) || rNum < 1 || rNum > 30)
       return res.status(400).json({ ok:false,error:"invalid_radius",message:"Please select a radius between 1 and 30 miles." });
 
     const r = Math.max(1,Math.min(30,rNum));
@@ -91,8 +92,11 @@ app.post("/api/watch/create", async (req,res)=>{
       });
 
     await watches.insertOne({ email:emailKey, postcode:pc, radius:r, createdAt:new Date() });
-    await sendEmail(emailKey,`Dentist Radar — alerts enabled for ${pc}`,
-      `We'll email you when NHS dentists within ${r} miles of ${pc} start accepting patients.`);
+    await sendEmail(
+      emailKey,
+      `Dentist Radar — alerts enabled for ${pc}`,
+      `We'll email you when NHS dentists within ${r} miles of ${pc} start accepting patients.`
+    );
 
     res.json({ ok:true,msg:"✅ Alert created — check your inbox!" });
   }catch(e){
@@ -106,4 +110,4 @@ app.get("*",(req,res)=>{
   res.sendFile(path.join(__dirname,"public","index.html"));
 });
 
-app.listen(PORT,()=>console.log(`🚀 Dentist Radar v1.8 running on port ${PORT}`));
+app.listen(PORT,()=>console.log(`🚀 Dentist Radar v1.8 (stabilized) running on port ${PORT}`));
