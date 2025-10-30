@@ -1,57 +1,64 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Pricing — Dentist Radar</title>
-  <link rel="icon" href="/favicon.svg"/><link rel="stylesheet" href="/style.css"/>
+  <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
-<header>
-  <div class="container navbar">
-    <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
-    <button class="menu-toggle" id="menu-toggle">☰</button>
-    <ul class="nav-links" id="nav-links">
-      <li><a href="/">Home</a></li>
-      <li><a class="active" href="/pricing.html">Pricing</a></li>
-      <li><a href="/about.html">About</a></li>
-      <li><a href="/terms.html">Terms</a></li>
-      <li><a href="/privacy.html">Privacy</a></li>
-    </ul>
-  </div>
-</header>
-
-<main class="hero"><div class="container">
-  <h1>Compare plans</h1><p>Start free. Upgrade for more postcodes and faster checks.</p>
-</div></main>
-
-<section class="section"><div class="container">
-  <div class="grid" style="grid-template-columns:repeat(3,minmax(0,1fr));">
-    <div class="card">
-      <h2>Free</h2>
-      <p>• 1 postcode</p><p>• Daily checks</p><p>• Email alerts</p>
-      <button class="btn" onclick="location.href='/'">Get started free</button>
+  <header>
+    <div class="container navbar">
+      <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"/></a>
+      <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
+      <ul id="nav-links" class="nav-links">
+        <li><a href="/">Home</a></li>
+        <li><a class="active" href="pricing.html">Pricing</a></li>
+        <li><a href="about.html">About</a></li>
+        <li><a href="terms.html">Terms</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+      </ul>
     </div>
-    <div class="card">
-      <h2>Pro <span class="pill">£4.99 one-time</span></h2>
-      <p>• Up to 5 postcodes</p><p>• Hourly checks</p><p>• Early notifications</p>
-      <input id="proEmail" type="email" placeholder="you@example.com"/>
-      <button id="proBtn" class="btn" disabled>Upgrade to Pro</button>
-      <p class="message" style="color:#333;">(Checkout coming soon)</p>
-    </div>
-    <div class="card">
-      <h2>Family <span class="pill">£9.99 one-time</span></h2>
-      <p>• Up to 12 postcodes (share)</p><p>• Hourly checks</p><p>• Priority notifications</p>
-      <input id="famEmail" type="email" placeholder="you@example.com"/>
-      <button id="famBtn" class="btn" disabled>Go Family</button>
-      <p class="message" style="color:#333;">(Checkout coming soon)</p>
-    </div>
-  </div>
-</div></section>
+  </header>
 
-<footer><div class="container">
-  <p>© 2025 Dentist Radar · <a href="/about.html">About</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
-</div></footer>
+  <main>
+    <section class="section">
+      <div class="container">
+        <h2>Simple, Transparent Pricing</h2>
+        <div class="grid">
+          <div class="card">
+            <strong>Free</strong>
+            1 postcode, daily checks, email alerts.
+          </div>
+          <div class="card">
+            <strong>Pro</strong>
+            Multiple postcodes, faster checks, priority queue.
+          </div>
+          <div class="card">
+            <strong>Family</strong>
+            Household coverage, shared dashboard (coming soon).
+          </div>
+          <div class="card">
+            <strong>Agency</strong>
+            For councils & support orgs (contact us).
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
 
-<script src="/app.js" defer></script>
+  <footer>
+    <div class="container">
+      © 2025 Dentist Radar · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="about.html">About</a>
+    </div>
+  </footer>
+
+  <script>
+    // mobile menu
+    const toggle=document.getElementById('menu-toggle');
+    const links=document.getElementById('nav-links');
+    toggle?.addEventListener('click',()=>links?.classList.toggle('open'));
+    links?.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>links.classList.remove('open')));
+  </script>
 </body>
 </html>
