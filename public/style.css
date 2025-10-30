@@ -1,11 +1,6 @@
-/* =========================================================
-   Dentist Radar v1.6.8
-   - Mobile form uses CSS Grid (no phantom gaps on iPhone Edge/Safari)
-   - Zeroed UA margins on inputs/buttons
-   - Footer always visible; desktop unchanged
-   ========================================================= */
+/* Dentist Radar v1.7 — footer pinned, mobile grid form, checkmarks */
 
-/* Reset & base */
+/* Base reset */
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{
   min-height:100%;
@@ -15,29 +10,23 @@ html,body{
   -webkit-text-size-adjust:100%;
 }
 body{display:flex;flex-direction:column}
+main{flex:1} /* ensures footer is visible on short desktop pages */
 img{max-width:100%;display:block}
 a{text-decoration:none;color:inherit}
 :focus-visible{outline:3px solid rgba(11,99,255,.35);outline-offset:2px}
-
-/* iOS/Edge quirks: force consistent control metrics */
-input,select,textarea,button{
-  font-size:16px; /* prevent iOS zoom jump */
-  -webkit-appearance:none; appearance:none;
-  margin:0; /* kill UA margins */
-  -webkit-margin-before:0; -webkit-margin-after:0;
-}
+input,select,textarea,button{font-size:16px;-webkit-appearance:none;appearance:none}
 
 /* Layout */
 .container{max-width:1080px;margin:0 auto;padding:0 16px}
 
-/* Header / Nav */
+/* Header */
 header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-index:1000}
 .navbar{height:64px;display:flex;align-items:center;justify-content:space-between}
 .logo img{height:44px;width:auto}
 .nav-links{list-style:none;display:flex;gap:1rem;align-items:center}
 .nav-links a{color:#333;font-weight:600;padding:.3rem .6rem;border-radius:6px}
 .nav-links a:hover,.nav-links a.active{color:#0b63ff;background:rgba(11,99,255,.08)}
-.menu-toggle{display:none;background:none;border:0;font-size:1.9rem;line-height:1}
+.menu-toggle{display:none;background:none;border:0;font-size:1.9rem;line-height:1;cursor:pointer}
 
 /* Hero */
 .hero{background:linear-gradient(135deg,#0b63ff 0%,#00bfff 100%);color:#fff;text-align:center}
@@ -46,20 +35,16 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 .hero p{font-size:1.1rem;max-width:680px;margin:0 auto 24px;opacity:.95}
 
 /* Form (desktop baseline) */
-.alert-form{
-  display:flex;flex-wrap:wrap;gap:10px;justify-content:center;
-  max-width:720px;margin:0 auto;
-}
+.alert-form{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;max-width:720px;margin:0 auto}
 .input{flex:1 1 200px;min-width:210px;max-width:260px}
 .input input{
   width:100%;height:46px;padding:0 14px;border:1px solid #dcdcdc;border-radius:8px;
-  font-size:1rem;background:#fff;transition:border-color .15s,box-shadow .15s;
-  line-height:46px;
+  font-size:1rem;background:#fff;transition:border-color .15s,box-shadow .15s;line-height:46px
 }
 .input input:focus{border-color:#0b63ff;box-shadow:0 0 0 3px rgba(11,99,255,.18)}
 .btn{
   height:46px;padding:0 22px;border-radius:8px;border:2px solid #fff;background:#fff;color:#0b63ff;
-  font-weight:800;letter-spacing:.3px;transition:all .15s
+  font-weight:800;letter-spacing:.3px;cursor:pointer;transition:all .15s
 }
 .btn:hover{background:#0b63ff;color:#fff;border-color:#0b63ff}
 .message{margin-top:12px;font-weight:700;color:#fff;min-height:1.2em}
@@ -69,15 +54,18 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 .section .container{text-align:center}
 .section h2{font-size:1.55rem;margin-bottom:14px;color:#111}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:12px}
-.card{
-  background:#fff;border:1px solid #eee;border-radius:12px;padding:18px;text-align:left;
-  box-shadow:0 2px 6px rgba(0,0,0,.04)
-}
+.card{background:#fff;border:1px solid #eee;border-radius:12px;padding:18px;text-align:left;box-shadow:0 2px 6px rgba(0,0,0,.04)}
 .card strong{display:block;color:#0b63ff;margin-bottom:6px}
 
-/* Trust bullets */
+/* Trust bullets with ✓ */
 .kbullets{list-style:none;display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:10px}
-.kbullets li{background:#fff;border:1px solid #eee;border-radius:10px;padding:10px 14px}
+.kbullets li{
+  position:relative;padding:10px 14px 10px 34px;background:#fff;border:1px solid #eee;border-radius:10px
+}
+.kbullets li::before{
+  content:"✓"; position:absolute; left:12px; top:50%; transform:translateY(-50%);
+  color:#0b63ff; font-weight:800
+}
 
 /* Footer */
 footer{background:#fff;border-top:1px solid #eee;margin-top:auto}
@@ -85,14 +73,10 @@ footer .container{display:flex;align-items:center;justify-content:center;gap:8px
 footer a{color:#0b63ff}
 footer a:hover{text-decoration:underline}
 
-/* =========================================================
-   MOBILE (≤600px) — switch to CSS Grid to remove phantom gaps
-   ========================================================= */
+/* Mobile (≤600px) — grid form removes phantom gaps */
 @media (max-width:600px){
   .container{padding:0 14px}
   .navbar{height:60px}
-
-  /* Hamburger menu */
   .menu-toggle{display:block}
   .nav-links{
     display:none;position:absolute;top:60px;left:0;right:0;background:#fff;
@@ -101,51 +85,31 @@ footer a:hover{text-decoration:underline}
   .nav-links.open{display:flex}
   .nav-links a{padding:10px 12px;border-radius:8px}
 
-  /* Hero compact */
   .hero .container{padding:36px 14px 28px}
   .hero h1{font-size:1.9rem;margin-bottom:10px}
   .hero p{font-size:1rem;margin-bottom:16px}
 
-  /* >>> Form: use CSS Grid so gaps are exact (no UA margins) */
+  /* Use CSS Grid for perfect 8px gaps */
   .alert-form{
-    display:grid;
-    grid-template-columns:1fr;
-    row-gap:8px;           /* exact vertical spacing between items */
-    column-gap:0;
-    align-items:stretch;
-    max-width:100%;
-    margin:0 auto;
+    display:grid; grid-template-columns:1fr; row-gap:8px; column-gap:0;
+    align-items:stretch; max-width:100%; margin:0 auto
   }
-  .alert-form > *{margin:0 !important}   /* kill any inherited margins */
-  .input{min-width:100%;max-width:100%;display:block}
-  .input input{
-    height:52px; padding:0 16px;
-    line-height:normal;     /* avoid line-height interactions */
-    font-size:1.05rem; border-radius:10px;
-    margin:0 !important;
-  }
-  /* remove spinner buttons and numeric quirks */
-  input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
-  input[type=number]{-moz-appearance:textfield}
-  .btn{
-    height:52px;width:100%;border-radius:10px;font-size:1.02rem;letter-spacing:.2px;margin:0 !important
-  }
+  .alert-form>*{margin:0 !important}
+  .input{min-width:100%;max-width:100%}
+  .input input{height:52px;line-height:52px;padding:0 16px;font-size:1.05rem;border-radius:10px;margin:0 !important}
+  .btn{height:52px;width:100%;border-radius:10px;font-size:1.02rem;letter-spacing:.2px;margin:0 !important}
   .message{margin-top:10px;font-size:.98rem}
 
-  /* Sections */
   .section{padding:28px 0}
   .section h2{font-size:1.35rem;margin-bottom:10px}
   .grid{grid-template-columns:1fr;gap:12px;margin-top:10px}
   .card{padding:14px;border-radius:10px}
-  .kbullets{gap:10px}
-  .kbullets li{padding:8px 12px;border-radius:8px}
 
-  /* Footer compact */
   footer .container{min-height:auto;padding:14px 0;gap:10px;font-size:.95rem;text-align:center}
 }
 
 /* Tiny phones */
 @media (max-width:380px){
   .hero h1{font-size:1.7rem}
-  .input input,.btn{height:50px}
+  .input input,.btn{height:50px;line-height:50px}
 }
