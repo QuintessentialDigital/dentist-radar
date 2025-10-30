@@ -62,19 +62,23 @@ async function sendEmail(to, subject, text){
   }catch(e){ return { ok:false, error:e.message }; }
 }
 
+// ---------- API ----------
 app.post("/api/watch/create", async (req,res)=>{
   try{
     const emailKey = normEmail(req.body?.email);
     const pc = normalizePostcode(req.body?.postcode||"");
     const rNum = Number(req.body?.radius);
 
-    if(!emailRe.test(emailKey)) return res.status(400).json({ ok:false,error:"invalid_email" });
-    if(!looksLikeUkPostcode(pc)) return res.status(400).json({ ok:false,error:"invalid_postcode" });
+    if(!emailRe.test(emailKey))
+      return res.status(400).json({ ok:false,error:"invalid_email" });
+    if(!looksLikeUkPostcode(pc))
+      return res.status(400).json({ ok:false,error:"invalid_postcode", message:"Please enter a valid UK postcode (e.g. RG1 2AB)." });
     if(!rNum || isNaN(rNum) || rNum<1 || rNum>30)
       return res.status(400).json({ ok:false,error:"invalid_radius",message:"Please select a radius between 1 and 30 miles." });
 
     const dup = await watches.findOne({ email:emailKey, postcode:pc });
-    if(dup) return res.status(400).json({ ok:false,error:"duplicate",msg:"An alert already exists for this postcode." });
+    if(dup)
+      return res.status(400).json({ ok:false,error:"duplicate",msg:"An alert already exists for this postcode." });
 
     const count = await watches.countDocuments({ email:emailKey });
     if(count>=1)
@@ -98,7 +102,7 @@ app.post("/api/watch/create", async (req,res)=>{
   }
 });
 
-// Serve SPA
+// SPA fallback
 app.get("*",(req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
 
-app.listen(PORT,()=>console.log(`🚀 Dentist Radar v1.8 + fixes running on ${PORT}`));
+app.listen(PORT,()=>console.log(`🚀 Dentist Radar v1.8 + patch running on ${PORT}`));
