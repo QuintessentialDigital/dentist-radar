@@ -1,34 +1,72 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>About — Dentist Radar</title>
-  <link rel="icon" href="/favicon.svg"/><link rel="stylesheet" href="/style.css"/>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>About — Dentist Radar</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header>
   <div class="container navbar">
-    <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
-    <button class="menu-toggle" id="menu-toggle">☰</button>
-    <ul class="nav-links" id="nav-links">
+    <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"></a>
+    <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
+    <ul id="nav-links" class="nav-links">
       <li><a href="/">Home</a></li>
-      <li><a href="/pricing.html">Pricing</a></li>
-      <li><a class="active" href="/about.html">About</a></li>
-      <li><a href="/terms.html">Terms</a></li>
-      <li><a href="/privacy.html">Privacy</a></li>
+      <li><a href="pricing.html">Pricing</a></li>
+      <li><a class="active" href="about.html">About</a></li>
+      <li><a href="terms.html">Terms</a></li>
+      <li><a href="privacy.html">Privacy</a></li>
     </ul>
   </div>
 </header>
 
-<main class="section"><div class="container">
-  <h1>About Dentist Radar</h1>
-  <p>We help patients quickly find NHS dentists accepting new patients. We monitor verified NHS sources and send alerts as soon as we detect openings near you.</p>
-</div></main>
+<main>
+  <section class="hero">
+    <div class="container">
+      <h1>About Dentist Radar</h1>
+      <p>We help people find NHS dental availability quickly and simply.</p>
+    </div>
+  </section>
 
-<footer><div class="container">
-  <p>© 2025 Dentist Radar · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
-</div></footer>
+  <section class="section section-wide">
+    <div class="container-wide">
+      <h2>Our Mission</h2>
+      <p style="max-width:840px;margin:10px auto 0">
+        Dentist Radar turns NHS availability data into timely, easy-to-use alerts, so you can act fast when practices
+        near you start accepting new NHS patients. We focus on clarity, privacy, and speed.
+      </p>
+    </div>
+  </section>
 
-<script src="/app.js" defer></script>
+  <section class="section section-wide">
+    <div class="container-wide">
+      <h2>How It Works</h2>
+      <div class="grid">
+        <div class="card"><strong>Data</strong> We monitor official NHS listings for changes in patient acceptance status.</div>
+        <div class="card"><strong>Scanning</strong> Our system checks at regular intervals and flags changes near your postcode.</div>
+        <div class="card"><strong>Alerts</strong> When there’s availability, we email you so you can contact the practice promptly.</div>
+        <div class="card"><strong>Privacy</strong> We store the minimum necessary data (email, postcode, radius) to deliver alerts.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-wide" id="contact">
+    <div class="container-wide">
+      <h2>Contact</h2>
+      <p style="max-width:840px;margin:10px auto 0">
+        For questions or early access to upgrades, please reach out via the contact details in our <a href="privacy.html#contact">Privacy Policy</a>.
+      </p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="container footer">
+    © 2025 Dentist Radar · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="about.html">About</a>
+  </div>
+</footer>
+
+<script src="app.js" defer></script>
 </body>
 </html>
