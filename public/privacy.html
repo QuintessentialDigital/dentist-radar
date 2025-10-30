@@ -1,70 +1,89 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Privacy — Dentist Radar</title>
-  <link rel="icon" href="/favicon.svg"/><link rel="stylesheet" href="/style.css"/>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Privacy Policy — Dentist Radar</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header>
   <div class="container navbar">
-    <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
-    <button class="menu-toggle" id="menu-toggle">☰</button>
-    <ul class="nav-links" id="nav-links">
+    <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"></a>
+    <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
+    <ul id="nav-links" class="nav-links">
       <li><a href="/">Home</a></li>
-      <li><a href="/pricing.html">Pricing</a></li>
-      <li><a href="/about.html">About</a></li>
-      <li><a href="/terms.html">Terms</a></li>
-      <li><a class="active" href="/privacy.html">Privacy</a></li>
+      <li><a href="pricing.html">Pricing</a></li>
+      <li><a href="about.html">About</a></li>
+      <li><a href="terms.html">Terms</a></li>
+      <li><a class="active" href="privacy.html">Privacy</a></li>
     </ul>
   </div>
 </header>
 
-<main class="section">
-  <div class="container" style="text-align:left;max-width:860px">
-    <h1>Privacy Policy</h1>
-    <p><strong>Last updated:</strong> 29 October 2025</p>
+<main>
+  <section class="hero">
+    <div class="container">
+      <h1>Privacy Policy</h1>
+      <p>Last updated: 30 October 2025</p>
+    </div>
+  </section>
 
-    <h3>Who we are</h3>
-    <p>Dentist Radar is the data controller for personal data processed via this website.</p>
+  <section class="section section-wide">
+    <div class="container-wide" style="text-align:left;max-width:900px">
+      <h2>1. Who we are</h2>
+      <p>Dentist Radar provides alert notifications about potential NHS dentist availability near your chosen postcode(s).</p>
 
-    <h3>What data we collect</h3>
-    <ul>
-      <li><strong>Contact:</strong> email address.</li>
-      <li><strong>Alert settings:</strong> postcode(s), search radius.</li>
-      <li><strong>Technical:</strong> IP address, device, and usage logs (for security and diagnostics).</li>
-    </ul>
+      <h2>2. What we collect</h2>
+      <ul>
+        <li>Email address (to send alerts)</li>
+        <li>Postcode(s) and chosen radius</li>
+        <li>Technical logs (e.g., IP, timestamps) for security and troubleshooting</li>
+      </ul>
 
-    <h3>Why we use your data (lawful basis)</h3>
-    <ul>
-      <li><strong>Provide alerts</strong> you requested (contract).</li>
-      <li><strong>Prevent abuse & secure</strong> the service (legitimate interests).</li>
-      <li><strong>Comply with law</strong> (legal obligation).</li>
-    </ul>
+      <h2>3. How we use your data</h2>
+      <ul>
+        <li>To deliver alerts you requested</li>
+        <li>To improve and secure the service</li>
+        <li>To communicate important service updates</li>
+      </ul>
 
-    <h3>Retention</h3>
-    <p>Alert data is retained while your alert is active. Inactive records may be deleted after a reasonable period. You can request deletion at any time.</p>
+      <h2>4. Lawful basis</h2>
+      <p>We process your data under UK GDPR on the basis of your consent and/or our legitimate interests in providing the service.</p>
 
-    <h3>Sharing</h3>
-    <p>We do not sell personal data. We use trusted processors (e.g., hosting, email delivery) under appropriate data protection terms. Data may be processed in the UK/EU and, where necessary, outside the UK/EU with safeguards.</p>
+      <h2>5. Storage & Providers</h2>
+      <p>We use reputable providers to run our service (e.g., hosting, databases, email delivery). Where applicable, these providers process limited data as our processors.</p>
+      <ul>
+        <li>Email delivery (e.g., Postmark or similar): sends alert emails on our behalf.</li>
+        <li>Database hosting (e.g., managed cloud database): stores alert configuration data (email, postcode, radius).</li>
+      </ul>
 
-    <h3>Your rights</h3>
-    <p>Under UK GDPR you have rights of access, rectification, erasure, restriction, objection, and data portability. Contact <a href="mailto:privacy@dentistradar.co.uk">privacy@dentistradar.co.uk</a>. You can complain to the ICO (<a href="https://ico.org.uk" target="_blank" rel="noopener">ico.org.uk</a>).</p>
+      <h2>6. Retention</h2>
+      <p>We keep your alert details while your alert is active. If you delete your alert, we remove it from our active system; minimal logs may remain for security and audit.</p>
 
-    <h3>Cookies</h3>
-    <p>We use essential cookies and minimal analytics necessary to operate and improve the service. You can control cookies in your browser settings.</p>
+      <h2>7. Your rights</h2>
+      <p>Under UK GDPR you may have rights to access, correct, delete or restrict processing of your personal data. Contact us to exercise these rights.</p>
 
-    <h3>Contact</h3>
-    <p>Privacy: <a href="mailto:privacy@dentistradar.co.uk">privacy@dentistradar.co.uk</a></p>
-  </div>
+      <h2>8. Cookies</h2>
+      <p>We use essential cookies only (e.g., for basic site functionality). We do not use cookies for advertising.</p>
+
+      <h2 id="contact">9. Contact</h2>
+      <p>To contact us about privacy or to exercise your rights, email: <strong>privacy@dentistradar.co.uk</strong></p>
+
+      <h2>10. Changes</h2>
+      <p>We may update this Policy; a new “Last updated” date will appear at the top of this page.</p>
+
+      <p style="margin-top:14px;color:#666;font-size:.9rem">This page is provided for information only and is not legal advice.</p>
+    </div>
+  </section>
 </main>
 
 <footer>
-  <div class="container">
-    <p>© 2025 Dentist Radar · <a href="/about.html">About</a> · <a href="/terms.html">Terms</a></p>
+  <div class="container footer">
+    © 2025 Dentist Radar · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="about.html">About</a>
   </div>
 </footer>
 
-<script src="/app.js" defer></script>
+<script src="app.js" defer></script>
 </body>
 </html>
