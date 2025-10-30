@@ -7,81 +7,76 @@
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
-  <header>
-    <div class="container navbar">
-      <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"/></a>
-      <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
-      <ul id="nav-links" class="nav-links">
-        <li><a class="active" href="/">Home</a></li>
-        <li><a href="pricing.html">Pricing</a></li>
-        <li><a href="about.html">About</a></li>
-        <li><a href="terms.html">Terms</a></li>
-        <li><a href="privacy.html">Privacy</a></li>
+<header>
+  <div class="container navbar">
+    <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"/></a>
+    <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
+    <ul id="nav-links" class="nav-links">
+      <li><a class="active" href="/">Home</a></li>
+      <li><a href="pricing.html">Pricing</a></li>
+      <li><a href="about.html">About</a></li>
+      <li><a href="terms.html">Terms</a></li>
+      <li><a href="privacy.html">Privacy</a></li>
+    </ul>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="container">
+      <h1>Find an NHS Dentist Accepting Patients</h1>
+      <p>Be the first to know when nearby practices start accepting new NHS patients — free instant alerts.</p>
+
+      <form id="alertForm" class="alert-form" novalidate>
+        <div class="input">
+          <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
+                 placeholder="Your email" required />
+        </div>
+        <div class="input">
+          <input id="postcode" name="postcode" type="text" placeholder="Postcode (e.g. RG1 2AB)"
+                 minlength="5" maxlength="8" required />
+        </div>
+        <div class="input">
+          <input id="radius" name="radius" type="number" min="1" max="30" step="1"
+                 placeholder="Radius (miles)" required />
+        </div>
+        <button type="submit" class="btn">GET MY ALERT</button>
+      </form>
+      <p id="msg" class="message"></p>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <h2>How It Works</h2>
+      <div class="grid">
+        <div class="card"><strong>1. Add your postcode</strong> — We monitor your area.</div>
+        <div class="card"><strong>2. Automated scanning</strong> — NHS data checked hourly.</div>
+        <div class="card"><strong>3. Email alert</strong> — As soon as a practice opens.</div>
+        <div class="card"><strong>4. Contact directly</strong> — Always confirm before travelling.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <h2>Why Thousands Trust Dentist Radar</h2>
+      <ul class="kbullets">
+        <li>Accurate NHS data</li>
+        <li>Automated hourly scans</li>
+        <li>No spam — privacy first</li>
+        <li>Transparent and secure</li>
       </ul>
     </div>
-  </header>
+  </section>
+</main>
 
-  <main>
-    <section class="hero">
-      <div class="container">
-        <h1>Find an NHS Dentist Accepting Patients</h1>
-        <p>Be first to know when nearby practices start accepting new NHS patients — fast, free alerts to your inbox.</p>
+<footer>
+  <div class="container">
+    © 2025 Dentist Radar · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="about.html">About</a>
+  </div>
+</footer>
 
-        <form id="alertForm" class="alert-form" novalidate>
-          <div class="input">
-            <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
-                   autocapitalize="off" spellcheck="false" placeholder="Your email" required />
-          </div>
-
-          <div class="input">
-            <input id="postcode" name="postcode" type="text" inputmode="text" autocomplete="postal-code"
-                   autocapitalize="characters" spellcheck="false" placeholder="Postcode (e.g. RG1 2AB)"
-                   minlength="5" maxlength="8" pattern="[A-Za-z0-9 ]{5,8}" required />
-          </div>
-
-          <!-- Number input only (no datalist dropdown), min/max steppers act as “roller” -->
-          <div class="input">
-            <input id="radius" name="radius" type="number" min="1" max="30" step="1"
-                   placeholder="Radius (miles)" aria-label="Radius in miles" required />
-          </div>
-
-          <button type="submit" class="btn">GET MY ALERT</button>
-        </form>
-        <p id="msg" class="message"></p>
-      </div>
-    </section>
-
-    <section class="section">
-      <div class="container">
-        <h2>How It Works</h2>
-        <div class="grid">
-          <div class="card"><strong>1. Add your postcode</strong>Enter the area you want us to monitor — we track NHS dental practices near you.</div>
-          <div class="card"><strong>2. We check NHS updates</strong>We scan official NHS sources for changes in availability.</div>
-          <div class="card"><strong>3. You get an email alert</strong>As soon as a practice starts accepting, you’ll receive a clear email.</div>
-          <div class="card"><strong>4. Contact the practice</strong>Always confirm directly before travelling to book.</div>
-        </div>
-      </div>
-    </section>
-
-    <section class="section">
-      <div class="container">
-        <h2>Why Thousands Trust Dentist Radar</h2>
-        <ul class="kbullets">
-          <li>Accurate NHS data sources</li>
-          <li>Fast automated scans</li>
-          <li>Privacy-first (no spam ever)</li>
-          <li>Transparent & secure platform</li>
-        </ul>
-      </div>
-    </section>
-  </main>
-
-  <footer>
-    <div class="container">
-      © 2025 Dentist Radar · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="about.html">About</a>
-    </div>
-  </footer>
-
-  <script src="app.js" defer></script>
+<script src="app.js" defer></script>
 </body>
 </html>
