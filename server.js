@@ -1,162 +1,82 @@
-// server.js — Dentist Radar v1.6.5
-import 'dotenv/config';
-import express from 'express';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import cors from 'cors';
-import helmet from 'helmet';
-import compression from 'compression';
-import morgan from 'morgan';
-import fetch from 'node-fetch';
-import { MongoClient } from 'mongodb';
+// public/app.js — clamp radius 1..30, no default, clear after success
+(function(){
+  const emailRe=/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+  const $ = id => document.getElementById(id);
+  const val = x => (x||'').toString().trim();
+  const show = (el, text, ok=true) => { if(el){ el.textContent=text; el.style.color = ok ? '' : '#ffd7d7'; } };
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+  // Mobile menu
+  const toggle=$('menu-toggle'), links=$('nav-links');
+  toggle?.addEventListener('click',()=>links?.classList.toggle('open'));
+  links?.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>links.classList.remove('open')));
 
-const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGO_URI || '';
-const DB_NAME = process.env.DB_NAME || 'dentist_radar';
-const POSTMARK_TOKEN = process.env.POSTMARK_TOKEN || '';
-const FROM_EMAIL = process.env.FROM_EMAIL || 'alerts@dentistradar.co.uk';
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
+  // Elements
+  const form=$('alertForm'), emailEl=$('email'), pcEl=$('postcode'), rEl=$('radius'), msg=$('msg');
 
-if (!MONGO_URI) { console.error('Missing MONGO_URI in environment'); process.exit(1); }
-
-let client, db, watches;
-async function initDb() {
-  client = new MongoClient(MONGO_URI, { connectTimeoutMS: 15000 });
-  await client.connect();
-  db = client.db(DB_NAME);
-  watches = db.collection('watches');
-  await watches.createIndex({ email: 1, postcode: 1 }, { unique: true });
-  await watches.createIndex({ email: 1 });
-  await watches.createIndex({ createdAt: -1 });
-}
-await initDb().catch(err => { console.error('DB connect error:', err); process.exit(1); });
-
-const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/i;
-function normalizePostcode(pc = '') {
-  const t = pc.toUpperCase().replace(/\s+/g, '');
-  const m = t.match(/^([A-Z]{1,2}\d[A-Z\d]?)(\d[A-Z]{2})$/);
-  if (!m) return null;
-  return `${m[1]} ${m[2]}`.toUpperCase();
-}
-
-async function sendEmail(to, subject, text) {
-  if (!POSTMARK_TOKEN || !FROM_EMAIL) {
-    console.warn('Email skipped: postmark not configured.');
-    return { ok: false, skipped: true };
+  // Helpers
+  function clampRadius(v){
+    if(v===''||v==null) return ''; // allow empty until submit
+    const n = parseInt(String(v).replace(/\D+/g,''),10);
+    if (isNaN(n)) return '';
+    return String(Math.max(1, Math.min(30, n)));
   }
-  const res = await fetch('https://api.postmarkapp.com/email', {
-    method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      'X-Postmark-Server-Token': POSTMARK_TOKEN
-    },
-    body: JSON.stringify({ From: FROM_EMAIL, To: to, Subject: subject, TextBody: text, MessageStream: 'outbound' })
-  }).catch(e => ({ ok: false, error: e.message }));
-  try {
-    if (res?.ok) return { ok: true };
-    const j = await res.json().catch(()=>null);
-    return { ok: false, error: j?.Message || 'email_failed' };
-  } catch { return { ok: false, error: 'email_failed' }; }
-}
+  function normalizePostcode(raw){
+    const t=(raw||'').toUpperCase().replace(/[^A-Z0-9]/g,'');
+    if(t.length<5) return (raw||'').toUpperCase().trim();
+    const head=t.slice(0,t.length-3), tail=t.slice(-3);
+    return `${head} ${tail}`.replace(/\s+/g,' ').trim();
+  }
+  function looksLikeUkPostcode(pc){
+    return /^([A-Z]{1,2}\d[A-Z\d]?)\s?\d[A-Z]{2}$/i.test((pc||'').toUpperCase());
+  }
 
-function welcomeEmailBody({ postcode, radius }) {
-  return [
-    `You're set. We’ll alert you when NHS dentists open near ${postcode}.`,
-    '', `Radius: ${radius} mile(s)`,
-    '', 'Tip: Please call the practice to confirm availability before travelling.',
-    '', '— Dentist Radar'
-  ].join('\n');
-}
+  // Live guards
+  rEl?.addEventListener('input', ()=>{ rEl.value = rEl.value.replace(/\D+/g,''); });
+  rEl?.addEventListener('blur', ()=>{ rEl.value = clampRadius(rEl.value); });
 
-const app = express();
-app.disable('x-powered-by');
-app.use(helmet({ contentSecurityPolicy: false }));
-app.use(cors());
-app.use(compression());
-app.use(express.json({ limit: '256kb' }));
-app.use(morgan('tiny'));
+  pcEl?.addEventListener('input', ()=>{
+    pcEl.value = pcEl.value.toUpperCase().replace(/[^A-Z0-9 ]/g,'').replace(/\s+/g,' ');
+  });
+  pcEl?.addEventListener('blur', ()=>{ pcEl.value = normalizePostcode(pcEl.value); });
 
-// Static assets (serve HTML files from /public)
-app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
+  emailEl?.addEventListener('blur', ()=>{
+    const t=(emailEl.value||'').trim(); const parts=t.split('@');
+    emailEl.value = (parts.length===2) ? parts[0]+'@'+parts[1].toLowerCase() : t;
+  });
 
-// Health
-app.get('/api/health', async (req, res) => {
-  try { await db.command({ ping: 1 }); res.json({ ok: true, db: true, time: new Date().toISOString() }); }
-  catch { res.status(500).json({ ok: false, db: false }); }
-});
+  // Submit
+  form?.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const email=val(emailEl?.value);
+    const postcode=normalizePostcode(val(pcEl?.value));
+    const rClamped=clampRadius(val(rEl?.value));
+    const radius = rClamped==='' ? NaN : Number(rClamped);
 
-// Create watch
-app.post('/api/watch/create', async (req, res) => {
-  try {
-    const { email, postcode, radius } = req.body || {};
-    if (!emailRe.test(email || '')) return res.status(400).json({ ok: false, error: 'invalid_email' });
+    if(!emailRe.test(email)) return show(msg,'Please enter a valid email.',false);
+    if(!looksLikeUkPostcode(postcode)) return show(msg,'Please enter a valid UK postcode.',false);
+    if(isNaN(radius) || radius<1 || radius>30) return show(msg,'Please enter a radius between 1 and 30 miles.',false);
 
-    const pc = normalizePostcode(postcode);
-    if (!pc) return res.status(400).json({ ok: false, error: 'invalid_postcode' });
+    show(msg,'Creating alert…',true);
+    try{
+      const res=await fetch('/api/watch/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,postcode,radius})});
+      const j=await res.json().catch(()=>null);
 
-    const r = Math.max(1, Math.min(50, Number(radius || 5) || 5));
-    const emailKey = email.toLowerCase();
+      if(res.status===402 && j?.error==='upgrade_required')
+        return show(msg, j.message || 'Free plan supports 1 postcode. Upgrade', false);
 
-    const existingCount = await watches.countDocuments({ email: emailKey });
-    const exists = await watches.findOne({ email: emailKey, postcode: pc });
-    if (exists) return res.json({ ok: true, msg: 'You already have this alert.' });
-    if (existingCount >= 1) {
-      return res.status(402).json({ ok: false, error: 'upgrade_required', message: 'Free plan supports 1 postcode. Upgrade for more.' });
+      if(res.ok && j?.ok){
+        form.reset();
+        if(rEl) rEl.value=''; // keep radius blank after success
+        return show(msg, j.msg || 'Alert created — check your inbox.', true);
+      }
+
+      const reason = j?.error==='invalid_postcode' ? 'Please enter a valid UK postcode.' :
+                     j?.error==='invalid_email'   ? 'Please enter a valid email.' :
+                     j?.error==='invalid_radius'  ? 'Please enter a radius between 1 and 30 miles.' :
+                     j?.error || 'Could not create alert. Please try again.';
+      show(msg, reason, false);
+    }catch{
+      show(msg,'Network error. Please try again.',false);
     }
-
-    await watches.insertOne({ email: emailKey, postcode: pc, radius: r, createdAt: new Date(), source: 'web' });
-    sendEmail(email, `Dentist Radar — alerts enabled for ${pc}`, welcomeEmailBody({ postcode: pc, radius: r })).catch(()=>null);
-
-    return res.json({ ok: true, msg: 'Alert created — check your inbox.' });
-  } catch (e) {
-    console.error('create error:', e);
-    return res.status(500).json({ ok: false, error: 'server_error' });
-  }
-});
-
-// List watches
-app.get('/api/watches', async (req, res) => {
-  try {
-    const email = (req.query.email || '').toString().toLowerCase().trim();
-    const q = email ? { email } : {};
-    const items = await watches.find(q).sort({ createdAt: -1 }).limit(200).toArray();
-    res.json({ ok: true, items });
-  } catch { res.status(500).json({ ok: false, error: 'server_error' }); }
-});
-
-// Admin endpoints
-function isAdmin(pw) { return ADMIN_PASSWORD && pw && pw === ADMIN_PASSWORD; }
-
-app.post('/api/admin/list', async (req, res) => {
-  const { password } = req.body || {};
-  if (!isAdmin(password)) return res.status(403).json({ ok: false, error: 'forbidden' });
-  const items = await watches.find({}).sort({ createdAt: -1 }).limit(300).toArray();
-  res.json({ ok: true, items });
-});
-
-app.post('/api/admin/test-email', async (req, res) => {
-  const { password, to } = req.body || {};
-  if (!isAdmin(password)) return res.status(403).json({ ok: false, error: 'forbidden' });
-  const r = await sendEmail(to, 'Dentist Radar — test email', 'This is a test email from Dentist Radar Admin.');
-  if (r.ok) return res.json({ ok: true });
-  res.status(500).json({ ok: false, error: r.error || 'email_failed' });
-});
-
-// ----- Explicit admin page routes (fix redirect to home) -----
-app.get('/admin', (req, res) =>
-  res.sendFile(path.join(__dirname, 'public', 'admin.html'))
-);
-app.get('/admin.html', (req, res) =>
-  res.sendFile(path.join(__dirname, 'public', 'admin.html'))
-);
-
-// SPA fallback for other unknown routes
-app.get('*', (req, res) =>
-  res.sendFile(path.join(__dirname, 'public', 'index.html'))
-);
-
-app.listen(PORT, () => console.log('Dentist Radar listening on', PORT));
+  });
+})();
