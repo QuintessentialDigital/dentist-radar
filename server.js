@@ -11,31 +11,26 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ---- Resolve __dirname for ES modules ----
+// __dirname for ESM
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
-// ---- Middleware ----
+// Middleware
 app.use(cors());
 app.use(express.json());
-
-// Serve static files ONLY from /public (no server import of frontend code)
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ---- Env & Basics ----
-const MONGO_URI       = process.env.MONGO_URI;
-const DB_NAME         = process.env.DB_NAME || 'dentistradar';
-const ADMIN_PASSWORD  = process.env.ADMIN_PASSWORD || 'admin123';
-const POSTMARK_TOKEN  = process.env.POSTMARK_TOKEN || '';   // optional
-const MAIL_FROM       = process.env.MAIL_FROM || 'alerts@dentistradar.co.uk';
+// Env
+const MONGO_URI      = process.env.MONGO_URI;
+const DB_NAME        = process.env.DB_NAME || 'dentistradar';
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
+const POSTMARK_TOKEN = process.env.POSTMARK_TOKEN || '';
+const MAIL_FROM      = process.env.MAIL_FROM || 'alerts@dentistradar.co.uk';
 
-if (!MONGO_URI) {
-  throw new Error('Missing MONGO_URI in environment');
-}
+if (!MONGO_URI) throw new Error('Missing MONGO_URI in environment');
 
-// ---- MongoDB ----
+// DB
 let client, db, watches, alerts;
-
 async function initDb() {
   client = new MongoClient(MONGO_URI, { connectTimeoutMS: 15000 });
   await client.connect();
@@ -48,31 +43,24 @@ async function initDb() {
 
   alerts = db.collection('alerts');
   await alerts.createIndex({ createdAt: -1 });
-  await alerts.createIndex({ email: 1, kind: 1, createdAt: -1 });
 
   console.log('✅ MongoDB connected');
 }
-initDb().catch(err => {
-  console.error('Mongo init error:', err);
-  process.exit(1);
-});
+initDb().catch(err => { console.error('Mongo init error:', err); process.exit(1); });
 
-// ---- Helpers ----
+// Helpers
 const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-
+const normEmail = s => String(s||'').trim().toLowerCase();
 function normalizePostcode(raw = '') {
   const t = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
   if (t.length < 5) return raw.toUpperCase().trim();
-  const head = t.slice(0, t.length - 3);
-  const tail = t.slice(-3);
+  const head = t.slice(0, t.length - 3), tail = t.slice(-3);
   return `${head} ${tail}`.replace(/\s+/g, ' ').trim();
 }
 function looksLikeUkPostcode(pc) {
   return /^([A-Z]{1,2}\d[A-Z\d]?)\s?\d[A-Z]{2}$/i.test((pc || '').toUpperCase());
 }
-function isAdmin(pwd) {
-  return pwd && pwd === ADMIN_PASSWORD;
-}
+function isAdmin(pwd) { return pwd && pwd === ADMIN_PASSWORD; }
 
 async function sendEmail(to, subject, text) {
   if (!POSTMARK_TOKEN) return { ok: false, skipped: true, reason: 'no_postmark_token' };
@@ -94,41 +82,33 @@ async function sendEmail(to, subject, text) {
   }
 }
 
-// ---- Health ----
+// Health
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, time: new Date().toISOString() });
 });
 
-// ---- Create Watch (radius max 30) ----
+// Create Watch
 app.post('/api/watch/create', async (req, res) => {
   try {
-    const { email, postcode, radius } = req.body || {};
+    // Normalise inputs
+    const emailKey = normEmail(req.body?.email);
+    const pc = normalizePostcode(req.body?.postcode || '');
+    let rNum = Number(req.body?.radius);
 
-    const emailKey = (email || '').trim().toLowerCase();
-    if (!emailRe.test(emailKey)) {
-      return res.status(400).json({ ok: false, error: 'invalid_email' });
-    }
-
-    const pc = normalizePostcode(postcode || '');
-    if (!looksLikeUkPostcode(pc)) {
-      return res.status(400).json({ ok: false, error: 'invalid_postcode' });
-    }
-
-    // ✅ Clamp radius hard to 1..30 (no defaults)
-    let rNum = Number(radius);
+    // Validate
+    if (!emailRe.test(emailKey)) return res.status(400).json({ ok:false, error:'invalid_email' });
+    if (!looksLikeUkPostcode(pc)) return res.status(400).json({ ok:false, error:'invalid_postcode' });
     if (isNaN(rNum)) rNum = 0;
-    const r = Math.max(1, Math.min(30, rNum));
-    if (!(r >= 1 && r <= 30)) {
-      return res.status(400).json({ ok: false, error: 'invalid_radius' });
-    }
+    const r = Math.max(1, Math.min(30, rNum)); // cap 1..30
+    if (!(r >= 1 && r <= 30)) return res.status(400).json({ ok:false, error:'invalid_radius' });
 
-    // Free plan: max 1 postcode per email
-    const existing = await watches.find({ email: emailKey }).toArray();
-    const dup = existing.some(w => w.postcode === pc);
-    if (dup) {
-      return res.status(400).json({ ok: false, error: 'duplicate', msg: 'Alert already exists for this postcode.' });
-    }
-    if (existing.length >= 1) {
+    // Duplicate: exact same (email+postcode)
+    const dup = await watches.findOne({ email: emailKey, postcode: pc });
+    if (dup) return res.status(400).json({ ok:false, error:'duplicate', msg:'Alert already exists for this postcode.' });
+
+    // Upgrade rule: free = max 1 postcode per email
+    const existingCount = await watches.countDocuments({ email: emailKey });
+    if (existingCount >= 1) {
       return res.status(402).json({
         ok: false,
         error: 'upgrade_required',
@@ -136,13 +116,8 @@ app.post('/api/watch/create', async (req, res) => {
       });
     }
 
-    // Insert watch
-    await watches.insertOne({
-      email: emailKey,
-      postcode: pc,
-      radius: r,
-      createdAt: new Date()
-    });
+    // Insert
+    await watches.insertOne({ email: emailKey, postcode: pc, radius: r, createdAt: new Date() });
 
     // Welcome email (best-effort)
     const subject = `Dentist Radar — alerts enabled for ${pc}`;
@@ -156,63 +131,47 @@ app.post('/api/watch/create', async (req, res) => {
       `— Dentist Radar`
     ].join('\n');
     const mail = await sendEmail(emailKey, subject, body);
-
-    // Log welcome (optional)
     try {
       await alerts.insertOne({
-        kind: 'welcome',
-        email: emailKey,
-        postcode: pc,
-        radius: r,
-        status: mail?.ok ? 'sent' : 'skipped_or_failed',
-        provider: 'postmark',
-        createdAt: new Date()
+        kind: 'welcome', email: emailKey, postcode: pc, radius: r,
+        status: mail?.ok ? 'sent' : 'skipped_or_failed', provider: 'postmark', createdAt: new Date()
       });
-    } catch { /* non-blocking */ }
+    } catch {}
 
-    return res.json({ ok: true, msg: 'Alert created — check your inbox.' });
+    return res.json({ ok:true, msg:'Alert created — check your inbox.' });
   } catch (err) {
     console.error('Create watch error:', err);
-    return res.status(500).json({ ok: false, error: 'server_error' });
+    return res.status(500).json({ ok:false, error:'server_error' });
   }
 });
 
-// ---- Admin: list watches ----
-app.post('/api/admin/watches', async (req, res) => {
+// Admin lists
+app.post('/api/admin/watches', async (req,res)=>{
   const { password } = req.body || {};
-  if (!isAdmin(password)) return res.status(403).json({ ok: false, error: 'forbidden' });
-  const items = await watches.find().sort({ createdAt: -1 }).limit(300).toArray();
-  res.json({ ok: true, items });
+  if (!isAdmin(password)) return res.status(403).json({ ok:false, error:'forbidden' });
+  const items = await watches.find().sort({ createdAt:-1 }).limit(300).toArray();
+  res.json({ ok:true, items });
+});
+app.post('/api/admin/alerts', async (req,res)=>{
+  const { password } = req.body || {};
+  if (!isAdmin(password)) return res.status(403).json({ ok:false, error:'forbidden' });
+  const items = await alerts.find().sort({ createdAt:-1 }).limit(300).toArray();
+  res.json({ ok:true, items });
 });
 
-// ---- Admin: list alerts ----
-app.post('/api/admin/alerts', async (req, res) => {
-  const { password, email } = req.body || {};
-  if (!isAdmin(password)) return res.status(403).json({ ok: false, error: 'forbidden' });
-  const q = email ? { email: String(email).toLowerCase() } : {};
-  const items = await alerts.find(q).sort({ createdAt: -1 }).limit(300).toArray();
-  res.json({ ok: true, items });
-});
-
-// ---- Static page routes (serve files directly) ----
+// Static pages
 const pub = p => path.join(__dirname, 'public', p);
+app.get('/pricing', (req,res)=>res.sendFile(pub('pricing.html')));
+app.get('/about',   (req,res)=>res.sendFile(pub('about.html')));
+app.get('/terms',   (req,res)=>res.sendFile(pub('terms.html')));
+app.get('/privacy', (req,res)=>res.sendFile(pub('privacy.html')));
+app.get('/admin',   (req,res)=>res.sendFile(pub('admin.html')));
 
-app.get('/pricing',  (req, res) => res.sendFile(pub('pricing.html')));
-app.get('/about',    (req, res) => res.sendFile(pub('about.html')));
-app.get('/terms',    (req, res) => res.sendFile(pub('terms.html')));
-app.get('/privacy',  (req, res) => res.sendFile(pub('privacy.html')));
-app.get('/admin',    (req, res) => res.sendFile(pub('admin.html')));
-
-// ---- Catch-all: send index.html for any other GET (keeps SPA-friendly nav) ----
-app.get('*', (req, res) => {
-  // Avoid swallowing API routes by catching only non-API GETs
-  if (req.path.startsWith('/api/')) {
-    return res.status(404).json({ ok: false, error: 'not_found' });
-  }
+// Catch-all for non-API GET → home
+app.get('*', (req,res)=>{
+  if (req.path.startsWith('/api/')) return res.status(404).json({ ok:false, error:'not_found' });
   res.sendFile(pub('index.html'));
 });
 
-// ---- Start ----
-app.listen(PORT, () => {
-  console.log(`🚀 Dentist Radar running on port ${PORT}`);
-});
+// Start
+app.listen(PORT, ()=> console.log(`🚀 Dentist Radar running on port ${PORT}`));
