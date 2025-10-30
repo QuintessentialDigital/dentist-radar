@@ -7,58 +7,98 @@
   <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
-  <header>
-    <div class="container navbar">
-      <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"/></a>
-      <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
-      <ul id="nav-links" class="nav-links">
-        <li><a href="/">Home</a></li>
-        <li><a class="active" href="pricing.html">Pricing</a></li>
-        <li><a href="about.html">About</a></li>
-        <li><a href="terms.html">Terms</a></li>
-        <li><a href="privacy.html">Privacy</a></li>
-      </ul>
-    </div>
-  </header>
+<header>
+  <div class="container navbar">
+    <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"/></a>
+    <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
+    <ul id="nav-links" class="nav-links">
+      <li><a href="/">Home</a></li>
+      <li><a class="active" href="pricing.html">Pricing</a></li>
+      <li><a href="about.html">About</a></li>
+      <li><a href="terms.html">Terms</a></li>
+      <li><a href="privacy.html">Privacy</a></li>
+    </ul>
+  </div>
+</header>
 
-  <main>
-    <section class="section">
-      <div class="container">
-        <h2>Simple, Transparent Pricing</h2>
-        <div class="grid">
-          <div class="card">
-            <strong>Free</strong>
-            1 postcode, daily checks, email alerts.
-          </div>
-          <div class="card">
-            <strong>Pro</strong>
-            Multiple postcodes, faster checks, priority queue.
-          </div>
-          <div class="card">
-            <strong>Family</strong>
-            Household coverage, shared dashboard (coming soon).
-          </div>
-          <div class="card">
-            <strong>Agency</strong>
-            For councils & support orgs (contact us).
-          </div>
+<main>
+  <section class="section">
+    <div class="container">
+      <h2>Simple, Transparent Pricing</h2>
+      <div class="pricing-grid">
+        <div class="plan">
+          <h3>Free</h3>
+          <p>Perfect for individuals who need one local alert.</p>
+          <ul>
+            <li>1 postcode</li>
+            <li>Daily scans</li>
+            <li>Email alerts</li>
+            <li>Cancel anytime</li>
+          </ul>
+          <a class="btn" href="/">Get Started Free</a>
+        </div>
+
+        <div class="plan highlight">
+          <h3>Pro</h3>
+          <p>For families or users tracking multiple areas.</p>
+          <ul>
+            <li>Up to 5 postcodes</li>
+            <li>Hourly scans</li>
+            <li>Priority email alerts</li>
+            <li>Priority support</li>
+          </ul>
+          <button class="btn" id="btn-pro">Upgrade to Pro</button>
+        </div>
+
+        <div class="plan">
+          <h3>Family</h3>
+          <p>Designed for households and shared access.</p>
+          <ul>
+            <li>Up to 10 postcodes</li>
+            <li>Shared dashboard</li>
+            <li>Weekly summaries</li>
+            <li>Custom notifications</li>
+          </ul>
+          <button class="btn" id="btn-family">Go Family</button>
         </div>
       </div>
-    </section>
-  </main>
-
-  <footer>
-    <div class="container">
-      © 2025 Dentist Radar · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="about.html">About</a>
     </div>
-  </footer>
+  </section>
+</main>
 
-  <script>
-    // mobile menu
-    const toggle=document.getElementById('menu-toggle');
-    const links=document.getElementById('nav-links');
-    toggle?.addEventListener('click',()=>links?.classList.toggle('open'));
-    links?.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>links.classList.remove('open')));
-  </script>
+<footer>
+  <div class="container">
+    © 2025 Dentist Radar · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="about.html">About</a>
+  </div>
+</footer>
+
+<script>
+  // mobile menu
+  const toggle=document.getElementById('menu-toggle');
+  const links=document.getElementById('nav-links');
+  toggle?.addEventListener('click',()=>links?.classList.toggle('open'));
+  links?.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>links.classList.remove('open')));
+
+  async function startCheckout(plan){
+    const email = prompt('Enter your email to continue with checkout (optional):') || '';
+    try{
+      const res = await fetch('/api/billing/checkout', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ plan, email })
+      });
+      const j = await res.json();
+      if(j.ok && j.url){
+        window.location = j.url; // Redirect to Stripe Checkout
+      }else{
+        alert('Unable to start checkout. Please try again.');
+      }
+    }catch(e){
+      alert('Network error. Please try again later.');
+    }
+  }
+  document.getElementById('btn-pro')?.addEventListener('click',()=>startCheckout('pro'));
+  document.getElementById('btn-family')?.addEventListener('click',()=>startCheckout('family'));
+</script>
 </body>
 </html>
