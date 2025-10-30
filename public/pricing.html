@@ -1,15 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Pricing — Dentist Radar</title>
-  <link rel="stylesheet" href="style.css"/>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pricing — Dentist Radar</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header>
   <div class="container navbar">
-    <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"/></a>
+    <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"></a>
     <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
     <ul id="nav-links" class="nav-links">
       <li><a href="/">Home</a></li>
@@ -22,83 +22,123 @@
 </header>
 
 <main>
-  <section class="section">
+  <section class="hero">
     <div class="container">
-      <h2>Simple, Transparent Pricing</h2>
-      <div class="pricing-grid">
-        <div class="plan">
+      <h1>Simple, Fair Pricing</h1>
+      <p>Start free. Upgrade only if you need multiple locations or extra features.</p>
+    </div>
+  </section>
+
+  <section class="section section-wide" id="plans">
+    <div class="container-wide">
+      <div class="grid">
+        <!-- Free -->
+        <div class="card">
           <h3>Free</h3>
-          <p>Perfect for individuals who need one local alert.</p>
-          <ul>
+          <p>Best for trying Dentist Radar or following one area.</p>
+          <ul class="kbullets" style="justify-content:flex-start;margin-top:12px">
             <li>1 postcode</li>
-            <li>Daily scans</li>
+            <li>Standard scan frequency</li>
             <li>Email alerts</li>
-            <li>Cancel anytime</li>
+            <li>Manage alert anytime</li>
           </ul>
-          <a class="btn" href="/">Get Started Free</a>
+          <div style="margin-top:14px">
+            <a class="btn" href="/#alertForm">Get started — Free</a>
+          </div>
+          <p style="margin-top:8px;font-size:.9rem;color:#555">No card required.</p>
         </div>
 
-        <div class="plan highlight">
+        <!-- Pro -->
+        <div class="card">
           <h3>Pro</h3>
-          <p>For families or users tracking multiple areas.</p>
-          <ul>
+          <p>For families or anyone tracking multiple nearby areas.</p>
+          <ul class="kbullets" style="justify-content:flex-start;margin-top:12px">
             <li>Up to 5 postcodes</li>
-            <li>Hourly scans</li>
+            <li>Faster scan frequency</li>
             <li>Priority email alerts</li>
             <li>Priority support</li>
           </ul>
-          <button class="btn" id="btn-pro">Upgrade to Pro</button>
+          <div style="margin-top:14px">
+            <a class="btn" href="#upgrade">Upgrade to Pro</a>
+          </div>
+          <p style="margin-top:8px;font-size:.9rem;color:#555">Upgrades enabled soon.</p>
         </div>
 
-        <div class="plan">
+        <!-- Family -->
+        <div class="card">
           <h3>Family</h3>
-          <p>Designed for households and shared access.</p>
-          <ul>
+          <p>For larger households or carers tracking multiple towns.</p>
+          <ul class="kbullets" style="justify-content:flex-start;margin-top:12px">
             <li>Up to 10 postcodes</li>
-            <li>Shared dashboard</li>
-            <li>Weekly summaries</li>
-            <li>Custom notifications</li>
+            <li>Fastest scan window</li>
+            <li>Priority alerts &amp; support</li>
+            <li>Admin dashboard</li>
           </ul>
-          <button class="btn" id="btn-family">Go Family</button>
+          <div style="margin-top:14px">
+            <a class="btn" href="#upgrade">Go Family</a>
+          </div>
+          <p style="margin-top:8px;font-size:.9rem;color:#555">Upgrades enabled soon.</p>
         </div>
+      </div>
+
+      <!-- Comparison table -->
+      <div style="margin-top:28px;overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;background:#fff;border:1px solid #eee;border-radius:12px;overflow:hidden">
+          <thead style="background:#f7f9ff">
+            <tr>
+              <th style="text-align:left;padding:12px 14px">Feature</th>
+              <th style="text-align:center;padding:12px 14px">Free</th>
+              <th style="text-align:center;padding:12px 14px">Pro</th>
+              <th style="text-align:center;padding:12px 14px">Family</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td style="padding:12px 14px;border-top:1px solid #eee">Postcodes included</td>
+              <td style="text-align:center;border-top:1px solid #eee">1</td>
+              <td style="text-align:center;border-top:1px solid #eee">Up to 5</td>
+              <td style="text-align:center;border-top:1px solid #eee">Up to 10</td>
+            </tr>
+            <tr>
+              <td style="padding:12px 14px;border-top:1px solid #eee">Scan frequency</td>
+              <td style="text-align:center;border-top:1px solid #eee">Standard</td>
+              <td style="text-align:center;border-top:1px solid #eee">Faster</td>
+              <td style="text-align:center;border-top:1px solid #eee">Fastest</td>
+            </tr>
+            <tr>
+              <td style="padding:12px 14px;border-top:1px solid #eee">Email alerts</td>
+              <td style="text-align:center;border-top:1px solid #eee">Yes</td>
+              <td style="text-align:center;border-top:1px solid #eee">Priority</td>
+              <td style="text-align:center;border-top:1px solid #eee">Priority</td>
+            </tr>
+            <tr>
+              <td style="padding:12px 14px;border-top:1px solid #eee">Support</td>
+              <td style="text-align:center;border-top:1px solid #eee">Community</td>
+              <td style="text-align:center;border-top:1px solid #eee">Priority</td>
+              <td style="text-align:center;border-top:1px solid #eee">Priority</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div style="margin-top:18px;font-size:.9rem;color:#666">
+        <p>Notes: “Scan frequency” describes how often our system checks official NHS listings. Actual timings may vary.</p>
+      </div>
+
+      <!-- Upgrade anchor -->
+      <div id="upgrade" class="message-box show warn" style="margin-top:22px">
+        Upgrades will be enabled soon. For early access, please contact us via <a href="about.html#contact">About → Contact</a>.
       </div>
     </div>
   </section>
 </main>
 
 <footer>
-  <div class="container">
+  <div class="container footer">
     © 2025 Dentist Radar · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="about.html">About</a>
   </div>
 </footer>
 
-<script>
-  // mobile menu
-  const toggle=document.getElementById('menu-toggle');
-  const links=document.getElementById('nav-links');
-  toggle?.addEventListener('click',()=>links?.classList.toggle('open'));
-  links?.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>links.classList.remove('open')));
-
-  async function startCheckout(plan){
-    const email = prompt('Enter your email to continue with checkout (optional):') || '';
-    try{
-      const res = await fetch('/api/billing/checkout', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ plan, email })
-      });
-      const j = await res.json();
-      if(j.ok && j.url){
-        window.location = j.url; // Redirect to Stripe Checkout
-      }else{
-        alert('Unable to start checkout. Please try again.');
-      }
-    }catch(e){
-      alert('Network error. Please try again later.');
-    }
-  }
-  document.getElementById('btn-pro')?.addEventListener('click',()=>startCheckout('pro'));
-  document.getElementById('btn-family')?.addEventListener('click',()=>startCheckout('family'));
-</script>
+<script src="app.js" defer></script>
 </body>
 </html>
