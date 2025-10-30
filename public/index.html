@@ -9,7 +9,9 @@
 <body>
 <header>
   <div class="container navbar">
+    <!-- logo left -->
     <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"></a>
+    <!-- nav right -->
     <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
     <ul id="nav-links" class="nav-links">
       <li><a class="active" href="/">Home</a></li>
@@ -43,13 +45,14 @@
         <button type="submit" class="btn">GET MY ALERT</button>
       </form>
 
-      <!-- hidden until a message is shown -->
-      <p id="msg" class="message-box" style="display:none;"></p>
+      <!-- hidden until JS shows it -->
+      <p id="msg" class="message-box" aria-live="polite"></p>
     </div>
   </section>
 
-  <section class="section">
-    <div class="container">
+  <!-- wide feel on content sections -->
+  <section class="section section-wide">
+    <div class="container-wide">
       <h2>How It Works</h2>
       <div class="grid">
         <div class="card"><strong>1 – Add your postcode</strong> Enter your location and how far you’re willing to travel.</div>
@@ -60,8 +63,8 @@
     </div>
   </section>
 
-  <section class="section">
-    <div class="container">
+  <section class="section section-wide">
+    <div class="container-wide">
       <h2>Why Thousands Trust Dentist Radar</h2>
       <ul class="kbullets">
         <li>✔ Accurate NHS data verified daily</li>
