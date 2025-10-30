@@ -1,29 +1,73 @@
 (function(){
-const $=id=>document.getElementById(id);
-const form=$('alertForm'),msgBox=$('msg');
+  const $ = id => document.getElementById(id);
+  const form = $('alertForm');
+  const msg  = $('msg');
+  const toggle = $('menu-toggle');
+  const links  = $('nav-links');
+  const radius = $('radius');
 
-function showMessage(t,type=''){msgBox.innerHTML=t;msgBox.className=`message-box ${type}`;}
+  // Mobile menu toggle (works on every page)
+  toggle?.addEventListener('click',()=>links?.classList.toggle('open'));
+  links?.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>links.classList.remove('open')));
 
-form?.addEventListener('submit',async e=>{
- e.preventDefault();
- const email=form.email.value.trim();
- const postcode=form.postcode.value.trim();
- const radius=form.radius.value.trim();
+  // numeric-only radius
+  radius?.addEventListener('input', e=>{
+    e.target.value = e.target.value.replace(/[^0-9]/g,'');
+  });
 
- if(!email||!postcode||!radius){showMessage('⚠ Please fill in all fields, including radius.','warn');return;}
- const n=parseInt(radius,10);
- if(isNaN(n)||n<1||n>30){showMessage('⚠ Please select a radius between 1 and 30 miles.','warn');return;}
+  function showMessage(text, type=''){
+    if(!msg) return;
+    msg.textContent = '';         // clear
+    msg.removeAttribute('style'); // ensure visible
+    msg.className = `message-box ${type}`;
+    msg.innerHTML = text;
+  }
 
- showMessage('Saving your alert…');
+  form?.addEventListener('submit', async (e)=>{
+    e.preventDefault();
+    const email    = form.email.value.trim();
+    const postcode = form.postcode.value.trim();
+    const r        = form.radius.value.trim();
 
- try{
-   const r=await fetch('/api/watch/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,postcode,radius})});
-   const d=await r.json();
-   if(d.ok){showMessage('✅ Alert created — check your inbox!','success');form.reset();return;}
-   if(d.error==='duplicate'){showMessage('⚠ An alert already exists for this postcode.','warn');return;}
-   if(d.error==='upgrade_required'){showMessage(`⚡ Free plan supports one postcode. <a href="${d.upgradeLink||'/pricing.html'}">Upgrade to Pro</a> to add more.`,'warn');return;}
-   if(d.error==='invalid_radius'){showMessage('⚠ Please select a valid radius (1–30 miles).','warn');return;}
-   showMessage('⚠ Something went wrong. Please try again later.','error');
- }catch(err){console.error(err);showMessage('⚠ Server unavailable. Please retry.','error');}
-});
+    if(!email || !postcode || !r){
+      showMessage('⚠ Please fill in all fields, including radius.','warn');
+      return;
+    }
+    const n = parseInt(r,10);
+    if(isNaN(n) || n<1 || n>30){
+      showMessage('⚠ Please select a radius between 1 and 30 miles.','warn');
+      return;
+    }
+
+    showMessage('Saving your alert…');
+
+    try{
+      const res = await fetch('/api/watch/create',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ email, postcode, radius:r })
+      });
+      const data = await res.json();
+
+      if(data.ok){
+        showMessage('✅ Alert created — check your inbox!','success');
+        form.reset();
+        return;
+      }
+      if(data.error==='duplicate'){
+        showMessage('⚠ An alert already exists for this postcode.','warn'); return;
+      }
+      if(data.error==='upgrade_required'){
+        const link = data.upgradeLink || '/pricing.html';
+        showMessage(`⚡ Free plan supports one postcode. <a href="${link}">Upgrade to Pro</a> to add more.`,'warn'); return;
+      }
+      if(data.error==='invalid_radius'){
+        showMessage('⚠ Please select a valid radius (1–30 miles).','warn'); return;
+      }
+      showMessage('⚠ Something went wrong. Please try again later.','error');
+    }catch(err){
+      console.error(err);
+      showMessage('⚠ Server unavailable. Please retry.','error');
+    }
+  });
 })();
