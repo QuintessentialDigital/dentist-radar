@@ -1,93 +1,111 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Upgrade – Dentist Radar</title>
-<link rel="stylesheet" href="style.css">
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Upgrade — Dentist Radar</title>
+  <link rel="icon" href="favicon.ico"/>
+  <link rel="stylesheet" href="style.css"/>
 </head>
 <body>
-<header>
-  <div class="container navbar">
-    <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"></a>
-    <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
-    <ul id="nav-links" class="nav-links">
-      <li><a href="/">Home</a></li>
-      <li><a class="active" href="pricing.html">Pricing</a></li>
-      <li><a href="about.html">About</a></li>
-      <li><a href="terms.html">Terms</a></li>
-      <li><a href="privacy.html">Privacy</a></li>
-    </ul>
-  </div>
-</header>
-
-<main>
-  <section class="hero small-hero">
-    <div class="container">
-      <h1>Upgrade Your Plan</h1>
-      <p>Secure your Pro or Family subscription to track more postcodes and get faster alerts.</p>
+  <!-- HEADER (same markup/classes to preserve style) -->
+  <header class="site-header">
+    <div class="container navbar">
+      <a class="logo" href="/"><img src="logo.svg" alt="Dentist Radar"/></a>
+      <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
+      <ul id="nav-links" class="nav-links">
+        <li><a href="pricing.html">Pricing</a></li>
+        <li><a href="about.html">About</a></li>
+        <li><a href="terms.html">Terms</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+      </ul>
     </div>
-  </section>
+  </header>
 
-  <section class="section">
-    <div class="container-wide pricing-grid">
-      <div class="plan-card highlight">
-        <h2>Pro Plan</h2>
-        <p>Perfect for families or users tracking multiple postcodes.</p>
-        <ul>
-          <li>Up to 5 postcodes</li>
-          <li>Hourly NHS data scanning</li>
-          <li>Priority email alerts</li>
-          <li>Early access to new features</li>
-        </ul>
-        <div class="price">£4.99 / month</div>
-        <form id="pro-form">
-          <button id="pro-upgrade" class="btn">Upgrade to Pro</button>
+  <main>
+    <section class="hero small-hero">
+      <div class="container">
+        <h1>Upgrade your plan</h1>
+        <p class="subhead">Use the same email you used on the Home page.</p>
+
+        <form id="upgrade-form" class="upgrade-form" novalidate>
+          <div class="input">
+            <label for="email" class="sr-only">Email</label>
+            <input id="email" type="email" inputmode="email" autocomplete="email"
+                   placeholder="Email" required/>
+          </div>
+
+          <fieldset class="plan-picker">
+            <legend class="sr-only">Choose plan</legend>
+            <label class="radio">
+              <input type="radio" name="plan" value="pro" checked/>
+              <span>Pro — up to 5 postcodes</span>
+            </label>
+            <label class="radio">
+              <input type="radio" name="plan" value="family"/>
+              <span>Family — up to 10 postcodes</span>
+            </label>
+          </fieldset>
+
+          <button class="btn primary" type="submit" id="upgrade-btn">Upgrade</button>
+          <p id="upgrade-msg" class="message-box" aria-live="polite"></p>
         </form>
       </div>
+    </section>
+  </main>
 
-      <div class="plan-card">
-        <h2>Family Plan</h2>
-        <p>Track up to 10 postcodes and receive alerts for multiple family members.</p>
-        <ul>
-          <li>Up to 10 postcodes</li>
-          <li>Hourly NHS data scanning</li>
-          <li>Multi-email alerts</li>
-          <li>Priority support</li>
-        </ul>
-        <div class="price">£9.99 / month</div>
-        <form id="family-form">
-          <button id="family-upgrade" class="btn">Go Family</button>
-        </form>
-      </div>
+  <footer class="site-footer">
+    <div class="container footer">
+      © 2025 Dentist Radar · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="about.html">About</a>
     </div>
-  </section>
+  </footer>
 
-  <section class="section">
-    <div class="container center-text">
-      <p><strong>All payments are processed securely via Stripe.</strong></p>
-      <p>Cancel anytime from your account or by contacting <a href="mailto:support@dentistradar.co.uk">support@dentistradar.co.uk</a>.</p>
-    </div>
-  </section>
-</main>
+  <script>
+  (function(){
+    const menuBtn = document.getElementById('menu-toggle');
+    const nav = document.getElementById('nav-links');
+    menuBtn?.addEventListener('click',()=>nav?.classList.toggle('open'));
 
-<footer>
-  <div class="container footer">
-    © 2025 Dentist Radar · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="about.html">About</a>
-  </div>
-</footer>
+    const form = document.getElementById('upgrade-form');
+    const msg  = document.getElementById('upgrade-msg');
+    const btn  = document.getElementById('upgrade-btn');
 
-<script src="app.js" defer></script>
-<script>
-document.getElementById('pro-form').addEventListener('submit', async (e)=>{
-  e.preventDefault();
-  window.location.href = 'https://buy.stripe.com/test_proplan'; // Replace with your Stripe checkout URL
-});
+    function show(t,c){ msg.className='message-box show '+(c||''); msg.textContent=t; }
+    function clearMsg(){ msg.className='message-box'; msg.textContent=''; }
 
-document.getElementById('family-form').addEventListener('submit', async (e)=>{
-  e.preventDefault();
-  window.location.href = 'https://buy.stripe.com/test_familyplan'; // Replace with your Stripe checkout URL
-});
-</script>
+    form?.addEventListener('submit', async (e)=>{
+      e.preventDefault(); clearMsg();
+      const email = (document.getElementById('email').value || '').trim();
+      const plan  = (document.querySelector('input[name="plan"]:checked')?.value || 'pro').toLowerCase();
+
+      const ok = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
+      if(!ok){ show('Please enter a valid email address.','error'); return; }
+
+      btn.disabled=true; btn.textContent='Preparing secure checkout…';
+      try{
+        const r = await fetch('/api/stripe/create-checkout-session', {
+          method: 'POST',
+          headers: { 'Content-Type':'application/json' },
+          body: JSON.stringify({ email, plan })
+        });
+        const j = await r.json();
+
+        if(j.ok && j.url){ window.location = j.url; return; }
+
+        if(j.error === 'stripe_not_configured') return show('Payments not configured. Ask support if this persists.','error');
+        if(j.error === 'missing_price') return show('Price ID missing on server.','error');
+        if(j.error === 'invalid_email') return show('Please enter a valid email.','error');
+        if(j.error === 'access_denied') return show('Access denied. Check Stripe secret key (must start with sk_).','error');
+
+        show('Could not start checkout. Please try again.','error');
+        console.log('Stripe session error', j);
+      }catch(err){
+        show('Network error. Please try again.','error');
+      }finally{
+        btn.disabled=false; btn.textContent='Upgrade';
+      }
+    });
+  })();
+  </script>
 </body>
 </html>
