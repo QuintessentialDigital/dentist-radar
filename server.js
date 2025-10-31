@@ -1,5 +1,5 @@
-// Dentist Radar Server (v1.8.4) — safe DB fix + Stripe route compatibility + stable mail
-// No UI changes. Works with your v1.8 baseline HTML/CSS.
+// Dentist Radar Server (v1.8.5)
+// Adds Mongo EmailLog (emaillogs) for sent emails. No other behavior changed.
 
 import express from "express";
 import cors from "cors";
@@ -15,16 +15,13 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-// ---------------------------
-// MongoDB — force DB to "dentistradar"
-// ---------------------------
+/* ---------------------------
+   MongoDB — force DB to "dentistradar"
+--------------------------- */
 function forceDentistRadarDb(uri = "") {
   if (!uri) return "";
-  // If URI already ends with /dentistradar keep it; otherwise rewrite the db segment.
-  if (/\/dentistradar(\?|$)/i.test(uri)) return uri;
-  // Replace any "/<db>" before ? with "/dentistradar"
+  if (/\/dentistradar(\?|$)/i.test(uri)) return uri; // already correct
   if (/\/[^/?]+(\?|$)/.test(uri)) return uri.replace(/\/[^/?]+(\?|$)/, "/dentistradar$1");
-  // If no db segment, append one
   return uri.replace(/(\.net)(\/)?/, "$1/dentistradar");
 }
 
@@ -36,9 +33,9 @@ mongoose
   .then(() => console.log("✅ MongoDB connected →", FIXED_URI.replace(/:[^@]+@/, ":***@")))
   .catch((err) => console.error("❌ MongoDB connection error:", err.message));
 
-// ---------------------------
-// Schemas / Models
-// ---------------------------
+/* ---------------------------
+   Schemas / Models
+--------------------------- */
 const watchSchema = new mongoose.Schema(
   {
     email: { type: String, index: true },
@@ -59,13 +56,28 @@ const userSchema = new mongoose.Schema(
   { timestamps: true, versionKey: false }
 );
 
+/* NEW: EmailLog schema (lightweight) */
+const emailLogSchema = new mongoose.Schema(
+  {
+    to: String,
+    subject: String,
+    type: String,            // 'welcome' | 'availability' | 'other'
+    provider: { type: String, default: "postmark" },
+    providerId: String,      // Postmark MessageID
+    meta: Object,
+    sentAt: { type: Date, default: Date.now }
+  },
+  { versionKey: false, timestamps: false }
+);
+
 const Watch = mongoose.model("Watch", watchSchema);
 const User  = mongoose.model("User", userSchema);
+const EmailLog = mongoose.model("EmailLog", emailLogSchema);
 
-// ---------------------------
-// Helpers (email + validation)
-// ---------------------------
-async function sendEmail(to, subject, text) {
+/* ---------------------------
+   Helpers (email + validation)
+--------------------------- */
+async function sendEmail(to, subject, text, type = "other", meta = {}) {
   const key = process.env.POSTMARK_TOKEN;
   if (!key) {
     console.log("ℹ️ POSTMARK_TOKEN not set → skip email.");
@@ -85,10 +97,29 @@ async function sendEmail(to, subject, text) {
       TextBody: text
     })
   });
+
+  const body = await r.json().catch(() => ({}));
   const ok = r.ok;
-  const j = await r.json().catch(() => ({}));
-  if (!ok) console.error("❌ Postmark error:", j);
-  return { ok, status: r.status, body: j };
+
+  if (ok) {
+    // Persist a minimal log of the sent email
+    try {
+      await EmailLog.create({
+        to,
+        subject,
+        type,
+        providerId: body.MessageID,
+        meta,
+        sentAt: new Date()
+      });
+    } catch (e) {
+      console.error("⚠️ EmailLog save error:", e?.message || e);
+    }
+  } else {
+    console.error("❌ Postmark error:", body);
+  }
+
+  return { ok, status: r.status, body };
 }
 
 const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -109,9 +140,9 @@ async function planLimitFor(email) {
   return 1;
 }
 
-// ---------------------------
-// Health / Debug
-// ---------------------------
+/* ---------------------------
+   Health / Debug
+--------------------------- */
 app.get("/api/health", (req, res) => {
   res.json({ ok: true, db: "dentistradar", time: new Date().toISOString() });
 });
@@ -119,9 +150,9 @@ app.get("/health", (req, res) => {
   res.json({ ok: true, db: "dentistradar", time: new Date().toISOString() });
 });
 
-// ---------------------------
-// Create Watch
-// ---------------------------
+/* ---------------------------
+   Create Watch
+--------------------------- */
 app.post("/api/watch/create", async (req, res) => {
   try {
     const email = normEmail(req.body?.email);
@@ -150,7 +181,7 @@ app.post("/api/watch/create", async (req, res) => {
 
     await Watch.create({ email, postcode, radius });
 
-    // Welcome email (non-blocking)
+    // Welcome email (now logged)
     await sendEmail(
       email,
       `Dentist Radar — alert active for ${postcode}`,
@@ -158,7 +189,9 @@ app.post("/api/watch/create", async (req, res) => {
 
 Please call the practice to confirm before travelling.
 
-— Dentist Radar`
+— Dentist Radar`,
+      "welcome",
+      { postcode, radius }
     );
 
     res.json({ ok: true, message: "✅ Alert created — check your inbox!" });
@@ -168,14 +201,13 @@ Please call the practice to confirm before travelling.
   }
 });
 
-// ---------------------------
-// Stripe Checkout (compat route names)
-// ---------------------------
+/* ---------------------------
+   Stripe Checkout (compat route names)
+--------------------------- */
 import Stripe from "stripe";
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || "";
 const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
 
-// one handler used by both paths
 async function handleCheckoutSession(req, res) {
   try {
     if (!stripe) return res.json({ ok: false, error: "stripe_not_configured" });
@@ -203,22 +235,21 @@ async function handleCheckoutSession(req, res) {
   }
 }
 
-// Support both paths so your frontend never 404s
 app.post("/api/create-checkout-session", handleCheckoutSession);
 app.post("/api/stripe/create-checkout-session", handleCheckoutSession);
 
-// ---------------------------
-// Fallback to SPA
-// ---------------------------
+/* ---------------------------
+   SPA Fallback
+--------------------------- */
 import path from "path";
 import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
-// ---------------------------
-// Start
-// ---------------------------
+/* ---------------------------
+   Start
+--------------------------- */
 app.listen(PORT, () => {
   console.log(`🚀 Dentist Radar running on :${PORT}`);
 });
