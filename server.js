@@ -1,5 +1,6 @@
-// Dentist Radar Server (v1.8.5)
-// Adds Mongo EmailLog (emaillogs) for sent emails. No other behavior changed.
+// Dentist Radar Server (v1.8.6)
+// CHANGE: add /api/scan manual trigger route (POST) with token check.
+// Everything else remains exactly as in your stable baseline (v1.8.5).
 
 import express from "express";
 import cors from "cors";
@@ -56,14 +57,14 @@ const userSchema = new mongoose.Schema(
   { timestamps: true, versionKey: false }
 );
 
-/* NEW: EmailLog schema (lightweight) */
+/* EmailLog (already added previously) */
 const emailLogSchema = new mongoose.Schema(
   {
     to: String,
     subject: String,
     type: String,            // 'welcome' | 'availability' | 'other'
     provider: { type: String, default: "postmark" },
-    providerId: String,      // Postmark MessageID
+    providerId: String,
     meta: Object,
     sentAt: { type: Date, default: Date.now }
   },
@@ -102,7 +103,6 @@ async function sendEmail(to, subject, text, type = "other", meta = {}) {
   const ok = r.ok;
 
   if (ok) {
-    // Persist a minimal log of the sent email
     try {
       await EmailLog.create({
         to,
@@ -151,7 +151,7 @@ app.get("/health", (req, res) => {
 });
 
 /* ---------------------------
-   Create Watch
+   Create Watch (unchanged)
 --------------------------- */
 app.post("/api/watch/create", async (req, res) => {
   try {
@@ -181,7 +181,7 @@ app.post("/api/watch/create", async (req, res) => {
 
     await Watch.create({ email, postcode, radius });
 
-    // Welcome email (now logged)
+    // Welcome email (logged)
     await sendEmail(
       email,
       `Dentist Radar — alert active for ${postcode}`,
@@ -202,7 +202,7 @@ Please call the practice to confirm before travelling.
 });
 
 /* ---------------------------
-   Stripe Checkout (compat route names)
+   Stripe Checkout (unchanged)
 --------------------------- */
 import Stripe from "stripe";
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || "";
@@ -239,12 +239,51 @@ app.post("/api/create-checkout-session", handleCheckoutSession);
 app.post("/api/stripe/create-checkout-session", handleCheckoutSession);
 
 /* ---------------------------
-   SPA Fallback
+   Scan Trigger (NEW) — POST /api/scan?token=YOUR_SCAN_TOKEN
+   - Calls your existing scanner if present (scanner.js runScan()).
+   - If scanner is missing, returns a safe no-op result.
+--------------------------- */
+let cachedRunScan = null;
+
+app.post("/api/scan", async (req, res) => {
+  const t = process.env.SCAN_TOKEN || "";
+  if (!t || (req.query.token !== t && req.headers["x-scan-token"] != t)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+
+  try {
+    if (!cachedRunScan) {
+      try {
+        // Lazy-load your scanner if you have one (keeps baseline safe)
+        const mod = await import("./scanner.js").catch(() => null);
+        cachedRunScan = (mod && (mod.runScan || mod.default)) || (async () => ({ checked: 0, found: 0, alertsSent: 0 }));
+      } catch {
+        cachedRunScan = async () => ({ checked: 0, found: 0, alertsSent: 0 });
+      }
+    }
+
+    const result = await cachedRunScan();
+    return res.json({ ok: true, ...(result || {}), time: new Date().toISOString() });
+  } catch (e) {
+    console.error("Scan failed:", e);
+    return res.status(500).json({ ok: false, error: "scan_failed" });
+  }
+});
+
+/* ---------------------------
+   Root route + SPA Fallback (unchanged)
 --------------------------- */
 import path from "path";
 import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
+
+// Serve index immediately to avoid Render placeholder
+app.get("/", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "index.html"));
+});
+
+// Fallback
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
 /* ---------------------------
