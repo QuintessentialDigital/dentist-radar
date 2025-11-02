@@ -1,83 +1,84 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Admin — Dentist Radar</title>
-  <link rel="icon" href="/favicon.svg"/><link rel="stylesheet" href="/style.css"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dentist Radar — Admin</title>
+  <link rel="stylesheet" href="style.css" />
   <style>
-    .admin-wrap{max-width:960px;margin:24px auto;padding:16px}
-    .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
-    input,button{height:44px;padding:0 12px;border:1px solid #dcdcdc;border-radius:8px}
-    button{border:2px solid #0b63ff;background:#0b63ff;color:#fff;font-weight:700;cursor:pointer}
-    table{width:100%;border-collapse:collapse;margin-top:12px;background:#fff;border:1px solid #eee}
-    th,td{padding:8px 10px;border-bottom:1px solid #f1f1f1;text-align:left}
-    th{background:#f8f9ff}
-    .msg{margin:8px 0;font-weight:600}
+    .admin-wrap{max-width:800px;margin:32px auto;padding:16px}
+    .card{border:1px solid #e7ecf2;border-radius:12px;padding:16px;background:#fff}
+    .row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+    .row input{flex:1;min-width:220px;height:44px;border:1px solid #e7ecf2;border-radius:10px;padding:0 12px}
+    .btn{height:44px;padding:0 16px;border:0;border-radius:10px;background:#2b7fff;color:#fff;font-weight:700;cursor:pointer}
+    pre{background:#0e1525;color:#e6edf3;border-radius:10px;padding:12px;overflow:auto}
+    .muted{color:#5b6578;font-size:14px;margin-top:6px}
   </style>
 </head>
 <body>
-<header>
-  <div class="container navbar">
-    <a href="/" class="logo"><img src="/logo.svg" alt="Dentist Radar"/></a>
-    <button class="menu-toggle" id="menu-toggle">☰</button>
-    <ul class="nav-links" id="nav-links">
-      <li><a href="/">Home</a></li>
-      <li><a href="/pricing.html">Pricing</a></li>
-      <li><a href="/about.html">About</a></li>
-      <li><a href="/terms.html">Terms</a></li>
-      <li><a href="/privacy.html">Privacy</a></li>
-    </ul>
-  </div>
-</header>
+  <header class="site-header">
+    <div class="container navbar">
+      <div class="nav-left">
+        <a class="logo" href="/"><img src="logo.svg" alt="Dentist Radar" /></a>
+      </div>
+      <div class="nav-right">
+        <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
+        <ul id="nav-links" class="nav-links">
+          <li><a href="pricing.html">Pricing</a></li>
+          <li><a href="about.html">About</a></li>
+          <li><a href="terms.html">Terms</a></li>
+          <li><a href="privacy.html">Privacy</a></li>
+        </ul>
+      </div>
+    </div>
+  </header>
 
-<main class="admin-wrap">
-  <h1>Admin</h1>
-  <div class="row">
-    <input id="apw" type="password" placeholder="Admin password">
-    <button id="btnList">List latest 200</button>
-    <input id="testTo" type="email" placeholder="Test email to">
-    <button id="btnTest">Send test email</button>
-  </div>
-  <div id="amsg" class="msg"></div>
-  <div style="overflow:auto">
-    <table id="tbl"><thead><tr><th>Created</th><th>Email</th><th>Postcode</th><th>Radius</th></tr></thead><tbody></tbody></table>
-  </div>
-</main>
+  <main class="admin-wrap">
+    <h1>Admin — Manual Scan</h1>
+    <div class="card">
+      <div class="row">
+        <input id="token" placeholder="Scan token" />
+        <button id="run" class="btn">Run Scan Now</button>
+      </div>
+      <div class="muted">Tip: paste your <strong>SCAN_TOKEN</strong> once — it’s stored locally for next time.</div>
+      <pre id="out">{ "hint": "Click Run Scan Now" }</pre>
+    </div>
+  </main>
 
-<footer><div class="container">
-  <p>© 2025 Dentist Radar · <a href="/about.html">About</a> · <a href="/privacy.html">Privacy</a> · <a href="/terms.html">Terms</a></p>
-</div></footer>
+  <footer class="site-footer">
+    <div class="container footer">
+      © 2025 Dentist Radar · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="about.html">About</a>
+    </div>
+  </footer>
 
-<script>
-  document.getElementById('menu-toggle')?.addEventListener('click',()=>document.getElementById('nav-links')?.classList.toggle('open'));
-  const msg=document.getElementById('amsg'); const show=(m,ok=true)=>{msg.textContent=m;msg.style.color=ok?'#222':'#c00';};
-  document.getElementById('btnList')?.addEventListener('click',async()=>{
-    show('Loading…');
-    const password=document.getElementById('apw').value||'';
-    try{
-      const res=await fetch('/api/admin/list',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password})});
-      const j=await res.json().catch(()=>null);
-      if(!res.ok||!j?.ok){show(j?.error||'Failed',false);return;}
-      show(`Loaded ${j.items.length} records.`);
-      const tb=document.querySelector('#tbl tbody'); tb.innerHTML='';
-      j.items.forEach(r=>{
-        const tr=document.createElement('tr');
-        tr.innerHTML=`<td>${new Date(r.createdAt).toLocaleString()}</td><td>${r.email}</td><td>${r.postcode}</td><td>${r.radius}</td>`;
-        tb.appendChild(tr);
-      });
-    }catch{show('Network error',false);}
-  });
-  document.getElementById('btnTest')?.addEventListener('click',async()=>{
-    show('Sending…');
-    const password=document.getElementById('apw').value||'';
-    const to=document.getElementById('testTo').value||'';
-    try{
-      const res=await fetch('/api/admin/test-email',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password,to})});
-      const j=await res.json().catch(()=>null);
-      if(!res.ok||!j?.ok){show(j?.error||'Failed',false);return;}
-      show('Test email sent.');
-    }catch{show('Network error',false);}
-  });
-</script>
+  <script>
+  (function(){
+    const menuBtn = document.getElementById('menu-toggle');
+    const nav = document.getElementById('nav-links');
+    menuBtn?.addEventListener('click',()=>nav?.classList.toggle('open'));
+
+    const tokenEl = document.getElementById('token');
+    const out = document.getElementById('out');
+    const run = document.getElementById('run');
+
+    // load saved token
+    tokenEl.value = localStorage.getItem('scan_token') || '';
+
+    run.addEventListener('click', async ()=>{
+      const token = (tokenEl.value || '').trim();
+      if(!token){ out.textContent = JSON.stringify({ok:false,error:'missing_token'}, null, 2); return; }
+      localStorage.setItem('scan_token', token);
+      out.textContent = 'Running…';
+
+      try{
+        const r = await fetch(`/api/scan?token=${encodeURIComponent(token)}`, { method:'POST' });
+        const j = await r.json().catch(()=>({ok:false,error:'non_json_response'}));
+        out.textContent = JSON.stringify(j, null, 2);
+      }catch(e){
+        out.textContent = JSON.stringify({ ok:false, error: e?.message || 'network_error' }, null, 2);
+      }
+    });
+  })();
+  </script>
 </body>
 </html>
