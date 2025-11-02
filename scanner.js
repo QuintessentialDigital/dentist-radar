@@ -1,10 +1,11 @@
-// scanner.js — v1.1.1 (NHS parser + debug meta + safe mode)
+// scanner.js — v1.1.2
+// - NHS URL resolver + robust fetch with retries
+// - Broader parser (multiple NHS layouts)
+// - Sends consent cookie header (reduces interstitials)
+// - Debug meta + optional HTML snapshots to Mongo (SCAN_SNAPSHOT=1)
 
 import mongoose from "mongoose";
 
-//----------------------------------------------------
-// MongoDB Connection
-//----------------------------------------------------
 if (!mongoose.connection.readyState) {
   const uri = process.env.MONGO_URI || "";
   if (uri) {
@@ -12,9 +13,7 @@ if (!mongoose.connection.readyState) {
   }
 }
 
-//----------------------------------------------------
-// Schemas
-//----------------------------------------------------
+// ---------- Schemas ----------
 const watchSchema = new mongoose.Schema({ email: String, postcode: String, radius: Number }, { timestamps: true });
 const emailLogSchema = new mongoose.Schema(
   { to: String, subject: String, type: String, provider: String, providerId: String, meta: Object, sentAt: Date },
@@ -25,16 +24,22 @@ const practiceStateSchema = new mongoose.Schema(
   { versionKey: false, timestamps: true }
 );
 
+// Optional tiny snapshot store (for debugging HTML)
+const scanLogSchema = new mongoose.Schema(
+  { pc: String, url: String, htmlSnippet: String, bytes: Number, when: Date },
+  { versionKey: false }
+);
+
 const Watch = mongoose.models.Watch || mongoose.model("Watch", watchSchema);
 const EmailLog = mongoose.models.EmailLog || mongoose.model("EmailLog", emailLogSchema);
 const PracticeState = mongoose.models.PracticeState || mongoose.model("PracticeState", practiceStateSchema);
+const ScanLog = mongoose.models.ScanLog || mongoose.model("ScanLog", scanLogSchema);
 
-//----------------------------------------------------
-// Helpers
-//----------------------------------------------------
+// ---------- Helpers ----------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const uniq = (arr) => [...new Set(arr)];
 const SCAN_DEBUG = (process.env.SCAN_DEBUG || "0") === "1";
+const SCAN_SNAPSHOT = (process.env.SCAN_SNAPSHOT || "0") === "1";
 
 const normPostcode = (raw = "") => {
   const t = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -56,18 +61,21 @@ const isAccepting = (html, strict = false) => {
   return acceptingPhrases.some((p) => body.includes(p));
 };
 
-//----------------------------------------------------
-// Safe fetchText
-//----------------------------------------------------
+// ---------- Fetch with retries (+ consent cookie) ----------
 async function fetchText(url) {
   const ua =
     process.env.NHS_UA ||
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
+
+  // Pretend consent accepted to avoid interstitials
+  const cookie = process.env.NHS_COOKIE || "nhsuk-cookie-consent=accepted";
+
   const headers = {
     "User-Agent": ua,
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-GB,en;q=0.9",
-    Referer: "https://www.nhs.uk/"
+    Referer: "https://www.nhs.uk/",
+    Cookie: cookie
   };
 
   const maxRetries = 3;
@@ -91,9 +99,7 @@ async function fetchText(url) {
   throw lastErr || new Error("fetch_failed");
 }
 
-//----------------------------------------------------
-// Resolve NHS search result page
-//----------------------------------------------------
+// ---------- Resolve NHS results URL ----------
 async function resolveResultsPageForPostcode(pc) {
   const BASE = (process.env.NHS_BASE || "https://www.nhs.uk/service-search/find-a-dentist").replace(/\/+$/, "");
   const DEFAULT_PATH = process.env.NHS_RESULT_PATH || "/results?location={POSTCODE}";
@@ -120,9 +126,7 @@ async function resolveResultsPageForPostcode(pc) {
   throw new Error("no_results_url_resolved");
 }
 
-//----------------------------------------------------
-// Postmark Email Sender
-//----------------------------------------------------
+// ---------- Email via Postmark ----------
 async function sendEmail(to, subject, text, type = "availability", meta = {}) {
   const key = process.env.POSTMARK_TOKEN;
   if (!key) return { ok: false, skipped: true };
@@ -149,9 +153,60 @@ async function sendEmail(to, subject, text, type = "availability", meta = {}) {
   return { ok, status: r.status, body };
 }
 
-//----------------------------------------------------
-// Main Scanner Function
-//----------------------------------------------------
+// ---------- Parser (broader patterns) ----------
+function parsePracticeCards(html) {
+  const out = [];
+
+  // Primary: nhsuk-card__link anchors
+  let re = /<a[^>]+class="[^"]*nhsuk-card__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    const href = m[1];
+    const name = m[2].replace(/<[^>]+>/g, " ").trim();
+    out.push({ name: name || "Unknown Practice", link: href.startsWith("http") ? href : "https://www.nhs.uk" + href });
+  }
+
+  // Fallback A: dentist service links anywhere
+  if (out.length === 0) {
+    re = /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    while ((m = re.exec(html))) {
+      const href = m[1];
+      const name = m[2].replace(/<[^>]+>/g, " ").trim();
+      out.push({ name: name || "Dentist", link: "https://www.nhs.uk" + href });
+    }
+  }
+
+  // Fallback B: headings wrapping links
+  if (out.length === 0) {
+    re = /<h2[^>]*class="[^"]*nhsuk-card__heading[^"]*"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h2>/gi;
+    while ((m = re.exec(html))) {
+      const href = m[1];
+      const name = m[2].replace(/<[^>]+>/g, " ").trim();
+      out.push({ name: name || "Dentist", link: href.startsWith("http") ? href : "https://www.nhs.uk" + href });
+    }
+  }
+
+  // Fallback C: list-panel links (seen on some NHS result templates)
+  if (out.length === 0) {
+    re = /<a[^>]+class="[^"]*nhsuk-list-panel__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    while ((m = re.exec(html))) {
+      const href = m[1];
+      const name = m[2].replace(/<[^>]+>/g, " ").trim();
+      out.push({ name: name || "Dentist", link: href.startsWith("http") ? href : "https://www.nhs.uk" + href });
+    }
+  }
+
+  // De-dup
+  const seen = new Set();
+  return out.filter((c) => {
+    const k = c.link + "|" + c.name;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+
+// ---------- Main scan ----------
 export async function runScan() {
   const LIMIT_POSTCODES = parseInt(process.env.SCAN_POSTCODES_LIMIT || "30", 10);
   const LIMIT_PRACTICES = parseInt(process.env.SCAN_PRACTICES_LIMIT || "30", 10);
@@ -161,10 +216,9 @@ export async function runScan() {
   const watches = await Watch.find({}, { email: 1, postcode: 1 }).lean();
   const postcodes = uniq(watches.map((w) => normPostcode(w.postcode))).slice(0, LIMIT_POSTCODES);
 
-  let checked = 0,
-    found = 0,
-    alertsSent = 0;
-  let debugMeta = { postcodesCount: postcodes.length, samples: [] };
+  let checked = 0, found = 0, alertsSent = 0;
+  const debugMeta = { postcodesCount: postcodes.length, samples: [] };
+  const errorSamples = [];
 
   const byPostcode = new Map();
   for (const w of watches) {
@@ -173,15 +227,21 @@ export async function runScan() {
     byPostcode.get(pc).push(w);
   }
 
-  const errorSamples = [];
-
   for (const pc of postcodes) {
     try {
       const { url, html } = await resolveResultsPageForPostcode(pc);
-      await sleep(DELAY_MS);
 
+      if (SCAN_SNAPSHOT) {
+        try {
+          const snippet = html.replace(/\s+/g, " ").slice(0, 2000);
+          await ScanLog.create({ pc, url, htmlSnippet: snippet, bytes: html.length, when: new Date() });
+        } catch {}
+      }
+
+      await sleep(DELAY_MS);
       const cards = parsePracticeCards(html).slice(0, LIMIT_PRACTICES);
-      let sample = { pc, url, cards: cards.length };
+
+      const sample = { pc, url, cards: cards.length };
       if (SCAN_DEBUG && debugMeta.samples.length < 3) debugMeta.samples.push(sample);
 
       for (const c of cards) {
@@ -216,7 +276,7 @@ Check details: ${c.link}
 Please call the practice directly to confirm before travelling.
 
 — Dentist Radar`;
-            const r = await sendEmail(w.email, subj, text, "availability", { practice: c.name, postcode: pc });
+            const r = await sendEmail(w.email, subj, text, "availability", { practice: c.name, postcode: pc, link: c.link });
             if (r.ok) alertsSent++;
           }
         }
@@ -231,63 +291,7 @@ Please call the practice directly to confirm before travelling.
   return result;
 }
 
-//----------------------------------------------------
-// Parser (Improved for new NHS layouts)
-//----------------------------------------------------
-function parsePracticeCards(html) {
-  const out = [];
-
-  // 1️⃣ Primary layout
-  const re1 = /<a[^>]+class="[^"]*nhsuk-card__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-  let m;
-  while ((m = re1.exec(html))) {
-    const href = m[1];
-    const name = m[2].replace(/<[^>]+>/g, " ").trim();
-    out.push({
-      name: name || "Unknown Practice",
-      link: href.startsWith("http") ? href : "https://www.nhs.uk" + href
-    });
-  }
-
-  // 2️⃣ Fallback for different link layout
-  if (out.length === 0) {
-    const re2 = /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-    while ((m = re2.exec(html))) {
-      const href = m[1];
-      const name = m[2].replace(/<[^>]+>/g, " ").trim();
-      out.push({
-        name: name || "Dentist",
-        link: "https://www.nhs.uk" + href
-      });
-    }
-  }
-
-  // 3️⃣ Fallback for h2 wrapping
-  if (out.length === 0) {
-    const re3 = /<h2[^>]*class="[^"]*nhsuk-card__heading[^"]*"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h2>/gi;
-    while ((m = re3.exec(html))) {
-      const href = m[1];
-      const name = m[2].replace(/<[^>]+>/g, " ").trim();
-      out.push({
-        name: name || "Dentist",
-        link: href.startsWith("http") ? href : "https://www.nhs.uk" + href
-      });
-    }
-  }
-
-  // ✅ Remove duplicates
-  const seen = new Set();
-  return out.filter((c) => {
-    const k = c.link + "|" + c.name;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-}
-
-//----------------------------------------------------
-// Manual CLI mode
-//----------------------------------------------------
+// ---------- CLI mode ----------
 if (import.meta.url === `file://${process.argv[1]}`) {
   runScan()
     .then((r) => {
