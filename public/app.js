@@ -1,93 +1,80 @@
-// public/app.js — non-UI patch: robust binding + validation + submit
-// ✅ No HTML/CSS changes required
+(function(){
+  const $ = id => document.getElementById(id);
+  const form   = $('alertForm');
+  const msg    = $('msg');
+  const toggle = $('menu-toggle');
+  const links  = $('nav-links');
+  const radius = $('radius');
 
-(function () {
-  // Helper: find element by ID first, else by name
-  const $ = (id, name) =>
-    document.getElementById(id) || document.querySelector(`[name="${name}"]`);
+  // Mobile menu toggle
+  toggle?.addEventListener('click', ()=> links?.classList.toggle('open'));
+  links?.querySelectorAll('a').forEach(a=>a.addEventListener('click', ()=> links.classList.remove('open')));
 
-  // Try common hooks without requiring HTML edits
-  const form     = document.getElementById('alertForm') || document.querySelector('form');
-  const emailEl  = $('#email', 'email');
-  const pcsEl    = $('#postcodes', 'postcodes') || $('#postcode', 'postcode');
-  const radiusEl = $('#radius', 'radius');
-  const msgEl    = document.getElementById('message');
+  // Numeric-only radius (desktop & mobile)
+  radius?.addEventListener('input', e => { e.target.value = e.target.value.replace(/[^0-9]/g,''); });
 
-  // If we can’t bind, surface a console hint (no UI change)
-  if (!form || !emailEl || !pcsEl || !radiusEl) {
-    console.error('DentistRadar: missing form/fields. Expected IDs or names: alertForm, email, postcodes, radius');
-    return;
+  function showMessage(html, type=''){
+    if (!msg) return;
+    msg.className = `message-box show ${type}`;
+    msg.innerHTML = html;
   }
-
-  // Mobile-friendly numeric input (no visual change)
-  radiusEl.setAttribute('inputmode','numeric');
-  radiusEl.setAttribute('pattern','\\d*');
-  if (!radiusEl.getAttribute('min')) radiusEl.setAttribute('min','1');
-  if (!radiusEl.getAttribute('max')) radiusEl.setAttribute('max','30');
-
-  const UK_PC_RE = /^(GIR\s?0AA|[A-PR-UWYZ][A-HK-Y]?\d[\dA-Z]?\s?\d[ABD-HJLNP-UW-Z]{2})$/i;
-  const validEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v||'').trim());
-
-  const parsePCs = v => (v||'')
-    .split(/[,;]+/)
-    .map(s=>s.trim().toUpperCase().replace(/\s+/g,''))
-    .filter(Boolean)
-    .map(s => s.length>3 ? (s.slice(0,-3)+' '+s.slice(-3)).toUpperCase() : s);
-
-  const allValidPCs = list => list.every(pc => UK_PC_RE.test(pc));
-
-  function show(status, text){
-    if (msgEl) {
-      msgEl.className = 'msg ' + status; // ok | warn | err
-      msgEl.textContent = text;
-      msgEl.style.display = 'block';
-    } else {
-      // fallback without UI change
-      if (status === 'ok') console.log(text);
-      else alert(text);
-    }
+  function hideMessage(){
+    if (!msg) return;
+    msg.className = 'message-box';
+    msg.innerHTML = '';
   }
+  hideMessage();
 
-  form.addEventListener('submit', async (e) => {
+  form?.addEventListener('submit', async (e)=>{
     e.preventDefault();
-    if (msgEl) msgEl.style.display = 'none';
+    const email    = form.email.value.trim();
+    const postcode = form.postcode.value.trim();
+    const r        = form.radius.value.trim();
 
-    const email = (emailEl.value||'').trim();
-    const pcs   = parsePCs(pcsEl.value);
-    const rStr  = (radiusEl.value||'').trim();
+    if(!email || !postcode || !r){
+      showMessage('⚠ Please fill in all fields, including radius.','warn'); return;
+    }
+    const n = parseInt(r,10);
+    if(isNaN(n) || n<1 || n>30){
+      showMessage('⚠ Please select a radius between 1 and 30 miles.','warn'); return;
+    }
 
-    if(!validEmail(email))                return show('err','Please enter a valid email address.');
-    if(!pcs.length)                       return show('err','Please enter at least one UK postcode.');
-    if(!allValidPCs(pcs))                 return show('err','One or more postcodes are not valid UK postcodes.');
-    if(!rStr)                             return show('err','Please choose a radius (1–30 miles).');
-    const r = Number(rStr);
-    if(!(r>=1 && r<=30))                  return show('err','Radius must be between 1 and 30 miles.');
+    showMessage('Saving your alert…');
 
-    try {
-      const res = await fetch('/api/watch/create', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ email, postcode: pcs.join(','), radius: r })
+    try{
+      const res = await fetch('/api/watch/create',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ email, postcode, radius:r })
       });
+      const data = await res.json();
 
-      let j = {};
-      try { j = await res.json(); } catch { j = { ok:false, error:'Unexpected server response' }; }
-
-      if (j.ok) {
+      if (data.ok) {
+        showMessage('✅ Alert created — check your inbox!','success');
         form.reset();
-        show('ok','Alert created! We’ll email you when availability is found.');
-      } else if (j.upgrade) {
-        show('warn','Free plan allows 1 postcode. Please upgrade to add more.');
-      } else {
-        show('err', j.error || 'Something went wrong. Please try again.');
+        return;
       }
-    } catch (err) {
-      console.error('submit error', err);
-      show('err','Network error creating alert. Please retry.');
+      if (data.error === 'invalid_postcode') {
+        showMessage('❌ Please enter a valid UK postcode (e.g. RG1 2AB).','error'); return;
+      }
+      if (data.error === 'invalid_email') {
+        showMessage('❌ Please enter a valid email address.','error'); return;
+      }
+      if (data.error === 'invalid_radius') {
+        showMessage('⚠ Please select a valid radius (1–30 miles).','warn'); return;
+      }
+      if (data.error === 'duplicate') {
+        showMessage('⚠ An alert already exists for this postcode.','warn'); return;
+      }
+      if (data.error === 'upgrade_required') {
+        const link = data.upgradeLink || '/pricing.html';
+        showMessage(`⚡ Free plan supports one postcode. <a href="${link}">Upgrade to Pro</a> to add more.`,'warn'); return;
+      }
+
+      showMessage('⚠ Something went wrong. Please try again later.','error');
+    }catch(err){
+      console.error(err);
+      showMessage('⚠ Server unavailable. Please retry.','error');
     }
   });
-
-  // Catch silent JS errors so submit never "does nothing"
-  window.addEventListener('error', e => console.error('JS error:', e.message));
-  window.addEventListener('unhandledrejection', e => console.error('Promise rejection:', e.reason));
 })();
