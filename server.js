@@ -1,60 +1,21 @@
-// Dentist Radar Server (v1.8.7) – Stable Baseline + Simulation Mode
-// ---------------------------------------------------------------
-// Only change: adds internalSimulatedScan() when SCAN_MODE=simulate
-// Everything else works the same as your stable v1.8.6
+// scanner.js — v1.4 (API-first + HTML fallback + health monitoring for DentistRadar)
 
-import express from "express";
-import cors from "cors";
 import mongoose from "mongoose";
-import dotenv from "dotenv";
-import path from "path";
-import { fileURLToPath } from "url";
-import Stripe from "stripe";
 
-dotenv.config();
-
-const app = express();
-const PORT = process.env.PORT || 10000;
-
-app.use(cors());
-app.use(express.json());
-app.use(express.static("public"));
-
-/* ---------------------------
-   MongoDB Connection
---------------------------- */
-function forceDentistRadarDb(uri = "") {
-  if (!uri) return "";
-  if (/\/dentistradar(\?|$)/i.test(uri)) return uri;
-  if (/\/[^/?]+(\?|$)/.test(uri)) return uri.replace(/\/[^/?]+(\?|$)/, "/dentistradar$1");
-  return uri.replace(/(\.net)(\/)?/, "$1/dentistradar");
+// ---------- MONGO CONNECTION ----------
+if (!mongoose.connection.readyState) {
+  const uri = process.env.MONGO_URI || "";
+  if (uri) {
+    await mongoose
+      .connect(uri, { useNewUrlParser: true, useUnifiedTopology: true })
+      .catch(() => {});
+  }
 }
 
-const RAW_URI = process.env.MONGO_URI || "";
-const FIXED_URI = forceDentistRadarDb(RAW_URI);
-
-mongoose
-  .connect(FIXED_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log("✅ MongoDB connected →", FIXED_URI.replace(/:[^@]+@/, ":***@")))
-  .catch((err) => console.error("❌ MongoDB connection error:", err.message));
-
-/* ---------------------------
-   Schemas / Models
---------------------------- */
+// ---------- SCHEMAS ----------
 const watchSchema = new mongoose.Schema(
   { email: String, postcode: String, radius: Number },
-  { timestamps: true, versionKey: false }
-);
-watchSchema.index({ email: 1, postcode: 1 }, { unique: true });
-
-const userSchema = new mongoose.Schema(
-  {
-    email: { type: String, unique: true },
-    plan: { type: String, default: "free" },
-    postcode_limit: { type: Number, default: 1 },
-    status: { type: String, default: "active" }
-  },
-  { timestamps: true, versionKey: false }
+  { timestamps: true }
 );
 
 const emailLogSchema = new mongoose.Schema(
@@ -62,236 +23,470 @@ const emailLogSchema = new mongoose.Schema(
     to: String,
     subject: String,
     type: String,
-    provider: { type: String, default: "postmark" },
+    provider: String,
     providerId: String,
     meta: Object,
-    sentAt: { type: Date, default: Date.now }
+    sentAt: Date,
   },
   { versionKey: false }
 );
 
-const Watch = mongoose.model("Watch", watchSchema);
-const User = mongoose.model("User", userSchema);
-const EmailLog = mongoose.model("EmailLog", emailLogSchema);
+const practiceStateSchema = new mongoose.Schema(
+  {
+    practiceId: String,
+    name: String,
+    postcode: String,
+    link: String,
+    accepting: Boolean,
+    lastSeenAt: Date,
+  },
+  { versionKey: false, timestamps: true }
+);
 
-/* ---------------------------
-   Helpers
---------------------------- */
-async function sendEmail(to, subject, text, type = "other", meta = {}) {
-  const key = process.env.POSTMARK_TOKEN;
-  if (!key) {
-    console.log("ℹ️ POSTMARK_TOKEN not set → skipping email.");
-    return { ok: false, skipped: true };
+// stores small HTML snippet for debugging (optional)
+const scanLogSchema = new mongoose.Schema(
+  { pc: String, url: String, htmlSnippet: String, bytes: Number, when: Date },
+  { versionKey: false }
+);
+
+// persistent health state for monitoring
+const scanStatusSchema = new mongoose.Schema(
+  {
+    _id: { type: String, default: "global" },
+    zeroRuns: { type: Number, default: 0 }, // consecutive runs with cards==0 across all PCs
+    lastOkAt: Date,
+    lastWarnAt: Date,
+  },
+  { versionKey: false }
+);
+
+const Watch = mongoose.models.Watch || mongoose.model("Watch", watchSchema);
+const EmailLog =
+  mongoose.models.EmailLog || mongoose.model("EmailLog", emailLogSchema);
+const PracticeState =
+  mongoose.models.PracticeState || mongoose.model("PracticeState", practiceStateSchema);
+const ScanLog = mongoose.models.ScanLog || mongoose.model("ScanLog", scanLogSchema);
+const ScanStatus =
+  mongoose.models.ScanStatus || mongoose.model("ScanStatus", scanStatusSchema);
+
+// ---------- CONFIG / FLAGS ----------
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const uniq = (arr) => [...new Set(arr)];
+const SCAN_DEBUG = (process.env.SCAN_DEBUG || "0") === "1";
+const SCAN_SNAPSHOT = (process.env.SCAN_SNAPSHOT || "0") === "1";
+
+const normPostcode = (raw = "") => {
+  const t = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (t.length < 5) return raw.toUpperCase().trim();
+  return `${t.slice(0, t.length - 3)} ${t.slice(-3)}`.trim();
+};
+
+const isAccepting = (html, strict = false) => {
+  const body = (html || "").toLowerCase();
+  const acceptingPhrases = [
+    "accepting new nhs patients",
+    "accepting adult nhs patients",
+    "accepting child nhs patients",
+    "accepting new patients",
+  ];
+  const notAcceptingPhrases = [
+    "not accepting",
+    "no longer accepting",
+    "not currently accepting",
+  ];
+  if (notAcceptingPhrases.some((p) => body.includes(p))) return false;
+  if (strict) return body.includes("accepting new nhs patients");
+  return acceptingPhrases.some((p) => body.includes(p));
+};
+
+// ---------- FETCHERS ----------
+async function fetchText(url) {
+  const headers = {
+    "User-Agent":
+      process.env.NHS_UA ||
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-GB,en;q=0.9",
+    Referer: "https://www.nhs.uk/",
+    "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+    DNT: "1",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Dest": "document",
+    "Upgrade-Insecure-Requests": "1",
+    Cookie: "nhsuk-cookie-consent=accepted",
+  };
+
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 15000);
+  const r = await fetch(url, { headers, signal: ctrl.signal, redirect: "follow" });
+  clearTimeout(timeout);
+  if (!r.ok) throw new Error(`http_${r.status}`);
+  return await r.text();
+}
+
+async function fetchJSON(url, headers = {}) {
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 12000);
+  const r = await fetch(url, { headers, signal: ctrl.signal, redirect: "follow" });
+  clearTimeout(timeout);
+  if (!r.ok) throw new Error(`api_http_${r.status}`);
+  return await r.json();
+}
+
+// ---------- NHS RESULTS PAGE RESOLVER (uses lat/lon) ----------
+async function resolveResultsPageForPostcode(pcRaw) {
+  const pc = normPostcode(pcRaw);
+
+  // 1) geocode via postcodes.io
+  let lat = null, lon = null;
+  try {
+    const resp = await fetch(
+      `https://api.postcodes.io/postcodes/${encodeURIComponent(pc.replace(/\s+/g, ""))}`
+    );
+    if (resp.ok) {
+      const j = await resp.json();
+      lat = j?.result?.latitude ?? null;
+      lon = j?.result?.longitude ?? null;
+    }
+  } catch {}
+
+  const label = encodeURIComponent(pc.toUpperCase());
+  const candidates = [];
+
+  // 2) New NHS pattern using lat/lon
+  if (lat && lon) {
+    candidates.push(
+      `https://www.nhs.uk/service-search/find-a-dentist/results/${label}?latitude=${lat}&longitude=${lon}`
+    );
   }
+
+  // 3) Old fallbacks
+  const BASE = (
+    process.env.NHS_BASE ||
+    "https://www.nhs.uk/service-search/find-a-dentist"
+  ).replace(/\/+$/, "");
+  const DEFAULT_PATH =
+    process.env.NHS_RESULT_PATH || "/results?location={POSTCODE}";
+  const pcEnc = encodeURIComponent(pc.toUpperCase());
+  candidates.push(
+    `${BASE}${DEFAULT_PATH.replace("{POSTCODE}", pcEnc)}`,
+    `${BASE}/results?location=${pcEnc}`,
+    `${BASE}?location=${pcEnc}`
+  );
+
+  for (const url of candidates) {
+    try {
+      const html = await fetchText(url);
+      if (!/page not found|404/i.test(html)) {
+        return { url, html };
+      }
+    } catch {}
+  }
+  throw new Error("no_results_url_resolved");
+}
+
+// ---------- POSTMARK EMAIL ----------
+async function sendEmail(to, subject, text, type = "availability", meta = {}) {
+  const key = process.env.POSTMARK_TOKEN;
+  if (!key) return { ok: false, skipped: true };
 
   const r = await fetch("https://api.postmarkapp.com/email", {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
-      "X-Postmark-Server-Token": key
+      "X-Postmark-Server-Token": key,
     },
     body: JSON.stringify({
       From: process.env.MAIL_FROM || "alerts@dentistradar.co.uk",
       To: to,
       Subject: subject,
-      TextBody: text
-    })
+      TextBody: text,
+    }),
   });
-
   const body = await r.json().catch(() => ({}));
-  const ok = r.ok;
-
-  if (ok) {
+  if (r.ok) {
     await EmailLog.create({
       to,
       subject,
       type,
       providerId: body.MessageID,
       meta,
-      sentAt: new Date()
-    }).catch((e) => console.error("⚠️ EmailLog save error:", e.message));
-  } else {
-    console.error("❌ Postmark error:", body);
+      sentAt: new Date(),
+    }).catch(() => {});
+  }
+  return { ok: r.ok, status: r.status, body };
+}
+
+// ---------- PARSERS ----------
+function parsePracticeCardsHTML(html) {
+  const out = [];
+  const patterns = [
+    /<a[^>]+class="[^"]*nhsuk-card__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    /<h2[^>]*class="[^"]*nhsuk-card__heading[^"]*"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    /<a[^>]+class="[^"]*nhsuk-list-panel__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    /<a[^>]+href="(\/(?:services\/)?dentist\/[^"#?]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+  ];
+
+  for (const re of patterns) {
+    let m;
+    while ((m = re.exec(html))) {
+      const href = m[1];
+      const name = m[2].replace(/<[^>]+>/g, " ").trim();
+      out.push({
+        name: name || "Dentist",
+        link: href.startsWith("http") ? href : "https://www.nhs.uk" + href,
+      });
+    }
+    if (out.length > 0) break;
   }
 
-  return { ok, status: r.status, body };
+  // De-dup
+  const seen = new Set();
+  return out.filter((c) => {
+    const k = c.link + "|" + c.name;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
 }
 
-const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const normEmail = (s) => String(s || "").trim().toLowerCase();
-function normalizePostcode(raw = "") {
-  const t = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  if (t.length < 5) return raw.toUpperCase().trim();
-  return `${t.slice(0, t.length - 3)} ${t.slice(-3)}`.trim();
+function parsePracticeCardsAPI(json) {
+  const out = [];
+  const items =
+    json?.results ||
+    json?.organisations ||
+    json?.value ||
+    json?.items ||
+    [];
+  for (const it of items) {
+    const name = it.name || it.title || it.practiceName || it.organisationName;
+    let url = it.url || it.href || it.link || it.websiteUrl;
+    const slug = it.slug || it.path || it.relativeUrl;
+    if (!url && slug) url = slug.startsWith("http") ? slug : "https://www.nhs.uk" + slug;
+    if (name && url) out.push({ name: name.trim(), link: url });
+  }
+  return out;
 }
-function looksLikeUkPostcode(pc) {
-  return /^([A-Z]{1,2}\d[A-Z\d]?)\s?\d[A-Z]{2}$/i.test((pc || "").toUpperCase());
+
+// ---------- CARD SOURCE (API first if available) ----------
+async function getPracticeCardsForPostcode(pc) {
+  const key = process.env.NHS_API_KEY || "";
+  const pcEnc = encodeURIComponent(pc.toUpperCase());
+
+  // Try the official API first if you have a key
+  if (key) {
+    const headers = { "subscription-key": key, Accept: "application/json" };
+    const candidates = [
+      `https://api.nhs.uk/service-search/organisations?api-version=2&search=${pcEnc}&top=20&skip=0&serviceType=dentist`,
+      `https://api.nhs.uk/service-search/organisations?api-version=2&search=${pcEnc}&top=20&skip=0`,
+    ];
+    for (const url of candidates) {
+      try {
+        const json = await fetchJSON(url, headers);
+        const cards = parsePracticeCardsAPI(json);
+        if (cards.length > 0) return { source: "api", url, cards };
+      } catch {
+        // ignore and fall through
+      }
+    }
+  }
+
+  // Fallback to HTML (lat/lon)
+  const { url, html } = await resolveResultsPageForPostcode(pc);
+
+  if (SCAN_SNAPSHOT) {
+    try {
+      const snippet = html.replace(/\s+/g, " ").slice(0, 2500);
+      await ScanLog.create({
+        pc,
+        url,
+        htmlSnippet: snippet,
+        bytes: html.length,
+        when: new Date(),
+      }).catch(() => {});
+    } catch {}
+  }
+
+  const cards = parsePracticeCardsHTML(html);
+  return { source: "html", url, cards, html };
 }
-async function planLimitFor(email) {
-  const u = await User.findOne({ email: normEmail(email) }).lean();
-  if (!u || u.status !== "active") return 1;
-  if (u.plan === "family") return u.postcode_limit || 10;
-  if (u.plan === "pro") return u.postcode_limit || 5;
-  return 1;
-}
 
-/* ---------------------------
-   Health Check
---------------------------- */
-app.get("/api/health", (req, res) => res.json({ ok: true, db: "dentistradar", time: new Date().toISOString() }));
-app.get("/health", (req, res) => res.json({ ok: true, db: "dentistradar", time: new Date().toISOString() }));
+// ---------- MAIN SCAN ----------
+export async function runScan() {
+  const LIMIT_POSTCODES = parseInt(process.env.SCAN_POSTCODES_LIMIT || "30", 10);
+  const LIMIT_PRACTICES = parseInt(process.env.SCAN_PRACTICES_LIMIT || "30", 10);
+  const DELAY_MS = parseInt(process.env.SCAN_DELAY_MS || "1200", 10);
+  const STRICT = (process.env.SCAN_MATCH_STRICT || "0") === "1";
+  const ADMIN_EMAIL = process.env.ADMIN_EMAIL || process.env.OWNER_EMAIL; // optional warning recipient
 
-/* ---------------------------
-   Create Watch (main alert creation)
---------------------------- */
-app.post("/api/watch/create", async (req, res) => {
-  try {
-    const email = normEmail(req.body?.email);
-    const postcode = normalizePostcode(req.body?.postcode || "");
-    const radius = Number(req.body?.radius);
+  const watches = await Watch.find({}, { email: 1, postcode: 1 }).lean();
+  const postcodes = uniq(watches.map((w) => normPostcode(w.postcode))).slice(0, LIMIT_POSTCODES);
 
-    if (!emailRe.test(email))
-      return res.status(400).json({ ok: false, error: "invalid_email", message: "Please enter a valid email address." });
-    if (!looksLikeUkPostcode(postcode))
-      return res
-        .status(400)
-        .json({ ok: false, error: "invalid_postcode", message: "Please enter a valid UK postcode (e.g. RG1 2AB)." });
-    if (!radius || radius < 1 || radius > 30)
-      return res
-        .status(400)
-        .json({ ok: false, error: "invalid_radius", message: "Please select a radius between 1 and 30 miles." });
+  let checked = 0, found = 0, alertsSent = 0;
+  const debugMeta = { postcodesCount: postcodes.length, samples: [], flags: {} };
 
-    const exists = await Watch.findOne({ email, postcode }).lean();
-    if (exists) return res.status(400).json({ ok: false, error: "duplicate", message: "Alert already exists for this postcode." });
+  // Postcode → watchers map
+  const byPostcode = new Map();
+  for (const w of watches) {
+    const pc = normPostcode(w.postcode);
+    if (!byPostcode.has(pc)) byPostcode.set(pc, []);
+    byPostcode.get(pc).push(w);
+  }
 
-    const limit = await planLimitFor(email);
-    const count = await Watch.countDocuments({ email });
-    if (count >= limit)
-      return res.status(402).json({
-        ok: false,
-        error: "upgrade_required",
-        message: `Your plan allows up to ${limit} postcode${limit > 1 ? "s" : ""}.`,
-        upgradeLink: "/pricing.html"
-      });
+  // Aggregate signal to detect cookie wall/layout change
+  let totalCards = 0;
+  let suspectedCookieWall = false;
 
-    await Watch.create({ email, postcode, radius });
+  for (const pc of postcodes) {
+    try {
+      const { source, url, cards, html } = await getPracticeCardsForPostcode(pc);
+      totalCards += (cards?.length || 0);
 
-    await sendEmail(
-      email,
-      `Dentist Radar — alert active for ${postcode}`,
-      `We’ll email you when NHS practices within ${radius} miles of ${postcode} start accepting new patients.
+      if (SCAN_DEBUG && debugMeta.samples.length < 5) {
+        debugMeta.samples.push({ pc, source, url, cards: cards.length });
+      }
+
+      // crude cookie-wall detection
+      if (html && /cookie/i.test(html) && /consent/i.test(html) && !/nhsuk-card__link|services\/dentist\//i.test(html)) {
+        suspectedCookieWall = true;
+      }
+
+      for (const c of cards.slice(0, LIMIT_PRACTICES)) {
+        checked++;
+
+        // determine accepting
+        let accepting = false;
+        try {
+          const detail = await fetchText(c.link);
+          accepting = isAccepting(detail, STRICT);
+        } catch {
+          // ignore
+        }
+
+        const id = (c.link || c.name + "|" + pc).toLowerCase();
+        const prev = await PracticeState.findOne({ practiceId: id }).lean();
+        const prevAcc = prev ? !!prev.accepting : false;
+
+        await PracticeState.updateOne(
+          { practiceId: id },
+          {
+            $set: {
+              practiceId: id,
+              name: c.name,
+              postcode: pc,
+              link: c.link,
+              accepting,
+              lastSeenAt: new Date(),
+            },
+          },
+          { upsert: true }
+        );
+
+        if (!prevAcc && accepting) {
+          found++;
+          const watchers = byPostcode.get(pc) || [];
+          for (const w of watchers) {
+            const subj = `NHS dentist update: ${c.name} — now accepting near ${pc}`;
+            const text = `Good news! ${c.name} appears to be accepting new NHS patients near ${pc}.
+
+Check details: ${c.link}
 
 Please call the practice directly to confirm before travelling.
 
-— Dentist Radar`,
-      "welcome",
-      { postcode, radius }
-    );
+— Dentist Radar`;
+            const r = await sendEmail(w.email, subj, text, "availability", {
+              practice: c.name,
+              postcode: pc,
+              link: c.link,
+            });
+            if (r.ok) alertsSent++;
+          }
+        }
+      }
 
-    res.json({ ok: true, message: "✅ Alert created — check your inbox!" });
-  } catch (e) {
-    console.error("watch/create error:", e);
-    res.status(500).json({ ok: false, error: "server_error", message: "Something went wrong. Please try again later." });
-  }
-});
-
-/* ---------------------------
-   Stripe Checkout (same as before)
---------------------------- */
-const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || "";
-const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
-
-app.post("/api/create-checkout-session", async (req, res) => {
-  try {
-    if (!stripe) return res.json({ ok: false, error: "stripe_not_configured" });
-    const { email, plan } = req.body || {};
-    if (!emailRe.test(email || "")) return res.json({ ok: false, error: "invalid_email" });
-
-    const SITE = process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
-    const pricePro = process.env.STRIPE_PRICE_PRO;
-    const priceFamily = process.env.STRIPE_PRICE_FAMILY;
-    const priceId = (plan || "pro").toLowerCase() === "family" ? priceFamily : pricePro;
-    if (!priceId) return res.json({ ok: false, error: "missing_price" });
-
-    const session = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      payment_method_types: ["card"],
-      line_items: [{ price: priceId, quantity: 1 }],
-      customer_email: email,
-      success_url: `${SITE}/thankyou.html?plan=${plan || "pro"}`,
-      cancel_url: `${SITE}/upgrade.html?canceled=true`
-    });
-    return res.json({ ok: true, url: session.url });
-  } catch (err) {
-    console.error("Stripe session error:", err.message);
-    return res.status(500).json({ ok: false, error: "stripe_error", message: err.message || "unknown" });
-  }
-});
-
-/* ---------------------------
-   SIMULATION MODE
---------------------------- */
-async function internalSimulatedScan() {
-  const watches = await Watch.find({}).sort({ createdAt: -1 }).limit(5).lean();
-  let alertsSent = 0;
-
-  for (const w of watches) {
-    await sendEmail(
-      w.email,
-      `NHS dentist update (simulation): accepting near ${w.postcode}`,
-      `This is a simulation to verify alerts. If this were a real NHS update, you'd receive this email when a local practice starts accepting new patients near ${w.postcode}.`,
-      "availability",
-      { postcode: w.postcode, simulated: true }
-    );
-    alertsSent++;
-  }
-  return { checked: watches.length, found: alertsSent, alertsSent };
-}
-
-/* ---------------------------
-   SCAN Endpoint
---------------------------- */
-let cachedRunScan = null;
-app.post("/api/scan", async (req, res) => {
-  const t = process.env.SCAN_TOKEN || "";
-  if (!t || (req.query.token !== t && req.headers["x-scan-token"] != t)) {
-    return res.status(403).json({ ok: false, error: "forbidden" });
-  }
-
-  try {
-    const MODE = process.env.SCAN_MODE || "off";
-    if (MODE === "simulate") {
-      const result = await internalSimulatedScan();
-      return res.json({ ok: true, ...(result || {}), mode: MODE, time: new Date().toISOString() });
-    }
-
-    if (!cachedRunScan) {
-      try {
-        const mod = await import("./scanner.js").catch(() => null);
-        cachedRunScan = (mod && (mod.runScan || mod.default)) || (async () => ({ checked: 0, found: 0, alertsSent: 0 }));
-      } catch {
-        cachedRunScan = async () => ({ checked: 0, found: 0, alertsSent: 0 });
+      await sleep(DELAY_MS);
+    } catch (e) {
+      if (SCAN_DEBUG) {
+        if (!debugMeta.errors) debugMeta.errors = [];
+        if (debugMeta.errors.length < 5) debugMeta.errors.push({ pc, error: e.message });
       }
     }
-
-    const result = await cachedRunScan();
-    return res.json({ ok: true, ...(result || {}), mode: MODE, time: new Date().toISOString() });
-  } catch (e) {
-    console.error("Scan failed:", e);
-    return res.status(500).json({ ok: false, error: "scan_failed" });
   }
-});
 
-/* ---------------------------
-   Static Files + Fallback
---------------------------- */
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-app.get("/", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
-app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
+  // ---------- HEALTH MONITOR ----------
+  const status = (await ScanStatus.findById("global").lean()) || { zeroRuns: 0 };
+  if (totalCards > 0) {
+    await ScanStatus.updateOne(
+      { _id: "global" },
+      { $set: { zeroRuns: 0, lastOkAt: new Date() } },
+      { upsert: true }
+    );
+  } else {
+    const next = (status.zeroRuns || 0) + 1;
+    await ScanStatus.updateOne(
+      { _id: "global" },
+      { $set: { zeroRuns: next }, $setOnInsert: { lastOkAt: null } },
+      { upsert: true }
+    );
 
-/* ---------------------------
-   Start Server
---------------------------- */
-app.listen(PORT, () => console.log(`🚀 Dentist Radar running on :${PORT}`));
+    // After 3 consecutive zero-card runs, send a warning email
+    if (ADMIN_EMAIL && next >= 3) {
+      const warnText = `DentistRadar scanner warning:
+
+Consecutive runs with zero cards: ${next}
+Suspected cookie wall: ${suspectedCookieWall ? "Yes" : "No"}
+
+Actions:
+• Open /admin.html and run Manual Scan
+• In Render -> Env, set SCAN_SNAPSHOT=1
+• Check Mongo 'scanlogs' for htmlSnippet
+• Review NHS layout / cookies
+
+— DentistRadar Monitor`;
+
+      await sendEmail(
+        ADMIN_EMAIL,
+        "DentistRadar: Scanner reported zero results",
+        warnText,
+        "scanner-warning",
+        { suspectedCookieWall, zeroRuns: next }
+      ).catch(() => {});
+      await ScanStatus.updateOne(
+        { _id: "global" },
+        { $set: { lastWarnAt: new Date() } },
+        { upsert: true }
+      );
+    }
+  }
+
+  const result = { checked, found, alertsSent, totalCards };
+  if (SCAN_DEBUG) {
+    result.meta = {
+      ...result.meta,
+      samples: debugMeta.samples,
+      errors: debugMeta.errors,
+      flags: {
+        suspectedCookieWall,
+        usedApi: !!process.env.NHS_API_KEY,
+      },
+    };
+  }
+  return result;
+}
+
+// ---------- CLI ----------
+if (import.meta.url === `file://${process.argv[1]}`) {
+  runScan()
+    .then((r) => {
+      console.log(JSON.stringify({ ok: true, ...r }, null, 2));
+      process.exit(0);
+    })
+    .catch((e) => {
+      console.error(JSON.stringify({ ok: false, error: e.message }));
+      process.exit(1);
+    });
+}
