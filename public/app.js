@@ -1,80 +1,93 @@
-// public/app.js — validation + submit (stable)
+// public/app.js — non-UI patch: robust binding + validation + submit
+// ✅ No HTML/CSS changes required
 
-const form = document.getElementById('alertForm');
-const emailEl = document.getElementById('email');
-const pcsEl   = document.getElementById('postcodes');
-const radiusEl= document.getElementById('radius');
-const msgEl   = document.getElementById('message');
+(function () {
+  // Helper: find element by ID first, else by name
+  const $ = (id, name) =>
+    document.getElementById(id) || document.querySelector(`[name="${name}"]`);
 
-const UK_PC_RE = /^(GIR\s?0AA|[A-PR-UWYZ][A-HK-Y]?\d[\dA-Z]?\s?\d[ABD-HJLNP-UW-Z]{2})$/i;
+  // Try common hooks without requiring HTML edits
+  const form     = document.getElementById('alertForm') || document.querySelector('form');
+  const emailEl  = $('#email', 'email');
+  const pcsEl    = $('#postcodes', 'postcodes') || $('#postcode', 'postcode');
+  const radiusEl = $('#radius', 'radius');
+  const msgEl    = document.getElementById('message');
 
-function show(status, text){
-  msgEl.className = 'msg ' + status; // 'ok' | 'warn' | 'err'
-  msgEl.textContent = text;
-  msgEl.style.display = 'block';
-}
+  // If we can’t bind, surface a console hint (no UI change)
+  if (!form || !emailEl || !pcsEl || !radiusEl) {
+    console.error('DentistRadar: missing form/fields. Expected IDs or names: alertForm, email, postcodes, radius');
+    return;
+  }
 
-function validEmail(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v||'').trim()); }
-function parsePCs(v){
-  return (v||'').split(/[,;]+/)
+  // Mobile-friendly numeric input (no visual change)
+  radiusEl.setAttribute('inputmode','numeric');
+  radiusEl.setAttribute('pattern','\\d*');
+  if (!radiusEl.getAttribute('min')) radiusEl.setAttribute('min','1');
+  if (!radiusEl.getAttribute('max')) radiusEl.setAttribute('max','30');
+
+  const UK_PC_RE = /^(GIR\s?0AA|[A-PR-UWYZ][A-HK-Y]?\d[\dA-Z]?\s?\d[ABD-HJLNP-UW-Z]{2})$/i;
+  const validEmail = v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v||'').trim());
+
+  const parsePCs = v => (v||'')
+    .split(/[,;]+/)
     .map(s=>s.trim().toUpperCase().replace(/\s+/g,''))
     .filter(Boolean)
     .map(s => s.length>3 ? (s.slice(0,-3)+' '+s.slice(-3)).toUpperCase() : s);
-}
-function allValidPCs(list){ return list.every(pc => UK_PC_RE.test(pc)); }
 
-radiusEl.setAttribute('inputmode','numeric');
-radiusEl.setAttribute('pattern','\\d*');
-radiusEl.setAttribute('min','1');
-radiusEl.setAttribute('max','30');
+  const allValidPCs = list => list.every(pc => UK_PC_RE.test(pc));
 
-form?.addEventListener('submit', async (e)=>{
-  e.preventDefault();
-  msgEl.style.display='none';
-
-  const email = (emailEl.value||'').trim();
-  const pcs = parsePCs(pcsEl.value);
-  const rStr = (radiusEl.value||'').trim();
-
-  if(!validEmail(email)) { show('err','Please enter a valid email address.'); return; }
-  if(!pcs.length){ show('err','Please enter at least one UK postcode.'); return; }
-  if(!allValidPCs(pcs)) { show('err','One or more postcodes are not valid UK postcodes.'); return; }
-  if(!rStr){ show('err','Please choose a radius (1–30 miles).'); return; }
-  const r = Number(rStr); if(!(r>=1 && r<=30)){ show('err','Radius must be between 1 and 30 miles.'); return; }
-
-  try{
-    const res = await fetch('/api/watch/create',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ email, postcode: pcs.join(','), radius: r })
-    });
-    const j = await res.json();
-
-    if(j.ok){
-      form.reset();
-      show('ok','Alert created! We’ll email you when availability is found.');
-    }else if(j.upgrade){
-      show('warn','Free plan allows 1 postcode. Please upgrade to add more.');
-    }else{
-      show('err', j.error || 'Something went wrong. Please try again.');
+  function show(status, text){
+    if (msgEl) {
+      msgEl.className = 'msg ' + status; // ok | warn | err
+      msgEl.textContent = text;
+      msgEl.style.display = 'block';
+    } else {
+      // fallback without UI change
+      if (status === 'ok') console.log(text);
+      else alert(text);
     }
-  }catch(err){
-    show('err','Network error creating alert. Please retry.');
   }
-});
 
-// Stripe helper for pricing/upgrade pages (unchanged)
-async function startCheckout(plan){
-  try{
-    const email = (emailEl?.value || '').trim();
-    const res = await fetch('/api/checkout',{
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ email: validEmail(email)? email : undefined, plan })
-    });
-    const j = await res.json();
-    if(j.ok && j.url) window.location = j.url;
-    else alert(j.error || 'Upgrade failed. Check Stripe keys/prices.');
-  }catch(e){ alert('Network error starting checkout.'); }
-}
-window.startCheckout = startCheckout;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (msgEl) msgEl.style.display = 'none';
+
+    const email = (emailEl.value||'').trim();
+    const pcs   = parsePCs(pcsEl.value);
+    const rStr  = (radiusEl.value||'').trim();
+
+    if(!validEmail(email))                return show('err','Please enter a valid email address.');
+    if(!pcs.length)                       return show('err','Please enter at least one UK postcode.');
+    if(!allValidPCs(pcs))                 return show('err','One or more postcodes are not valid UK postcodes.');
+    if(!rStr)                             return show('err','Please choose a radius (1–30 miles).');
+    const r = Number(rStr);
+    if(!(r>=1 && r<=30))                  return show('err','Radius must be between 1 and 30 miles.');
+
+    try {
+      const res = await fetch('/api/watch/create', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ email, postcode: pcs.join(','), radius: r })
+      });
+
+      let j = {};
+      try { j = await res.json(); } catch { j = { ok:false, error:'Unexpected server response' }; }
+
+      if (j.ok) {
+        form.reset();
+        show('ok','Alert created! We’ll email you when availability is found.');
+      } else if (j.upgrade) {
+        show('warn','Free plan allows 1 postcode. Please upgrade to add more.');
+      } else {
+        show('err', j.error || 'Something went wrong. Please try again.');
+      }
+    } catch (err) {
+      console.error('submit error', err);
+      show('err','Network error creating alert. Please retry.');
+    }
+  });
+
+  // Catch silent JS errors so submit never "does nothing"
+  window.addEventListener('error', e => console.error('JS error:', e.message));
+  window.addEventListener('unhandledrejection', e => console.error('Promise rejection:', e.reason));
+})();
