@@ -1,5 +1,5 @@
-// Dentist Radar - scanner.js (v1.8.6)
-// Stable baseline + enhanced NHS scanning + detailed diagnostics
+// Dentist Radar - scanner.js (v1.8.7)
+// Baseline stable + improved acceptance detection + NHS alternate view support
 
 import mongoose from "mongoose";
 
@@ -15,7 +15,7 @@ function resultUrlsFor(pc) {
   return [
     `${NHS_HTML_BASE}/service-search/find-a-dentist/results/${enc}?distance=30`,
     `${NHS_HTML_BASE}/service-search/other-services/Dentists/LocationSearch/${enc}?distance=30`,
-    `${NHS_HTML_BASE}/find-a-dentist/results/${enc}?distance=30`,
+    `${NHS_HTML_BASE}/find-a-dentist/results/${enc}?distance=30`
   ];
 }
 
@@ -162,17 +162,37 @@ function parseCardsFromHTML(html, diag) {
 /* ---------- Acceptance check ---------- */
 function detailMentionsAccepting(html) {
   if (!html) return false;
-  const deny = /(not\s+accepting|currently\s+full|no\s+longer\s+accepting|no\s+new\s+nhs\s+patients)/i;
-  if (deny.test(html)) return false;
 
-  const labelled = /accepting\s+new\s+nhs\s+patients\s*[:\-]\s*(yes|open|currently\s+accepting)/i;
-  if (labelled.test(html)) return true;
+  const txt = html.replace(/\s+/g, ' ').toLowerCase();
 
-  const accept = /(accepting|taking)\s+new\s+nhs\s+patients/i;
-  const alt = /(open\s+to\s+new\s+nhs\s+patients|now\s+accepting\s+nhs)/i;
-  const child = /(accepting|taking)\s+new\s+nhs\s+patients\s*\(children|under\s*18\)\s*[:\-]?\s*yes/i;
+  const deny = [
+    'not accepting new nhs patients',
+    'no longer accepting nhs',
+    'currently full',
+    'no new nhs patients',
+    'not currently accepting'
+  ];
+  if (deny.some(p => txt.includes(p))) return false;
 
-  return accept.test(html) || alt.test(html) || child.test(html);
+  // "Accepting new NHS patients: Yes"
+  if (/accepting\s+new\s+nhs\s+patients\s*[:\-]\s*(yes|open|currently\s+accepting)/i.test(html)) return true;
+
+  // Tag variants
+  if (/<span[^>]*class="[^"]*nhsuk-tag[^"]*"[^>]*>[^<]*accepting[^<]*new[^<]*nhs[^<]*patients[^<]*<\/span>/i.test(html)) return true;
+
+  // Summary-list (label + value)
+  if (/accepting\s+new\s+nhs\s+patients[^<]{0,200}<\/(dt|th)>[^<]{0,200}<(dd|td)[^>]*>\s*(yes|open|currently\s*accepting)/i.test(html)) return true;
+
+  // Fallbacks
+  const loose = [
+    /(accepting|taking)\s+new\s+nhs\s+patients/i,
+    /open\s+to\s+new\s+nhs\s+patients/i,
+    /now\s+accepting\s+nhs/i,
+    /(accepting|taking)\s+new\s+nhs\s+patients\s*\(children|under\s*18\)\s*[:\-]?\s*yes/i
+  ];
+  if (loose.some(r => r.test(html))) return true;
+
+  return false;
 }
 
 /* ---------- HTML + API candidates ---------- */
@@ -213,12 +233,26 @@ async function apiCandidates(pc, diag) {
 }
 
 async function fetchDetail(link, diag) {
-  const r = await fetchText(link, {
-    "User-Agent": "Mozilla/5.0",
+  let r = await fetchText(link, {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml",
+    "Accept-Language": "en-GB,en;q=0.9",
     "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
   });
   diag?.calls.push({ url:link, ok:r.ok, isJSON:r.isJSON, status:r.status, kind:"detail" });
+
+  if (r.ok && !detailMentionsAccepting(r.text)) {
+    let alt = link.includes('?') ? link + '&view=services' : link + '?view=services';
+    const r2 = await fetchText(alt, {
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "text/html,application/xhtml+xml",
+      "Accept-Language": "en-GB,en;q=0.9",
+      "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
+    });
+    diag?.calls.push({ url:alt, ok:r2.ok, isJSON:r2.isJSON, status:r2.status, kind:"detail-alt" });
+    if (r2.ok) return { accepting: detailMentionsAccepting(r2.text), htmlLen: r2.text.length };
+  }
+
   if (!r.ok) return { accepting:false, html:"" };
   return { accepting: detailMentionsAccepting(r.text), htmlLen: r.text.length };
 }
@@ -265,7 +299,6 @@ export async function runScan() {
       candidates = candidates.concat(html);
       candidates = dedupe(candidates, c => c.link || c.name || c.id || `${c.name}|${pc}`);
 
-      // Prioritize NHS service links
       const nhs = candidates.filter(c => /nhs\.uk\/services\/dentist\//i.test(c.link));
       const ordered = nhs.length ? nhs.concat(candidates.filter(c => !nhs.includes(c))) : candidates;
 
@@ -346,7 +379,4 @@ export async function runScan() {
     }
 
     const out = { ok: true, checked: 0, found: 0, alertsSent: 0, note: "scanner_exception" };
-    if (SCAN_DEBUG) out.meta = { last_error: statusDoc.last_error };
-    return out;
-  }
-}
+    if (SCAN_DEBUG) out.meta = { last_error: status
