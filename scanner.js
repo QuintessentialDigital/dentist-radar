@@ -1,8 +1,4 @@
-// scanner.js — NHS v2025 compatible version (DentistRadar baseline)
-// ---------------------------------------------------------------
-// ✓ Supports new NHS URL structure using lat/lon
-// ✓ Broader HTML parsing (5 NHS layouts)
-// ✓ Fully backward compatible with your baseline backend
+// scanner.js — v1.4 (API-first + HTML fallback + health monitoring for DentistRadar)
 
 import mongoose from "mongoose";
 
@@ -10,53 +6,70 @@ import mongoose from "mongoose";
 if (!mongoose.connection.readyState) {
   const uri = process.env.MONGO_URI || "";
   if (uri) {
-    await mongoose.connect(uri, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    }).catch(() => {});
+    await mongoose
+      .connect(uri, { useNewUrlParser: true, useUnifiedTopology: true })
+      .catch(() => {});
   }
 }
 
 // ---------- SCHEMAS ----------
-const watchSchema = new mongoose.Schema({
-  email: String,
-  postcode: String,
-  radius: Number,
-}, { timestamps: true });
+const watchSchema = new mongoose.Schema(
+  { email: String, postcode: String, radius: Number },
+  { timestamps: true }
+);
 
-const emailLogSchema = new mongoose.Schema({
-  to: String,
-  subject: String,
-  type: String,
-  provider: String,
-  providerId: String,
-  meta: Object,
-  sentAt: Date,
-}, { versionKey: false });
+const emailLogSchema = new mongoose.Schema(
+  {
+    to: String,
+    subject: String,
+    type: String,
+    provider: String,
+    providerId: String,
+    meta: Object,
+    sentAt: Date,
+  },
+  { versionKey: false }
+);
 
-const practiceStateSchema = new mongoose.Schema({
-  practiceId: String,
-  name: String,
-  postcode: String,
-  link: String,
-  accepting: Boolean,
-  lastSeenAt: Date,
-}, { versionKey: false, timestamps: true });
+const practiceStateSchema = new mongoose.Schema(
+  {
+    practiceId: String,
+    name: String,
+    postcode: String,
+    link: String,
+    accepting: Boolean,
+    lastSeenAt: Date,
+  },
+  { versionKey: false, timestamps: true }
+);
 
-const scanLogSchema = new mongoose.Schema({
-  pc: String,
-  url: String,
-  htmlSnippet: String,
-  bytes: Number,
-  when: Date,
-}, { versionKey: false });
+// stores small HTML snippet for debugging (optional)
+const scanLogSchema = new mongoose.Schema(
+  { pc: String, url: String, htmlSnippet: String, bytes: Number, when: Date },
+  { versionKey: false }
+);
+
+// persistent health state for monitoring
+const scanStatusSchema = new mongoose.Schema(
+  {
+    _id: { type: String, default: "global" },
+    zeroRuns: { type: Number, default: 0 }, // consecutive runs with cards==0 across all PCs
+    lastOkAt: Date,
+    lastWarnAt: Date,
+  },
+  { versionKey: false }
+);
 
 const Watch = mongoose.models.Watch || mongoose.model("Watch", watchSchema);
-const EmailLog = mongoose.models.EmailLog || mongoose.model("EmailLog", emailLogSchema);
-const PracticeState = mongoose.models.PracticeState || mongoose.model("PracticeState", practiceStateSchema);
+const EmailLog =
+  mongoose.models.EmailLog || mongoose.model("EmailLog", emailLogSchema);
+const PracticeState =
+  mongoose.models.PracticeState || mongoose.model("PracticeState", practiceStateSchema);
 const ScanLog = mongoose.models.ScanLog || mongoose.model("ScanLog", scanLogSchema);
+const ScanStatus =
+  mongoose.models.ScanStatus || mongoose.model("ScanStatus", scanStatusSchema);
 
-// ---------- HELPERS ----------
+// ---------- CONFIG / FLAGS ----------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const uniq = (arr) => [...new Set(arr)];
 const SCAN_DEBUG = (process.env.SCAN_DEBUG || "0") === "1";
@@ -92,34 +105,45 @@ async function fetchText(url) {
     "User-Agent":
       process.env.NHS_UA ||
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-    Accept:
-      "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-GB,en;q=0.9",
     Referer: "https://www.nhs.uk/",
     "Cache-Control": "no-cache",
+    Pragma: "no-cache",
+    DNT: "1",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Dest": "document",
+    "Upgrade-Insecure-Requests": "1",
     Cookie: "nhsuk-cookie-consent=accepted",
   };
 
   const ctrl = new AbortController();
   const timeout = setTimeout(() => ctrl.abort(), 15000);
-  const r = await fetch(url, { headers, signal: ctrl.signal });
+  const r = await fetch(url, { headers, signal: ctrl.signal, redirect: "follow" });
   clearTimeout(timeout);
   if (!r.ok) throw new Error(`http_${r.status}`);
   return await r.text();
 }
 
-// ---------- NHS RESULTS PAGE RESOLVER ----------
+async function fetchJSON(url, headers = {}) {
+  const ctrl = new AbortController();
+  const timeout = setTimeout(() => ctrl.abort(), 12000);
+  const r = await fetch(url, { headers, signal: ctrl.signal, redirect: "follow" });
+  clearTimeout(timeout);
+  if (!r.ok) throw new Error(`api_http_${r.status}`);
+  return await r.json();
+}
+
+// ---------- NHS RESULTS PAGE RESOLVER (uses lat/lon) ----------
 async function resolveResultsPageForPostcode(pcRaw) {
   const pc = normPostcode(pcRaw);
 
-  // 1) Geocode via postcodes.io
-  let lat = null,
-    lon = null;
+  // 1) geocode via postcodes.io
+  let lat = null, lon = null;
   try {
     const resp = await fetch(
-      `https://api.postcodes.io/postcodes/${encodeURIComponent(
-        pc.replace(/\s+/g, "")
-      )}`
+      `https://api.postcodes.io/postcodes/${encodeURIComponent(pc.replace(/\s+/g, ""))}`
     );
     if (resp.ok) {
       const j = await resp.json();
@@ -196,7 +220,7 @@ async function sendEmail(to, subject, text, type = "availability", meta = {}) {
   return { ok: r.ok, status: r.status, body };
 }
 
-// ---------- PARSER ----------
+// ---------- PARSERS ----------
 function parsePracticeCardsHTML(html) {
   const out = [];
   const patterns = [
@@ -230,24 +254,82 @@ function parsePracticeCardsHTML(html) {
   });
 }
 
+function parsePracticeCardsAPI(json) {
+  const out = [];
+  const items =
+    json?.results ||
+    json?.organisations ||
+    json?.value ||
+    json?.items ||
+    [];
+  for (const it of items) {
+    const name = it.name || it.title || it.practiceName || it.organisationName;
+    let url = it.url || it.href || it.link || it.websiteUrl;
+    const slug = it.slug || it.path || it.relativeUrl;
+    if (!url && slug) url = slug.startsWith("http") ? slug : "https://www.nhs.uk" + slug;
+    if (name && url) out.push({ name: name.trim(), link: url });
+  }
+  return out;
+}
+
+// ---------- CARD SOURCE (API first if available) ----------
+async function getPracticeCardsForPostcode(pc) {
+  const key = process.env.NHS_API_KEY || "";
+  const pcEnc = encodeURIComponent(pc.toUpperCase());
+
+  // Try the official API first if you have a key
+  if (key) {
+    const headers = { "subscription-key": key, Accept: "application/json" };
+    const candidates = [
+      `https://api.nhs.uk/service-search/organisations?api-version=2&search=${pcEnc}&top=20&skip=0&serviceType=dentist`,
+      `https://api.nhs.uk/service-search/organisations?api-version=2&search=${pcEnc}&top=20&skip=0`,
+    ];
+    for (const url of candidates) {
+      try {
+        const json = await fetchJSON(url, headers);
+        const cards = parsePracticeCardsAPI(json);
+        if (cards.length > 0) return { source: "api", url, cards };
+      } catch {
+        // ignore and fall through
+      }
+    }
+  }
+
+  // Fallback to HTML (lat/lon)
+  const { url, html } = await resolveResultsPageForPostcode(pc);
+
+  if (SCAN_SNAPSHOT) {
+    try {
+      const snippet = html.replace(/\s+/g, " ").slice(0, 2500);
+      await ScanLog.create({
+        pc,
+        url,
+        htmlSnippet: snippet,
+        bytes: html.length,
+        when: new Date(),
+      }).catch(() => {});
+    } catch {}
+  }
+
+  const cards = parsePracticeCardsHTML(html);
+  return { source: "html", url, cards, html };
+}
+
 // ---------- MAIN SCAN ----------
 export async function runScan() {
   const LIMIT_POSTCODES = parseInt(process.env.SCAN_POSTCODES_LIMIT || "30", 10);
   const LIMIT_PRACTICES = parseInt(process.env.SCAN_PRACTICES_LIMIT || "30", 10);
   const DELAY_MS = parseInt(process.env.SCAN_DELAY_MS || "1200", 10);
   const STRICT = (process.env.SCAN_MATCH_STRICT || "0") === "1";
+  const ADMIN_EMAIL = process.env.ADMIN_EMAIL || process.env.OWNER_EMAIL; // optional warning recipient
 
   const watches = await Watch.find({}, { email: 1, postcode: 1 }).lean();
-  const postcodes = uniq(watches.map((w) => normPostcode(w.postcode))).slice(
-    0,
-    LIMIT_POSTCODES
-  );
+  const postcodes = uniq(watches.map((w) => normPostcode(w.postcode))).slice(0, LIMIT_POSTCODES);
 
-  let checked = 0,
-    found = 0,
-    alertsSent = 0;
-  const debugMeta = { postcodesCount: postcodes.length, samples: [] };
+  let checked = 0, found = 0, alertsSent = 0;
+  const debugMeta = { postcodesCount: postcodes.length, samples: [], flags: {} };
 
+  // Postcode → watchers map
   const byPostcode = new Map();
   for (const w of watches) {
     const pc = normPostcode(w.postcode);
@@ -255,33 +337,35 @@ export async function runScan() {
     byPostcode.get(pc).push(w);
   }
 
+  // Aggregate signal to detect cookie wall/layout change
+  let totalCards = 0;
+  let suspectedCookieWall = false;
+
   for (const pc of postcodes) {
     try {
-      const { url, html } = await resolveResultsPageForPostcode(pc);
-      const cards = parsePracticeCardsHTML(html);
+      const { source, url, cards, html } = await getPracticeCardsForPostcode(pc);
+      totalCards += (cards?.length || 0);
 
       if (SCAN_DEBUG && debugMeta.samples.length < 5) {
-        debugMeta.samples.push({ pc, url, cards: cards.length });
+        debugMeta.samples.push({ pc, source, url, cards: cards.length });
       }
 
-      if (SCAN_SNAPSHOT) {
-        const snippet = html.replace(/\s+/g, " ").slice(0, 2500);
-        await ScanLog.create({
-          pc,
-          url,
-          htmlSnippet: snippet,
-          bytes: html.length,
-          when: new Date(),
-        }).catch(() => {});
+      // crude cookie-wall detection
+      if (html && /cookie/i.test(html) && /consent/i.test(html) && !/nhsuk-card__link|services\/dentist\//i.test(html)) {
+        suspectedCookieWall = true;
       }
 
       for (const c of cards.slice(0, LIMIT_PRACTICES)) {
         checked++;
+
+        // determine accepting
         let accepting = false;
         try {
           const detail = await fetchText(c.link);
           accepting = isAccepting(detail, STRICT);
-        } catch {}
+        } catch {
+          // ignore
+        }
 
         const id = (c.link || c.name + "|" + pc).toLowerCase();
         const prev = await PracticeState.findOne({ practiceId: id }).lean();
@@ -314,28 +398,83 @@ Check details: ${c.link}
 Please call the practice directly to confirm before travelling.
 
 — Dentist Radar`;
-            const r = await sendEmail(
-              w.email,
-              subj,
-              text,
-              "availability",
-              { practice: c.name, postcode: pc, link: c.link }
-            );
+            const r = await sendEmail(w.email, subj, text, "availability", {
+              practice: c.name,
+              postcode: pc,
+              link: c.link,
+            });
             if (r.ok) alertsSent++;
           }
         }
       }
+
       await sleep(DELAY_MS);
     } catch (e) {
       if (SCAN_DEBUG) {
         if (!debugMeta.errors) debugMeta.errors = [];
-        debugMeta.errors.push({ pc, error: e.message });
+        if (debugMeta.errors.length < 5) debugMeta.errors.push({ pc, error: e.message });
       }
     }
   }
 
-  const result = { checked, found, alertsSent };
-  if (SCAN_DEBUG) result.meta = debugMeta;
+  // ---------- HEALTH MONITOR ----------
+  const status = (await ScanStatus.findById("global").lean()) || { zeroRuns: 0 };
+  if (totalCards > 0) {
+    await ScanStatus.updateOne(
+      { _id: "global" },
+      { $set: { zeroRuns: 0, lastOkAt: new Date() } },
+      { upsert: true }
+    );
+  } else {
+    const next = (status.zeroRuns || 0) + 1;
+    await ScanStatus.updateOne(
+      { _id: "global" },
+      { $set: { zeroRuns: next }, $setOnInsert: { lastOkAt: null } },
+      { upsert: true }
+    );
+
+    // After 3 consecutive zero-card runs, send a warning email
+    if (ADMIN_EMAIL && next >= 3) {
+      const warnText = `DentistRadar scanner warning:
+
+Consecutive runs with zero cards: ${next}
+Suspected cookie wall: ${suspectedCookieWall ? "Yes" : "No"}
+
+Actions:
+• Open /admin.html and run Manual Scan
+• In Render -> Env, set SCAN_SNAPSHOT=1
+• Check Mongo 'scanlogs' for htmlSnippet
+• Review NHS layout / cookies
+
+— DentistRadar Monitor`;
+
+      await sendEmail(
+        ADMIN_EMAIL,
+        "DentistRadar: Scanner reported zero results",
+        warnText,
+        "scanner-warning",
+        { suspectedCookieWall, zeroRuns: next }
+      ).catch(() => {});
+      await ScanStatus.updateOne(
+        { _id: "global" },
+        { $set: { lastWarnAt: new Date() } },
+        { upsert: true }
+      );
+    }
+  }
+
+  const result = { checked, found, alertsSent, totalCards };
+  if (SCAN_DEBUG) {
+    result.meta = {
+      ...result.meta,
+      samples: debugMeta.samples,
+      errors: debugMeta.errors,
+      flags: {
+        suspectedCookieWall,
+        usedApi: !!process.env.NHS_API_KEY,
+      },
+    };
+  }
   return result;
 }
 
