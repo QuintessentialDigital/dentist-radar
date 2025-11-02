@@ -1,8 +1,6 @@
-// scanner.js — v1.1.2
-// - NHS URL resolver + robust fetch with retries
-// - Broader parser (multiple NHS layouts)
-// - Sends consent cookie header (reduces interstitials)
-// - Debug meta + optional HTML snapshots to Mongo (SCAN_SNAPSHOT=1)
+// scanner.js — v1.3
+// Strategy: NHS JSON API (if key available) ➜ HTML parsers ➜ robust retries
+// Keeps Mongo, Postmark, debug meta, optional snapshots. No baseline regressions.
 
 import mongoose from "mongoose";
 
@@ -24,7 +22,7 @@ const practiceStateSchema = new mongoose.Schema(
   { versionKey: false, timestamps: true }
 );
 
-// Optional tiny snapshot store (for debugging HTML)
+// optional mini log for HTML snapshots during debug
 const scanLogSchema = new mongoose.Schema(
   { pc: String, url: String, htmlSnippet: String, bytes: Number, when: Date },
   { versionKey: false }
@@ -61,15 +59,12 @@ const isAccepting = (html, strict = false) => {
   return acceptingPhrases.some((p) => body.includes(p));
 };
 
-// ---------- Fetch with retries (+ consent cookie) ----------
+// ---------- HTTP fetchers ----------
 async function fetchText(url) {
   const ua =
     process.env.NHS_UA ||
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36";
-
-  // Pretend consent accepted to avoid interstitials
   const cookie = process.env.NHS_COOKIE || "nhsuk-cookie-consent=accepted";
-
   const headers = {
     "User-Agent": ua,
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -99,7 +94,29 @@ async function fetchText(url) {
   throw lastErr || new Error("fetch_failed");
 }
 
-// ---------- Resolve NHS results URL ----------
+async function fetchJSON(url, headers = {}) {
+  const maxRetries = 3;
+  const baseDelay = 600;
+  let lastErr;
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 12000);
+      const r = await fetch(url, { headers, redirect: "follow", signal: ctrl.signal });
+      clearTimeout(timeout);
+      if (r.status === 403 || r.status === 429) throw new Error(`api_blocked_${r.status}`);
+      if (!r.ok) throw new Error(`api_http_${r.status}`);
+      return await r.json();
+    } catch (err) {
+      lastErr = err;
+      const delay = baseDelay * Math.pow(2, i) + Math.floor(Math.random() * 150);
+      await sleep(delay);
+    }
+  }
+  throw lastErr || new Error("api_fetch_failed");
+}
+
+// ---------- Resolve NHS HTML results URL ----------
 async function resolveResultsPageForPostcode(pc) {
   const BASE = (process.env.NHS_BASE || "https://www.nhs.uk/service-search/find-a-dentist").replace(/\/+$/, "");
   const DEFAULT_PATH = process.env.NHS_RESULT_PATH || "/results?location={POSTCODE}";
@@ -119,9 +136,7 @@ async function resolveResultsPageForPostcode(pc) {
       if (!/page not found|404 not found/i.test(html)) {
         return { url, html };
       }
-    } catch {
-      continue;
-    }
+    } catch { /* try next */ }
   }
   throw new Error("no_results_url_resolved");
 }
@@ -153,11 +168,11 @@ async function sendEmail(to, subject, text, type = "availability", meta = {}) {
   return { ok, status: r.status, body };
 }
 
-// ---------- Parser (broader patterns) ----------
-function parsePracticeCards(html) {
+// ---------- Parser (HTML) ----------
+function parsePracticeCardsHTML(html) {
   const out = [];
 
-  // Primary: nhsuk-card__link anchors
+  // 1) nhsuk-card__link anchors
   let re = /<a[^>]+class="[^"]*nhsuk-card__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
   let m;
   while ((m = re.exec(html))) {
@@ -166,7 +181,7 @@ function parsePracticeCards(html) {
     out.push({ name: name || "Unknown Practice", link: href.startsWith("http") ? href : "https://www.nhs.uk" + href });
   }
 
-  // Fallback A: dentist service links anywhere
+  // 2) dentist service links anywhere
   if (out.length === 0) {
     re = /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     while ((m = re.exec(html))) {
@@ -176,7 +191,7 @@ function parsePracticeCards(html) {
     }
   }
 
-  // Fallback B: headings wrapping links
+  // 3) headings wrapping links
   if (out.length === 0) {
     re = /<h2[^>]*class="[^"]*nhsuk-card__heading[^"]*"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/h2>/gi;
     while ((m = re.exec(html))) {
@@ -186,7 +201,7 @@ function parsePracticeCards(html) {
     }
   }
 
-  // Fallback C: list-panel links (seen on some NHS result templates)
+  // 4) list panel variant
   if (out.length === 0) {
     re = /<a[^>]+class="[^"]*nhsuk-list-panel__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
     while ((m = re.exec(html))) {
@@ -206,6 +221,66 @@ function parsePracticeCards(html) {
   });
 }
 
+// ---------- Parser (NHS JSON API) ----------
+function parsePracticeCardsAPI(json) {
+  const out = [];
+  const items =
+    json?.results ||
+    json?.organisations ||
+    json?.value ||               // common for some NHS APIs
+    json?.items ||
+    [];
+
+  for (const it of items) {
+    const name = it.name || it.title || it.practiceName || it.organisationName;
+    // Try common URL/ID fields
+    let url = it.url || it.href || it.link || it.websiteUrl;
+    const slug = it.slug || it.path || it.relativeUrl;
+    if (!url && slug) url = slug.startsWith("http") ? slug : "https://www.nhs.uk" + slug;
+
+    if (name && url) {
+      out.push({ name: name.trim(), link: url });
+    }
+  }
+  return out;
+}
+
+// ---------- Try NHS API first, then HTML ----------
+async function getPracticeCardsForPostcode(pc) {
+  const key = process.env.NHS_API_KEY || ""; // subscription key from NHS developer portal
+  const pcEnc = encodeURIComponent(pc.toUpperCase());
+
+  if (key) {
+    // Try likely endpoints (v2 orgs/service-search)
+    const candidates = [
+      `https://api.nhs.uk/service-search/organisations?api-version=2&search=${pcEnc}&top=20&skip=0&serviceType=dentist`,
+      `https://api.nhs.uk/service-search/organisations?api-version=2&search=${pcEnc}&top=20&skip=0`,
+      `https://api.nhs.uk/service-search?api-version=2&search=${pcEnc}&top=20&skip=0`
+    ];
+    const headers = { "subscription-key": key, Accept: "application/json" };
+    for (const url of candidates) {
+      try {
+        const json = await fetchJSON(url, headers);
+        const cards = parsePracticeCardsAPI(json);
+        if (cards.length > 0) return { source: "api", url, cards };
+      } catch { /* try next */ }
+    }
+  }
+
+  // Fallback to HTML path
+  const { url, html } = await resolveResultsPageForPostcode(pc);
+
+  if (SCAN_SNAPSHOT) {
+    try {
+      const snippet = html.replace(/\s+/g, " ").slice(0, 2000);
+      await ScanLog.create({ pc, url, htmlSnippet: snippet, bytes: html.length, when: new Date() });
+    } catch {}
+  }
+
+  const cards = parsePracticeCardsHTML(html);
+  return { source: "html", url, cards };
+}
+
 // ---------- Main scan ----------
 export async function runScan() {
   const LIMIT_POSTCODES = parseInt(process.env.SCAN_POSTCODES_LIMIT || "30", 10);
@@ -218,8 +293,6 @@ export async function runScan() {
 
   let checked = 0, found = 0, alertsSent = 0;
   const debugMeta = { postcodesCount: postcodes.length, samples: [] };
-  const errorSamples = [];
-
   const byPostcode = new Map();
   for (const w of watches) {
     const pc = normPostcode(w.postcode);
@@ -229,29 +302,21 @@ export async function runScan() {
 
   for (const pc of postcodes) {
     try {
-      const { url, html } = await resolveResultsPageForPostcode(pc);
+      const { source, url, cards } = await getPracticeCardsForPostcode(pc);
 
-      if (SCAN_SNAPSHOT) {
-        try {
-          const snippet = html.replace(/\s+/g, " ").slice(0, 2000);
-          await ScanLog.create({ pc, url, htmlSnippet: snippet, bytes: html.length, when: new Date() });
-        } catch {}
+      if (SCAN_DEBUG && debugMeta.samples.length < 5) {
+        debugMeta.samples.push({ pc, source, url, cards: cards.length });
       }
 
-      await sleep(DELAY_MS);
-      const cards = parsePracticeCards(html).slice(0, LIMIT_PRACTICES);
-
-      const sample = { pc, url, cards: cards.length };
-      if (SCAN_DEBUG && debugMeta.samples.length < 3) debugMeta.samples.push(sample);
-
-      for (const c of cards) {
+      for (const c of cards.slice(0, LIMIT_PRACTICES)) {
         checked++;
         let accepting = false;
         try {
-          const detail = await fetchText(c.link);
-          accepting = isAccepting(detail, STRICT);
+          const detail = c.link.startsWith("http") ? await fetchText(c.link) : "";
+          accepting = isAccepting(detail || "", STRICT);
         } catch {
-          accepting = isAccepting(html, STRICT);
+          // If detail page fails, we can try HTML list content or let it be false
+          accepting = false;
         }
 
         const id = (c.link || c.name + "|" + pc).toLowerCase();
@@ -281,8 +346,13 @@ Please call the practice directly to confirm before travelling.
           }
         }
       }
+
+      await sleep(DELAY_MS);
     } catch (e) {
-      if (SCAN_DEBUG && errorSamples.length < 5) errorSamples.push({ pc, error: e.message });
+      if (SCAN_DEBUG) {
+        if (!debugMeta.errors) debugMeta.errors = [];
+        if (debugMeta.errors.length < 5) debugMeta.errors.push({ pc, error: e.message });
+      }
     }
   }
 
