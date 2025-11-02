@@ -1,33 +1,22 @@
 {
-  "name": "dentistradar",
-  "version": "1.8.3",
-  "description": "Dentist Radar — Get notified when NHS dentists open to new patients.",
-  "main": "server.js",
+  "name": "dentist-radar",
+  "version": "1.8.0",
+  "description": "Dentist Radar — micro-SaaS to alert users when NHS dentists open",
   "type": "module",
+  "main": "server.js",
   "scripts": {
-    "start": "node server.js"
-  },
-  "dependencies": {
-    "body-parser": "^1.20.3",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "mongoose": "^8.4.0",
-    "stripe": "^14.6.0"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "engines": {
     "node": ">=18.0.0"
   },
-  "keywords": [
-    "dentist",
-    "nhs",
-    "alerts",
-    "micro-saas",
-    "nodejs",
-    "express",
-    "mongodb",
-    "stripe"
-  ],
-  "author": "Dentist Radar Team",
-  "license": "MIT"
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "mongoose": "^8.6.3",
+    "node-fetch": "^3.3.2",
+    "stripe": "^15.11.0"
+  }
 }
