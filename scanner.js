@@ -1,13 +1,11 @@
-// scanner.js — v1.0 stable build for Dentist Radar
-// ------------------------------------------------
-// Robust NHS fetch with retries, debug logging, polite rate limiting
-// Safe to run in Render (uses existing DB + Postmark setup)
+// scanner.js — v1.1 NHS URL fix + debug safe version
+//----------------------------------------------------
 
 import mongoose from "mongoose";
 
-// --------------------------------------------------
-// MongoDB connection (reuse from server.js if present)
-// --------------------------------------------------
+//----------------------------------------------------
+// Database connection
+//----------------------------------------------------
 if (!mongoose.connection.readyState) {
   const uri = process.env.MONGO_URI || "";
   if (uri) {
@@ -15,9 +13,9 @@ if (!mongoose.connection.readyState) {
   }
 }
 
-// --------------------------------------------------
+//----------------------------------------------------
 // Schemas
-// --------------------------------------------------
+//----------------------------------------------------
 const watchSchema = new mongoose.Schema({ email: String, postcode: String, radius: Number }, { timestamps: true });
 const emailLogSchema = new mongoose.Schema(
   { to: String, subject: String, type: String, provider: String, providerId: String, meta: Object, sentAt: Date },
@@ -32,9 +30,9 @@ const Watch = mongoose.models.Watch || mongoose.model("Watch", watchSchema);
 const EmailLog = mongoose.models.EmailLog || mongoose.model("EmailLog", emailLogSchema);
 const PracticeState = mongoose.models.PracticeState || mongoose.model("PracticeState", practiceStateSchema);
 
-// --------------------------------------------------
-// Utility helpers
-// --------------------------------------------------
+//----------------------------------------------------
+// Helpers
+//----------------------------------------------------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const uniq = (arr) => [...new Set(arr)];
 const SCAN_DEBUG = (process.env.SCAN_DEBUG || "0") === "1";
@@ -59,9 +57,9 @@ const isAccepting = (html, strict = false) => {
   return acceptingPhrases.some((p) => body.includes(p));
 };
 
-// --------------------------------------------------
-// Stronger fetchText with retries + backoff
-// --------------------------------------------------
+//----------------------------------------------------
+// Safe fetchText with retry + timeout
+//----------------------------------------------------
 async function fetchText(url, opts = {}) {
   const ua =
     process.env.NHS_UA ||
@@ -94,27 +92,38 @@ async function fetchText(url, opts = {}) {
   throw lastErr || new Error("fetch_failed");
 }
 
-// --------------------------------------------------
-// Parse NHS results page
-// --------------------------------------------------
-function parsePracticeCards(html) {
-  const out = [];
-  const cardAnchorRegex = /<a[^>]+class="[^"]*nhsuk-card__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-  let m;
-  while ((m = cardAnchorRegex.exec(html))) {
-    const href = m[1];
-    const name = m[2].replace(/<[^>]+>/g, " ").trim();
-    out.push({
-      name: name || "Unknown Practice",
-      link: href.startsWith("http") ? href : "https://www.nhs.uk" + href
-    });
+//----------------------------------------------------
+// NHS URL resolver - fixes http_404
+//----------------------------------------------------
+async function resolveResultsPageForPostcode(pc) {
+  const BASE = (process.env.NHS_BASE || "https://www.nhs.uk/service-search/find-a-dentist").replace(/\/+$/,"");
+  const DEFAULT_PATH = process.env.NHS_RESULT_PATH || "/results?location={POSTCODE}";
+  const pcEnc = encodeURIComponent(pc.toUpperCase());
+
+  const candidates = [
+    `${BASE}${DEFAULT_PATH.replace("{POSTCODE}", pcEnc)}`,
+    `${BASE}/results?location=${pcEnc}`,
+    `${BASE}?location=${pcEnc}`,
+    `https://www.nhs.uk/service-search/find-a-dentist/results?location=${pcEnc}`,
+    `https://www.nhs.uk/service-search/find-a-dentist?location=${pcEnc}`
+  ];
+
+  for (const url of candidates) {
+    try {
+      const html = await fetchText(url);
+      if (!/page not found|404 not found/i.test(html)) {
+        return { url, html };
+      }
+    } catch (e) {
+      continue;
+    }
   }
-  return out;
+  throw new Error("no_results_url_resolved");
 }
 
-// --------------------------------------------------
-// Postmark email sender
-// --------------------------------------------------
+//----------------------------------------------------
+// Email sender via Postmark
+//----------------------------------------------------
 async function sendEmail(to, subject, text, type = "availability", meta = {}) {
   const key = process.env.POSTMARK_TOKEN;
   if (!key) return { ok: false, skipped: true };
@@ -135,16 +144,15 @@ async function sendEmail(to, subject, text, type = "availability", meta = {}) {
   });
   const body = await r.json().catch(() => ({}));
   const ok = r.ok;
-
   if (ok) {
     await EmailLog.create({ to, subject, type, providerId: body.MessageID, meta, sentAt: new Date() }).catch(() => {});
   }
   return { ok, status: r.status, body };
 }
 
-// --------------------------------------------------
-// Main runScan()
-// --------------------------------------------------
+//----------------------------------------------------
+// Main scanning logic
+//----------------------------------------------------
 export async function runScan() {
   const BASE = (process.env.NHS_BASE || "https://www.nhs.uk/service-search/find-a-dentist").replace(/\/+$/, "");
   const PATH = process.env.NHS_RESULT_PATH || "/results?location={POSTCODE}";
@@ -170,9 +178,7 @@ export async function runScan() {
 
   for (const pc of postcodes) {
     try {
-      const pcEnc = encodeURIComponent(pc.toUpperCase());
-      const url = `${BASE}${PATH.replace("{POSTCODE}", pcEnc)}`;
-      const html = await fetchText(url);
+      const { url, html } = await resolveResultsPageForPostcode(pc);
       await sleep(DELAY_MS);
       const cards = parsePracticeCards(html).slice(0, LIMIT_PRACTICES);
 
@@ -182,7 +188,7 @@ export async function runScan() {
         try {
           const detail = await fetchText(c.link);
           accepting = isAccepting(detail, STRICT);
-        } catch (e) {
+        } catch {
           accepting = isAccepting(html, STRICT);
         }
         const id = (c.link || c.name + "|" + pc).toLowerCase();
@@ -223,9 +229,27 @@ Please call the practice directly to confirm before travelling.
   return result;
 }
 
-// --------------------------------------------------
-// If run standalone (node scanner.js)
-// --------------------------------------------------
+//----------------------------------------------------
+// Simple parser
+//----------------------------------------------------
+function parsePracticeCards(html) {
+  const out = [];
+  const cardAnchorRegex = /<a[^>]+class="[^"]*nhsuk-card__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = cardAnchorRegex.exec(html))) {
+    const href = m[1];
+    const name = m[2].replace(/<[^>]+>/g, " ").trim();
+    out.push({
+      name: name || "Unknown Practice",
+      link: href.startsWith("http") ? href : "https://www.nhs.uk" + href
+    });
+  }
+  return out;
+}
+
+//----------------------------------------------------
+// Standalone mode (node scanner.js)
+//----------------------------------------------------
 if (import.meta.url === `file://${process.argv[1]}`) {
   runScan()
     .then((r) => {
