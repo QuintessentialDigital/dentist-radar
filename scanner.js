@@ -1,32 +1,41 @@
-// scanner.js — API-first robust scanner with HTML fallback, notifications & self-monitoring
-// Safe: no UI changes; plugs into existing Mongo & Postmark via env vars.
+// scanner.js — robust discovery (multi-URL + JSON-LD + regex), API-first, HTML fallback.
+// Leaves UI, Mongo saves, Stripe, welcome emails untouched.
 
 import mongoose from "mongoose";
 
-/* ---------- Config (env) ---------- */
+/* ---------- Config ---------- */
 const NHS_API_BASE = process.env.NHS_API_BASE || "https://api.nhs.uk/service-search";
 const NHS_API_VERSION = process.env.NHS_API_VERSION || "2";
 const NHS_API_KEY = process.env.NHS_API_KEY || ""; // optional but preferred
 
 const NHS_HTML_BASE = "https://www.nhs.uk";
-const NHS_FIND_BASE = `${NHS_HTML_BASE}/service-search/find-a-dentist/results`;
+
+// We’ll try these result page variants (NHS uses different routes)
+function resultUrlsFor(pc) {
+  const enc = encodeURIComponent(pc);
+  return [
+    `${NHS_HTML_BASE}/service-search/find-a-dentist/results/${enc}?distance=30`,                  // variant A (your current)
+    `${NHS_HTML_BASE}/service-search/other-services/Dentists/LocationSearch/${enc}?distance=30`, // legacy
+    `${NHS_HTML_BASE}/find-a-dentist/results/${enc}?distance=30`,                                 // variant B (short)
+  ];
+}
 
 const SCAN_MODE = (process.env.SCAN_MODE || "api").toLowerCase();  // "api" | "html" | "both"
 const SCAN_MAX_PCS = Number(process.env.SCAN_MAX_PCS || 40);
 const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 800);
 const SCAN_DEBUG = process.env.SCAN_DEBUG === "1";
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || ""; // to notify on persistent failures
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "";
 
 // Email (Postmark)
 const POSTMARK_TOKEN = process.env.POSTMARK_TOKEN || "";
 const DOMAIN = process.env.DOMAIN || "dentistradar.co.uk";
 const MAIL_FROM = process.env.MAIL_FROM || `alerts@${DOMAIN}`;
 
-/* ---------- Mongo collections (no new models) ---------- */
+/* ---------- Mongo collections ---------- */
 const watchesCol   = () => mongoose.connection.collection("watches");
-const emaillogsCol = () => mongoose.connection.collection("emaillogs"); // existing EmailLog via server.js
-const notifiedCol  = () => mongoose.connection.collection("notified");  // for dedupe notifications
+const emaillogsCol = () => mongoose.connection.collection("emaillogs");
+const notifiedCol  = () => mongoose.connection.collection("notified");
 const statusCol    = () => mongoose.connection.collection("scanner_status");
 
 /* ---------- Utils ---------- */
@@ -60,12 +69,9 @@ function dedupe(arr, keyFn) {
   return out;
 }
 
-/* ---------- Email helpers (local; does not change server.js) ---------- */
+/* ---------- Email (local) ---------- */
 async function sendEmail(to, subject, text, type = "availability", meta = {}) {
-  if (!POSTMARK_TOKEN) {
-    console.warn("📭 Postmark missing, email skipped:", subject);
-    return { ok:false, skipped:true };
-  }
+  if (!POSTMARK_TOKEN) return { ok:false, skipped:true };
   const res = await fetch("https://api.postmarkapp.com/email", {
     method: "POST",
     headers: {
@@ -77,29 +83,13 @@ async function sendEmail(to, subject, text, type = "availability", meta = {}) {
   });
   let body = {};
   try { body = await res.json(); } catch {}
-  const ok = res.ok;
-
-  // Also mirror a minimal log to emaillogs (keeps parity with server.js)
+  // mirror log
   try {
     await emaillogsCol().insertOne({
-      to, subject, type, provider: "postmark", providerId: body.MessageID,
-      meta, sentAt: new Date()
+      to, subject, type, provider: "postmark", providerId: body.MessageID, meta, sentAt: new Date()
     });
-  } catch (e) {
-    console.error("⚠️ emaillogs insert error:", e?.message || e);
-  }
-
-  if (!ok) console.error("❌ Postmark error:", res.status, body);
-  return { ok, status: res.status, body };
-}
-
-async function notifyAdmin(subject, lines) {
-  if (!ADMIN_EMAIL) return;
-  try {
-    await sendEmail(ADMIN_EMAIL, subject, Array.isArray(lines)?lines.join("\n"):String(lines), "admin");
-  } catch (e) {
-    console.error("❌ notifyAdmin failed:", e?.message || e);
-  }
+  } catch {}
+  return { ok: res.ok, status: res.status, body };
 }
 
 /* ---------- NHS helpers ---------- */
@@ -129,35 +119,108 @@ function parseOrgsFromJSON(obj) {
   return dedupe(out, x => (x.id || x.link || x.name || Math.random()));
 }
 
-function parseCardsFromHTMLList(html) {
-  const out = [];
-  const patterns = [
-    /<a[^>]+class="[^"]*nhsuk-card__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
-    /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
-  ];
-  for (const re of patterns) {
-    let m;
+/* ---- HTML parsers (broadened) ---- */
+function parseCardsFromHTML(html, diag) {
+  const results = [];
+  const patternsHit = [];
+
+  // 1) Card link pattern (nhsuk-card__link)
+  {
+    const re = /<a[^>]+class="[^"]*nhsuk-card__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let m; let count = 0;
     while ((m = re.exec(html))) {
       const href = m[1].startsWith("http") ? m[1] : NHS_HTML_BASE + m[1];
       const name = (m[2] || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "Dentist";
-      out.push({ name, link: href });
+      results.push({ name, link: href });
+      count++;
     }
-    if (out.length) break;
+    if (count) patternsHit.push({ pattern: "card__link", count });
+  }
+
+  // 2) Direct dentist service links
+  {
+    const re = /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let m; let count = 0;
+    while ((m = re.exec(html))) {
+      const href = NHS_HTML_BASE + m[1];
+      const name = (m[2] || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "Dentist";
+      results.push({ name, link: href });
+      count++;
+    }
+    if (count) patternsHit.push({ pattern: "services/dentist", count });
+  }
+
+  // 3) JSON-LD (if present)
+  {
+    const re = /<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
+    let m; let count = 0;
+    while ((m = re.exec(html))) {
+      try {
+        const node = JSON.parse(m[1]);
+        const arr = Array.isArray(node) ? node : [node];
+        for (const n of arr) {
+          if (!n) continue;
+          const name = n.name || n?.item?.name;
+          let url = n.url || n?.item?.url;
+          if (name && url) {
+            if (!/^https?:\/\//i.test(url)) url = NHS_HTML_BASE + url;
+            results.push({ name: String(name).trim(), link: url });
+            count++;
+          }
+          if (Array.isArray(n.itemListElement)) {
+            for (const it of n.itemListElement) {
+              const nm = it?.name || it?.item?.name;
+              let u  = it?.url || it?.item?.url;
+              if (nm && u) {
+                if (!/^https?:\/\//i.test(u)) u = NHS_HTML_BASE + u;
+                results.push({ name: String(nm).trim(), link: u });
+                count++;
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+    if (count) patternsHit.push({ pattern: "jsonld", count });
+  }
+
+  // 4) Very broad dentist link catch-all
+  {
+    const re = /<a[^>]+href="(\/[^"]*dentist[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    let m; let count = 0;
+    while ((m = re.exec(html))) {
+      const href = NHS_HTML_BASE + m[1];
+      const name = (m[2] || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "Dentist";
+      results.push({ name, link: href });
+      count++;
+    }
+    if (count) patternsHit.push({ pattern: "generic-dentist", count });
+  }
+
+  if (diag) diag.patternsHit = (diag.patternsHit || []).concat(patternsHit);
+  return dedupe(results, x => x.link || x.name);
+}
+
+async function htmlCandidates(pc, diag) {
+  const urls = resultUrlsFor(pc);
+  let out = [];
+  for (const url of urls) {
+    const r = await fetchText(url, {
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "text/html",
+      "Referer": NHS_HTML_BASE + "/",
+      "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true"
+    });
+    diag?.calls.push({ url, ok:r.ok, isJSON:r.isJSON, status:r.status, source:"html", htmlBytes: r.text.length });
+    if (!r.ok) continue;
+    const cards = parseCardsFromHTML(r.text, diag);
+    out = out.concat(cards);
+    if (cards.length) break; // one variant succeeded—stop
   }
   return dedupe(out, x => x.link || x.name);
 }
 
-function detailMentionsAccepting(html) {
-  // Inclusive, case-insensitive checks
-  const accept = /(accepting|taking)\s+new\s+nhs\s+patients/i;
-  const alt    = /(open\s+to\s+new\s+nhs\s+patients|now\s+accepting\s+nhs)/i;
-  const deny   = /(not\s+accepting|currently\s+full|no\s+longer\s+accepting|no\s+new\s+nhs\s+patients)/i;
-  if (deny.test(html)) return false;
-  return accept.test(html) || alt.test(html);
-}
-
-/* ---------- Probes ---------- */
-async function apiSearchByLatLon(pc, diag) {
+async function apiCandidates(pc, diag) {
   if (!NHS_API_KEY) return [];
   const { lat, lon } = await geocode(pc);
   if (!lat || !lon) { diag?.errors.push({ step:"geocode", pc, msg:"no_lat_lon"}); return []; }
@@ -180,19 +243,6 @@ async function apiSearchByLatLon(pc, diag) {
   return parseOrgsFromJSON(r.json);
 }
 
-async function htmlListByPC(pc, diag) {
-  const url = `${NHS_FIND_BASE}/${encodeURIComponent(pc)}?distance=30`;
-  const r = await fetchText(url, {
-    "User-Agent": "Mozilla/5.0",
-    "Accept": "text/html",
-    "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true",
-    "Referer": NHS_HTML_BASE + "/",
-  });
-  diag?.calls.push({ url, ok:r.ok, isJSON:r.isJSON, status:r.status, source:"html" });
-  if (!r.ok) return [];
-  return parseCardsFromHTMLList(r.text);
-}
-
 async function fetchDetail(link, diag) {
   const r = await fetchText(link, {
     "User-Agent": "Mozilla/5.0",
@@ -201,7 +251,15 @@ async function fetchDetail(link, diag) {
   });
   diag?.calls.push({ url:link, ok:r.ok, isJSON:r.isJSON, status:r.status, kind:"detail" });
   if (!r.ok) return { accepting:false, html:"" };
-  return { accepting: detailMentionsAccepting(r.text), html: r.text };
+
+  // Decide acceptance via phrases
+  const html = r.text;
+  const deny   = /(not\s+accepting|currently\s+full|no\s+longer\s+accepting|no\s+new\s+nhs\s+patients)/i;
+  const accept = /(accepting|taking)\s+new\s+nhs\s+patients/i;
+  const alt    = /(open\s+to\s+new\s+nhs\s+patients|now\s+accepting\s+nhs)/i;
+  if (deny.test(html)) return { accepting:false, htmlLen: html.length };
+  const accepting = accept.test(html) || alt.test(html);
+  return { accepting, htmlLen: html.length };
 }
 
 /* ---------- Watch helpers ---------- */
@@ -217,21 +275,18 @@ async function distinctPostcodesFromWatches() {
   }
   return Array.from(set).slice(0, SCAN_MAX_PCS);
 }
-
 async function usersWatching(pc) {
   const docs = await watchesCol().find({ postcode: { $in: [pc, pc.toUpperCase()] } }).project({ email:1, radius:1 }).toArray();
   return docs.map(d => ({ email: d.email, radius: d.radius || 5 }));
 }
-
 function notifiedKey(email, pc, practice) {
   return `${String(email||"").toLowerCase()}|${pc}|${practice}`.toLowerCase();
 }
 
 /* ---------- Public entry ---------- */
 export async function runScan() {
-  const diag = SCAN_DEBUG ? { calls: [], errors: [] } : null;
+  const diag = SCAN_DEBUG ? { calls: [], errors: [], patternsHit: [] } : null;
 
-  // scanner health doc
   const statusDoc = await statusCol().findOne({ _id:"scanner" }) || { _id:"scanner", fail_count:0, last_ok:null, last_error:null };
 
   try {
@@ -241,19 +296,20 @@ export async function runScan() {
     for (const pc of postcodes) {
       let candidates = [];
 
+      // API first?
       if (SCAN_MODE === "api" || SCAN_MODE === "both") {
-        const viaApi = await apiSearchByLatLon(pc, diag);
-        candidates = candidates.concat(viaApi);
+        const api = await apiCandidates(pc, diag);
+        candidates = candidates.concat(api);
       }
-      if (!candidates.length || SCAN_MODE === "html" || SCAN_MODE === "both") {
-        const viaHtml = await htmlListByPC(pc, diag);
-        candidates = candidates.concat(viaHtml);
-      }
+
+      // Always try HTML too (safety net)
+      const html = await htmlCandidates(pc, diag);
+      candidates = candidates.concat(html);
 
       // dedupe
       candidates = dedupe(candidates, c => c.link || c.name || c.id || `${c.name}|${pc}`);
 
-      // inspect details for "accepting new NHS patients"
+      // inspect details
       for (const c of candidates) {
         if (!c.link) continue;
         const detail = await fetchDetail(c.link, diag);
@@ -285,36 +341,37 @@ export async function runScan() {
             alertsSent++;
           }
         }
-        await sleep(250); // be nice between detail pages
+        await sleep(250);
       }
 
       checked++;
       await sleep(SCAN_DELAY_MS);
     }
 
-    // success: reset fail counter
     statusDoc.fail_count = 0;
     statusDoc.last_ok = new Date();
     statusDoc.last_error = null;
     await statusCol().updateOne({ _id:"scanner" }, { $set: statusDoc }, { upsert:true });
 
-    const result = { ok: true, checked, found, alertsSent };
-    if (SCAN_DEBUG) result.meta = { usedApi: !!NHS_API_KEY, mode: SCAN_MODE, pcs: postcodes.length, calls: diag.calls, errors: diag.errors };
-    return result;
+    const out = { ok: true, checked, found, alertsSent };
+    if (SCAN_DEBUG) out.meta = {
+      usedApi: !!NHS_API_KEY,
+      mode: SCAN_MODE,
+      pcs: postcodes.length,
+      calls: diag.calls,
+      patternsHit: diag.patternsHit
+    };
+    return out;
 
   } catch (err) {
-    // failure: increment and alert admin on repeated failures
     statusDoc.fail_count = (statusDoc.fail_count || 0) + 1;
     statusDoc.last_error = String(err?.message || err);
     await statusCol().updateOne({ _id:"scanner" }, { $set: statusDoc }, { upsert:true });
 
     if (statusDoc.fail_count >= 3 && ADMIN_EMAIL) {
-      await notifyAdmin("Dentist Radar scanner issue", [
-        `The scanner has failed ${statusDoc.fail_count} times in a row.`,
-        `Last error: ${statusDoc.last_error}`,
-        `Time: ${new Date().toISOString()}`,
-        `Action: check NHS API/CSS changes or keys.`
-      ]);
+      await sendEmail(ADMIN_EMAIL, "Dentist Radar scanner issue",
+        `The scanner has failed ${statusDoc.fail_count} times in a row.\nLast error: ${statusDoc.last_error}\nTime: ${new Date().toISOString()}`,
+        "admin");
     }
 
     const out = { ok: true, checked: 0, found: 0, alertsSent: 0, note: "scanner_exception" };
