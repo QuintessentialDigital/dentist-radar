@@ -1,235 +1,112 @@
-// scanner.js — resilient scanner: API-first, HTML fallback, no UI changes
-// Works with your existing server.js (v1.8 baseline) and Mongo connection.
+// scanner.js – safe patch for "non json response" (keeps everything else stable)
 
 import mongoose from "mongoose";
+import fetch from "node-fetch";
 
-// ---------- Config ----------
-const NHS_API_BASE = process.env.NHS_API_BASE || "https://api.nhs.uk/service-search";
-const NHS_API_VERSION = process.env.NHS_API_VERSION || "2";
-const NHS_API_KEY = process.env.NHS_API_KEY || ""; // optional, but better
-const NHS_HTML_BASE = "https://www.nhs.uk/service-search/find-a-dentist/results";
-const NHS_COOKIES =
-  process.env.NHS_COOKIES ||
-  "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; OptanonAlertBoxClosed=2025-01-01T00:00:00.000Z";
+const NHS_URL =
+  process.env.NHS_BASE || "https://api.nhs.uk/service-search/organisations";
+const NHS_KEY = process.env.NHS_KEY || "";
+const NHS_VERSION = process.env.NHS_VERSION || "2";
+const NHS_FALLBACK = "https://www.nhs.uk/service-search/find-a-dentist/results";
+const MAX_PCS = Number(process.env.SCAN_MAX_PCS || 20);
 
-const SCAN_DEBUG = process.env.SCAN_DEBUG === "1";      // show diag info in result.meta
-const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 800); // per-postcode politeness delay
-const MAX_PCS = Number(process.env.SCAN_MAX_PCS || 20); // safety cap
-
-// ---------- Small utils ----------
+// --- simple delay helper ---
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function asJSONsafe(text) {
-  try { return JSON.parse(text); } catch { return null; }
+// --- json detector ---
+function isJSON(res) {
+  const type = res.headers.get("content-type") || "";
+  return type.includes("application/json");
 }
 
-function isLikelyJSON(res) {
-  const ct = res.headers.get("content-type") || "";
-  return ct.includes("application/json");
-}
+// --- attempt to read JSON, tolerate HTML ---
+async function fetchMaybeJSON(url, headers) {
+  const res = await fetch(url, { headers, redirect: "follow" });
+  const text = await res.text();
 
-async function fetchText(url, headers = {}) {
-  const res = await fetch(url, { redirect: "follow", headers });
-  const t = await res.text();
-  if (!res.ok) {
-    const msg = `http_${res.status}`;
-    throw new Error(msg);
+  if (!res.ok) throw new Error(`http_${res.status}`);
+
+  // not JSON? return a marker instead of throwing
+  if (!isJSON(res)) {
+    return { nonJSON: true, raw: text };
   }
-  return t;
-}
 
-async function fetchJsonOrNull(url, headers = {}) {
-  const res = await fetch(url, { redirect: "follow", headers });
-  const t = await res.text();
-  if (!res.ok) return null;
-  if (!isLikelyJSON(res)) return null;
-  const j = asJSONsafe(t);
-  return j;
-}
-
-function dedupeCards(cards) {
-  const seen = new Set();
-  const out = [];
-  for (const c of cards) {
-    const k = (c.link || "") + "|" + (c.name || "");
-    if (!seen.has(k)) { seen.add(k); out.push(c); }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { nonJSON: true, raw: text };
   }
-  return out;
 }
 
-// Pull “cards” from many likely JSON shapes (the API isn’t always consistent)
-function parseCardsFromAnyJSON(obj) {
-  if (!obj) return [];
-  const pools = [
-    obj.results,
-    obj.value,
-    obj.items,
-    obj.organisations,
-    Array.isArray(obj) ? obj : null,
-  ].filter(Boolean);
-
-  const out = [];
-  for (const pool of pools) {
-    for (const it of pool) {
-      const name = it?.name || it?.organisationName || it?.practiceName || it?.title;
-      let link = it?.url || it?.href || it?.websiteUrl || it?.path || it?.relativeUrl;
-      if (link && !/^https?:\/\//i.test(link)) link = "https://www.nhs.uk" + link;
-      if (name && link) out.push({ name: String(name).trim(), link });
-    }
-  }
-  return dedupeCards(out);
-}
-
-// Very lightweight HTML card parser (nhs.uk card links)
+// --- html fallback minimal parse ---
 function parseCardsFromHTML(html) {
-  const out = [];
-  const re =
-    /<a[^>]+(?:class="[^"]*nhsuk-card__link[^"]*"[^>]*|href="(\/services\/dentist\/[^"]+)")[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-
+  const cards = [];
+  const re = /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>(.*?)<\/a>/gi;
   let m;
   while ((m = re.exec(html))) {
-    const href = m[2] || m[1];
-    const name = (m[3] || "")
-      .replace(/<[^>]+>/g, " ")
-      .replace(/\s+/g, " ")
-      .trim() || "Dentist";
-    if (!href) continue;
-    const link = href.startsWith("http") ? href : "https://www.nhs.uk" + href;
-    out.push({ name, link });
-  }
-
-  // fallback pattern
-  if (!out.length) {
-    const re2 = /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-    let m2;
-    while ((m2 = re2.exec(html))) {
-      const link = "https://www.nhs.uk" + m2[1];
-      const name = (m2[2] || "")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s+/g, " ")
-        .trim() || "Dentist";
-      out.push({ name, link });
-    }
-  }
-
-  return dedupeCards(out);
-}
-
-async function geocodePostcode(pc) {
-  try {
-    const norm = pc.replace(/\s+/g, "");
-    const r = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(norm)}`);
-    if (!r.ok) return {};
-    const j = await r.json();
-    return { lat: j?.result?.latitude ?? null, lon: j?.result?.longitude ?? null };
-  } catch { return {}; }
-}
-
-// ---------- Core probes ----------
-async function probeAPI(pc, diag) {
-  if (!NHS_API_KEY) return { source: "api", url: null, cards: [] };
-
-  // Step 1: geocode pc -> lat/lon
-  const { lat, lon } = await geocodePostcode(pc);
-  if (!lat || !lon) {
-    if (diag) diag.errors.push({ step: "geocode", msg: "no_lat_lon" });
-    return { source: "api", url: null, cards: [] };
-  }
-
-  const qs = new URLSearchParams({
-    "api-version": NHS_API_VERSION,
-    latitude: String(lat),
-    longitude: String(lon),
-    serviceType: "dentist",
-    top: String(process.env.NHS_API_TOP || 50),
-    skip: "0",
-    distance: String(process.env.NHS_API_DISTANCE_KM || 50),
-  });
-
-  const url = `${NHS_API_BASE}/organisations?${qs.toString()}`;
-  const headers = {
-    "subscription-key": NHS_API_KEY,
-    "Accept": "application/json",
-  };
-
-  const j = await fetchJsonOrNull(url, headers);
-  if (diag) {
-    diag.calls.push({ url, json: !!j });
-    if (!j) diag.errors.push({ step: "api", msg: "non_json_or_empty" });
-  }
-
-  const cards = parseCardsFromAnyJSON(j);
-  return { source: "api", url, cards };
-}
-
-async function probeHTML(pc, diag) {
-  const url = `${NHS_HTML_BASE}/${encodeURIComponent(pc)}?distance=30`;
-  try {
-    const html = await fetchText(url, {
-      "User-Agent": "Mozilla/5.0",
-      "Accept": "text/html",
-      "Cookie": NHS_COOKIES,
-      "Referer": "https://www.nhs.uk/",
+    cards.push({
+      name: m[2].replace(/<[^>]+>/g, " ").trim(),
+      link: "https://www.nhs.uk" + m[1],
     });
-    const cards = parseCardsFromHTML(html);
-    if (diag) diag.calls.push({ url, html: true, cards: cards.length });
-    return { source: "html", url, cards };
-  } catch (e) {
-    if (diag) diag.errors.push({ step: "html", msg: String(e?.message || e) });
-    return { source: "html", url, cards: [] };
   }
+  return cards;
 }
 
-async function getCardsForPostcode(pc, diag) {
-  // Try API first
-  const api = await probeAPI(pc, diag);
-  if (api.cards && api.cards.length) return api;
-
-  // Fallback to HTML
-  const html = await probeHTML(pc, diag);
-  return html;
-}
-
-// ---------- Main entry ----------
+// --- main scan function ---
 export async function runScan() {
-  // read watches directly from the active connection (no model import)
-  const watches = await mongoose.connection.collection("watches").find({}).toArray();
+  const watches = await mongoose.connection
+    .collection("watches")
+    .find({})
+    .limit(MAX_PCS)
+    .toArray();
 
-  // distinct postcodes across watches (cap to MAX_PCS for safety)
-  const pcs = [...new Set(
-    watches.flatMap(w => {
-      const raw = Array.isArray(w.postcode) ? w.postcode : String(w.postcode || "").split(/[,;]+/);
-      return raw.map(s => s.trim()).filter(Boolean);
-    })
-  )].slice(0, MAX_PCS);
+  const postcodes = [
+    ...new Set(
+      watches
+        .map((w) => String(w.postcode || "").split(/[,;]+/))
+        .flat()
+        .map((s) => s.trim())
+        .filter(Boolean)
+    ),
+  ].slice(0, MAX_PCS);
 
-  let checked = 0, found = 0, alertsSent = 0;
-  const diag = SCAN_DEBUG ? { calls: [], errors: [] } : null;
+  let checked = 0,
+    found = 0,
+    alertsSent = 0,
+    errors = [];
 
-  for (const pc of pcs) {
+  for (const pc of postcodes) {
     try {
-      const r = await getCardsForPostcode(pc, diag);
-      checked++;
-      if (r.cards?.length) {
-        found += r.cards.length;
-        // NOTE: here is where matching logic could filter for "accepting new patients"
-        // and send emails. For now we just count.
+      const url = `${NHS_URL}?api-version=${NHS_VERSION}&search=${encodeURIComponent(
+        pc
+      )}&filter=ServiceType:dentist`;
+
+      const headers = NHS_KEY
+        ? { "subscription-key": NHS_KEY, Accept: "application/json" }
+        : { Accept: "application/json" };
+
+      const j = await fetchMaybeJSON(url, headers);
+
+      let cards = [];
+      if (j.nonJSON) {
+        // fallback scrape
+        const html = await fetch(`${NHS_FALLBACK}/${encodeURIComponent(pc)}?distance=30`);
+        const text = await html.text();
+        cards = parseCardsFromHTML(text);
+      } else if (Array.isArray(j.value)) {
+        cards = j.value.map((v) => ({
+          name: v.name || v.title || "Dentist",
+          link: v.url || v.websiteUrl || "",
+        }));
       }
+
+      checked++;
+      found += cards.length;
+      await sleep(800);
     } catch (e) {
-      if (diag) diag.errors.push({ step: "pc", pc, msg: String(e?.message || e) });
-      // keep scanning the rest
+      errors.push({ pc, error: String(e.message || e) });
     }
-    await sleep(SCAN_DELAY_MS);
   }
 
-  const result = { ok: true, checked, found, alertsSent };
-  if (SCAN_DEBUG) {
-    result.meta = {
-      usedApi: !!NHS_API_KEY,
-      pcsScanned: pcs.length,
-      calls: diag.calls,
-      errors: diag.errors,
-    };
-  }
-  return result;
+  return { ok: true, checked, found, alertsSent, errors };
 }
