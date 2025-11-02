@@ -1,80 +1,80 @@
-(function(){
-  const $ = id => document.getElementById(id);
-  const form   = $('alertForm');
-  const msg    = $('msg');
-  const toggle = $('menu-toggle');
-  const links  = $('nav-links');
-  const radius = $('radius');
+// public/app.js — validation + submit (stable)
 
-  // Mobile menu toggle
-  toggle?.addEventListener('click', ()=> links?.classList.toggle('open'));
-  links?.querySelectorAll('a').forEach(a=>a.addEventListener('click', ()=> links.classList.remove('open')));
+const form = document.getElementById('alertForm');
+const emailEl = document.getElementById('email');
+const pcsEl   = document.getElementById('postcodes');
+const radiusEl= document.getElementById('radius');
+const msgEl   = document.getElementById('message');
 
-  // Numeric-only radius (desktop & mobile)
-  radius?.addEventListener('input', e => { e.target.value = e.target.value.replace(/[^0-9]/g,''); });
+const UK_PC_RE = /^(GIR\s?0AA|[A-PR-UWYZ][A-HK-Y]?\d[\dA-Z]?\s?\d[ABD-HJLNP-UW-Z]{2})$/i;
 
-  function showMessage(html, type=''){
-    if (!msg) return;
-    msg.className = `message-box show ${type}`;
-    msg.innerHTML = html;
+function show(status, text){
+  msgEl.className = 'msg ' + status; // 'ok' | 'warn' | 'err'
+  msgEl.textContent = text;
+  msgEl.style.display = 'block';
+}
+
+function validEmail(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((v||'').trim()); }
+function parsePCs(v){
+  return (v||'').split(/[,;]+/)
+    .map(s=>s.trim().toUpperCase().replace(/\s+/g,''))
+    .filter(Boolean)
+    .map(s => s.length>3 ? (s.slice(0,-3)+' '+s.slice(-3)).toUpperCase() : s);
+}
+function allValidPCs(list){ return list.every(pc => UK_PC_RE.test(pc)); }
+
+radiusEl.setAttribute('inputmode','numeric');
+radiusEl.setAttribute('pattern','\\d*');
+radiusEl.setAttribute('min','1');
+radiusEl.setAttribute('max','30');
+
+form?.addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  msgEl.style.display='none';
+
+  const email = (emailEl.value||'').trim();
+  const pcs = parsePCs(pcsEl.value);
+  const rStr = (radiusEl.value||'').trim();
+
+  if(!validEmail(email)) { show('err','Please enter a valid email address.'); return; }
+  if(!pcs.length){ show('err','Please enter at least one UK postcode.'); return; }
+  if(!allValidPCs(pcs)) { show('err','One or more postcodes are not valid UK postcodes.'); return; }
+  if(!rStr){ show('err','Please choose a radius (1–30 miles).'); return; }
+  const r = Number(rStr); if(!(r>=1 && r<=30)){ show('err','Radius must be between 1 and 30 miles.'); return; }
+
+  try{
+    const res = await fetch('/api/watch/create',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, postcode: pcs.join(','), radius: r })
+    });
+    const j = await res.json();
+
+    if(j.ok){
+      form.reset();
+      show('ok','Alert created! We’ll email you when availability is found.');
+    }else if(j.upgrade){
+      show('warn','Free plan allows 1 postcode. Please upgrade to add more.');
+    }else{
+      show('err', j.error || 'Something went wrong. Please try again.');
+    }
+  }catch(err){
+    show('err','Network error creating alert. Please retry.');
   }
-  function hideMessage(){
-    if (!msg) return;
-    msg.className = 'message-box';
-    msg.innerHTML = '';
-  }
-  hideMessage();
+});
 
-  form?.addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const email    = form.email.value.trim();
-    const postcode = form.postcode.value.trim();
-    const r        = form.radius.value.trim();
-
-    if(!email || !postcode || !r){
-      showMessage('⚠ Please fill in all fields, including radius.','warn'); return;
-    }
-    const n = parseInt(r,10);
-    if(isNaN(n) || n<1 || n>30){
-      showMessage('⚠ Please select a radius between 1 and 30 miles.','warn'); return;
-    }
-
-    showMessage('Saving your alert…');
-
-    try{
-      const res = await fetch('/api/watch/create',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ email, postcode, radius:r })
-      });
-      const data = await res.json();
-
-      if (data.ok) {
-        showMessage('✅ Alert created — check your inbox!','success');
-        form.reset();
-        return;
-      }
-      if (data.error === 'invalid_postcode') {
-        showMessage('❌ Please enter a valid UK postcode (e.g. RG1 2AB).','error'); return;
-      }
-      if (data.error === 'invalid_email') {
-        showMessage('❌ Please enter a valid email address.','error'); return;
-      }
-      if (data.error === 'invalid_radius') {
-        showMessage('⚠ Please select a valid radius (1–30 miles).','warn'); return;
-      }
-      if (data.error === 'duplicate') {
-        showMessage('⚠ An alert already exists for this postcode.','warn'); return;
-      }
-      if (data.error === 'upgrade_required') {
-        const link = data.upgradeLink || '/pricing.html';
-        showMessage(`⚡ Free plan supports one postcode. <a href="${link}">Upgrade to Pro</a> to add more.`,'warn'); return;
-      }
-
-      showMessage('⚠ Something went wrong. Please try again later.','error');
-    }catch(err){
-      console.error(err);
-      showMessage('⚠ Server unavailable. Please retry.','error');
-    }
-  });
-})();
+// Stripe helper for pricing/upgrade pages (unchanged)
+async function startCheckout(plan){
+  try{
+    const email = (emailEl?.value || '').trim();
+    const res = await fetch('/api/checkout',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email: validEmail(email)? email : undefined, plan })
+    });
+    const j = await res.json();
+    if(j.ok && j.url) window.location = j.url;
+    else alert(j.error || 'Upgrade failed. Check Stripe keys/prices.');
+  }catch(e){ alert('Network error starting checkout.'); }
+}
+window.startCheckout = startCheckout;
