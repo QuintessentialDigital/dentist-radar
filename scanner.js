@@ -1,49 +1,28 @@
-// scanner.js — Diagnostic + Robust NHS parsing (safe drop-in for Dentist Radar)
-//
-// ✅ Works with MongoDB, email, and UI
-// ✅ Adds deeper NHS API fallback and diagnostics
-// ✅ Simulation-friendly (no changes to other modules)
-
-import fetch from "node-fetch";
-import mongoose from "mongoose";
+// scanner.js — Robust NHS scan (API + HTML fallback), safe with v1.8 baseline
 
 const NHS_BASE = process.env.NHS_BASE || "https://api.nhs.uk/service-search";
 const NHS_VERSION = process.env.NHS_API_VERSION || "2";
 const NHS_KEY = process.env.NHS_API_KEY || "";
-const SCAN_DEBUG = process.env.SCAN_DEBUG === "1";
-const SCAN_SNAPSHOT = process.env.SCAN_SNAPSHOT === "1";
 const NHS_COOKIES =
   process.env.NHS_COOKIES ||
   "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; OptanonAlertBoxClosed=2025-01-01T00:00:00.000Z";
+const SCAN_DEBUG = process.env.SCAN_DEBUG === "1";
+const SCAN_SNAPSHOT = process.env.SCAN_SNAPSHOT === "1";
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function fetchText(url, headers = {}) {
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "en-GB,en;q=0.9",
-      "Cache-Control": "no-cache",
-      "Upgrade-Insecure-Requests": "1",
-      "Referer": "https://www.nhs.uk/",
-      "Cookie": NHS_COOKIES,
-      ...headers,
-    },
-    redirect: "follow",
-  });
+  const res = await fetch(url, { headers, redirect: "follow" });
   if (!res.ok) throw new Error(`http_${res.status}`);
   return res.text();
 }
-
 async function fetchJSON(url, headers = {}) {
   const res = await fetch(url, { headers, redirect: "follow" });
-  const text = await res.text(); // capture raw for diagnostics
-  let json = {};
-  try { json = JSON.parse(text); } catch { json = { _raw: text }; }
+  const t = await res.text();
+  let j = {};
+  try { j = JSON.parse(t); } catch { j = { _raw: t }; }
   if (!res.ok) throw new Error(`http_${res.status}`);
-  return json;
+  return j;
 }
 
 function dedupeCards(cards) {
@@ -57,33 +36,14 @@ function dedupeCards(cards) {
 }
 
 function parseCardsFromAnyJSON(obj) {
+  const pools = [obj?.results, obj?.value, obj?.items, obj?.organisations, Array.isArray(obj) ? obj : null].filter(Boolean);
   const out = [];
-  const pools = [
-    obj?.results, obj?.value, obj?.items, obj?.organisations, obj?.Services,
-    Array.isArray(obj) ? obj : null
-  ].filter(Boolean);
-
   for (const pool of pools) {
     for (const it of pool) {
-      const name =
-        it?.name ||
-        it?.organisationName ||
-        it?.practiceName ||
-        it?.title ||
-        it?.OrganisationName;
-
-      let link =
-        it?.url || it?.href || it?.link || it?.websiteUrl || it?.orgLink || it?.path || it?.relativeUrl;
-
+      const name = it?.name || it?.organisationName || it?.practiceName || it?.title;
+      let link = it?.url || it?.href || it?.websiteUrl || it?.path || it?.relativeUrl;
       if (link && !/^https?:\/\//i.test(link)) link = "https://www.nhs.uk" + link;
-
-      if (name && link) {
-        if (/\/services\/dentist\//i.test(link) || /nhs\.uk\/.*dent/i.test(link)) {
-          out.push({ name: String(name).trim(), link });
-        } else {
-          out.push({ name: String(name).trim(), link });
-        }
-      }
+      if (name && link) out.push({ name: String(name).trim(), link });
     }
   }
   return dedupeCards(out);
@@ -91,19 +51,17 @@ function parseCardsFromAnyJSON(obj) {
 
 function parsePracticeCardsHTML(html) {
   const patterns = [
-    /<a[^>]+class="[^"]*nhsuk-card__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
     /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
-    /<h2[^>]*class="[^"]*nhsuk-card__heading[^"]*"[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
-    /<a[^>]+class="[^"]*nhsuk-list-panel__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    /<a[^>]+class="[^"]*nhsuk-card__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
   ];
   const out = [];
   for (const re of patterns) {
     let m;
     while ((m = re.exec(html))) {
       const href = m[1];
-      const name = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+      const name = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "Dentist";
       const link = href.startsWith("http") ? href : "https://www.nhs.uk" + href;
-      out.push({ name: name || "Dentist", link });
+      out.push({ name, link });
     }
     if (out.length) break;
   }
@@ -119,13 +77,12 @@ async function geocode(pc) {
   } catch { return {}; }
 }
 
-async function getPracticeCardsForPostcode(pc, apiDiag) {
-  const key = NHS_KEY;
+async function getPracticeCardsForPostcode(pc, diag) {
   const { lat, lon } = await geocode(pc);
-  const headers = key ? { "subscription-key": key, Accept: "application/json" } : {};
+  const headers = NHS_KEY ? { "subscription-key": NHS_KEY, Accept: "application/json" } : {};
 
-  // (A) organisations near lat/lon (best)
-  if (key && lat && lon) {
+  // (A) NHS API: organisations near point
+  if (NHS_KEY && lat && lon) {
     const qs = new URLSearchParams({
       "api-version": NHS_VERSION,
       latitude: String(lat),
@@ -138,45 +95,28 @@ async function getPracticeCardsForPostcode(pc, apiDiag) {
     const urlA = `${NHS_BASE}/organisations?${qs.toString()}`;
     try {
       const jsonA = await fetchJSON(urlA, headers);
-      apiDiag.calls.push({ url: urlA, keys: Object.keys(jsonA || {}) });
-      let cards = parseCardsFromAnyJSON(jsonA);
+      if (diag) diag.calls.push({ url: urlA, keys: Object.keys(jsonA || {}) });
+      const cards = parseCardsFromAnyJSON(jsonA);
       if (cards.length) return { source: "api", url: urlA, cards };
     } catch (e) {
-      apiDiag.errors.push({ step: "A", msg: String(e?.message || e) });
+      if (diag) diag.errors.push({ step: "A", msg: String(e?.message || e) });
     }
   }
 
-  // (B) search-postcode-or-place
-  if (key) {
-    const qs = new URLSearchParams({ "api-version": NHS_VERSION, search: pc.toUpperCase() });
-    const urlB = `${NHS_BASE}/search-postcode-or-place?${qs.toString()}`;
-    try {
-      const jsonB = await fetchJSON(urlB, headers);
-      apiDiag.calls.push({ url: urlB, keys: Object.keys(jsonB || {}) });
-      let cards = parseCardsFromAnyJSON(jsonB);
-      if (cards.length) return { source: "api", url: urlB, cards };
-    } catch (e) {
-      apiDiag.errors.push({ step: "B", msg: String(e?.message || e) });
-    }
-  }
-
-  // (C) HTML fallback
+  // (B) NHS HTML fallback
   const urlH = `https://www.nhs.uk/service-search/find-a-dentist/results/${encodeURIComponent(pc)}?distance=30`;
   try {
-    const html = await fetchText(urlH);
+    const html = await fetchText(urlH, {
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "text/html",
+      "Cookie": NHS_COOKIES,
+      "Referer": "https://www.nhs.uk/",
+    });
     const cards = parsePracticeCardsHTML(html);
-    if (SCAN_SNAPSHOT) {
-      const snippet = html.replace(/\s+/g, " ").slice(0, 1500);
-      try {
-        await mongoose.connection.collection("scanlogs").insertOne({
-          pc, url: urlH, htmlSnippet: snippet, when: new Date()
-        });
-      } catch {}
-    }
-    return { source: "html", url: urlH, cards, html };
+    return { source: "html", url: urlH, cards, html: SCAN_SNAPSHOT ? html.slice(0, 1500) : undefined };
   } catch (e) {
-    apiDiag.errors.push({ step: "HTML", msg: String(e?.message || e) });
-    return { source: "html", url: urlH, cards: [], html: "" };
+    if (diag) diag.errors.push({ step: "HTML", msg: String(e?.message || e) });
+    return { source: "html", url: urlH, cards: [] };
   }
 }
 
@@ -184,38 +124,20 @@ export async function runScan() {
   const watches = await mongoose.connection.collection("watches").find({}).toArray();
 
   let checked = 0, found = 0, alertsSent = 0;
-  let suspectedCookieWall = false;
-  const samples = [];
-  const apiDiag = { calls: [], errors: [] };
-
+  const diag = { calls: [], errors: [] };
   const pcs = [...new Set(watches.flatMap(w => {
     const raw = Array.isArray(w.postcode) ? w.postcode : String(w.postcode || "").split(/[,;]+/);
     return raw.map(x => x.trim()).filter(Boolean);
   }))];
 
   for (const pc of pcs) {
-    const r = await getPracticeCardsForPostcode(pc, apiDiag);
-    checked += 1;
+    const r = await getPracticeCardsForPostcode(pc, SCAN_DEBUG ? diag : null);
+    checked++;
     if (r.cards?.length) found += r.cards.length;
-    if (SCAN_DEBUG && samples.length < 5) samples.push({ pc, src: r.source, n: r.cards.length });
-    if (r.source === "html" && !r.cards?.length) suspectedCookieWall = suspectedCookieWall || false;
     await delay(800);
   }
 
-  const result = {
-    ok: true,
-    checked,
-    found,
-    alertsSent,
-    suspectedCookieWall,
-  };
-
-  if (SCAN_DEBUG) {
-    result.meta = {
-      samples,
-      flags: { usedApi: !!NHS_KEY, suspectedCookieWall },
-      apiDiag
-    };
-  }
+  const result = { ok: true, checked, found, alertsSent };
+  if (SCAN_DEBUG) result.meta = { apiDiag: diag, flags: { usedApi: !!NHS_KEY } };
   return result;
 }
