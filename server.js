@@ -1,6 +1,7 @@
-// server.js — Stable Dentist Radar backend (v1.8+baseline)
-// Works with MongoDB, Postmark, Stripe and new scanner.js
-// No UI or logical regressions.
+// server.js — Dentist Radar (Stable v1.8+)
+// ✅ Works with MongoDB, Postmark, Stripe, and scanner.js
+// ✅ Keeps UI & logic unchanged
+// ✅ Adds correct DB name + better email logs
 
 import express from "express";
 import cors from "cors";
@@ -16,23 +17,32 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
+// --- Configuration ---
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
+const DB_NAME = process.env.MONGO_DB_NAME || "dentistradar";
 const STRIPE_SECRET = process.env.STRIPE_SECRET_KEY || "";
 const POSTMARK_KEY = process.env.POSTMARK_KEY || "";
 const DOMAIN = process.env.DOMAIN || "dentistradar.co.uk";
+const MAIL_FROM = process.env.MAIL_FROM || `no-reply@${DOMAIN}`;
 
+// --- Validation ---
 if (!MONGO_URI) throw new Error("Missing MONGO_URI in environment");
 
+// --- MongoDB Connection ---
 mongoose
-  .connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log("✅ MongoDB connected"))
+  .connect(MONGO_URI, {
+    dbName: DB_NAME,
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => console.log(`✅ MongoDB connected → db="${DB_NAME}"`))
   .catch((err) => console.error("❌ MongoDB connection error:", err));
 
 const db = mongoose.connection;
 const stripe = STRIPE_SECRET ? new Stripe(STRIPE_SECRET) : null;
 
-// --- Collections ---
+// --- Mongoose Models ---
 const WatchSchema = new mongoose.Schema({
   email: String,
   postcode: [String],
@@ -48,10 +58,10 @@ const AlertSchema = new mongoose.Schema({
 const Watch = mongoose.model("Watch", WatchSchema);
 const Alert = mongoose.model("Alert", AlertSchema);
 
-// --- Email helpers ---
+// --- Email helper (Postmark) ---
 async function sendEmail(to, subject, body) {
   if (!POSTMARK_KEY) {
-    console.log("📭 Postmark disabled —", subject);
+    console.warn("📭 Postmark disabled —", subject);
     return;
   }
   try {
@@ -62,15 +72,21 @@ async function sendEmail(to, subject, body) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        From: `no-reply@${DOMAIN}`,
+        From: MAIL_FROM,
         To: to,
         Subject: subject,
         TextBody: body,
       }),
     });
-    console.log("📧 Email sent:", subject, res.status);
+
+    const text = await res.text();
+    if (!res.ok) {
+      console.error("❌ Postmark API error:", res.status, text);
+    } else {
+      console.log(`📧 Email queued OK (${subject})`);
+    }
   } catch (err) {
-    console.error("❌ Email send error:", err.message);
+    console.error("❌ Email send exception:", err.message);
   }
 }
 
@@ -79,14 +95,15 @@ app.get("/api/health", (req, res) =>
   res.json({ ok: true, time: new Date().toISOString() })
 );
 
-// --- Create watch / alert ---
+// --- Create new alert ---
 app.post("/api/watch/create", async (req, res) => {
   try {
     const { email, postcode, radius } = req.body;
     if (!email || !postcode)
-      return res
-        .status(400)
-        .json({ ok: false, error: "Please provide email and postcode" });
+      return res.status(400).json({
+        ok: false,
+        error: "Please provide a valid email and postcode.",
+      });
 
     const pcList = String(postcode)
       .split(/[,;]+/)
@@ -98,7 +115,8 @@ app.post("/api/watch/create", async (req, res) => {
       if (existing && existing.plan === "free") {
         return res.json({
           ok: false,
-          error: "Free plan supports 1 postcode. Upgrade to Pro for more.",
+          error:
+            "Free plan supports one postcode. Please upgrade to Pro or Family.",
           upgrade: true,
         });
       }
@@ -132,7 +150,7 @@ app.post("/api/watch/create", async (req, res) => {
 
     res.json({
       ok: true,
-      message: "Alert created successfully!",
+      message: "Alert created successfully! You’ll receive an email soon.",
     });
   } catch (err) {
     console.error("❌ Error creating alert:", err.message);
@@ -185,11 +203,12 @@ app.post("/api/checkout", async (req, res) => {
   }
 });
 
-// --- Default route for SPA/HTML ---
+// --- Default fallback (SPA route) ---
 app.get("*", (req, res) => {
   res.sendFile(process.cwd() + "/public/index.html");
 });
 
+// --- Start Server ---
 app.listen(PORT, () =>
   console.log(`🚀 Dentist Radar running on port ${PORT}`)
 );
