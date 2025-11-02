@@ -1,4 +1,5 @@
-// scanner.js — v1.4 (API-first + HTML fallback + health monitoring for DentistRadar)
+// scanner.js — v1.4.1 (API-first, HTML fallback with lat/lon, strong headers, monitoring)
+// DentistRadar baseline-safe: no UI changes required.
 
 import mongoose from "mongoose";
 
@@ -43,17 +44,17 @@ const practiceStateSchema = new mongoose.Schema(
   { versionKey: false, timestamps: true }
 );
 
-// stores small HTML snippet for debugging (optional)
+// optional debug snapshots of fetched HTML
 const scanLogSchema = new mongoose.Schema(
   { pc: String, url: String, htmlSnippet: String, bytes: Number, when: Date },
   { versionKey: false }
 );
 
-// persistent health state for monitoring
+// persistent health state (to alert if NHS layout breaks)
 const scanStatusSchema = new mongoose.Schema(
   {
     _id: { type: String, default: "global" },
-    zeroRuns: { type: Number, default: 0 }, // consecutive runs with cards==0 across all PCs
+    zeroRuns: { type: Number, default: 0 }, // consecutive runs with totalCards==0
     lastOkAt: Date,
     lastWarnAt: Date,
   },
@@ -61,15 +62,12 @@ const scanStatusSchema = new mongoose.Schema(
 );
 
 const Watch = mongoose.models.Watch || mongoose.model("Watch", watchSchema);
-const EmailLog =
-  mongoose.models.EmailLog || mongoose.model("EmailLog", emailLogSchema);
-const PracticeState =
-  mongoose.models.PracticeState || mongoose.model("PracticeState", practiceStateSchema);
+const EmailLog = mongoose.models.EmailLog || mongoose.model("EmailLog", emailLogSchema);
+const PracticeState = mongoose.models.PracticeState || mongoose.model("PracticeState", practiceStateSchema);
 const ScanLog = mongoose.models.ScanLog || mongoose.model("ScanLog", scanLogSchema);
-const ScanStatus =
-  mongoose.models.ScanStatus || mongoose.model("ScanStatus", scanStatusSchema);
+const ScanStatus = mongoose.models.ScanStatus || mongoose.model("ScanStatus", scanStatusSchema);
 
-// ---------- CONFIG / FLAGS ----------
+// ---------- CONFIG / HELPERS ----------
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const uniq = (arr) => [...new Set(arr)];
 const SCAN_DEBUG = (process.env.SCAN_DEBUG || "0") === "1";
@@ -101,45 +99,73 @@ const isAccepting = (html, strict = false) => {
 
 // ---------- FETCHERS ----------
 async function fetchText(url) {
+  // Strong, browser-like headers to avoid cookie walls/CDN blocks
   const headers = {
     "User-Agent":
       process.env.NHS_UA ||
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+    "Accept":
+      "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-GB,en;q=0.9",
-    Referer: "https://www.nhs.uk/",
     "Cache-Control": "no-cache",
     Pragma: "no-cache",
     DNT: "1",
+    Referer: "https://www.nhs.uk/",
+    "Upgrade-Insecure-Requests": "1",
+    // client hints that some CDNs check
+    "Sec-CH-UA": "\"Chromium\";v=\"126\", \"Not.A/Brand\";v=\"8\"",
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": "\"Windows\"",
     "Sec-Fetch-Site": "same-origin",
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-Dest": "document",
-    "Upgrade-Insecure-Requests": "1",
-    Cookie: "nhsuk-cookie-consent=accepted",
+    // pretend consent was already given
+    "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true"
   };
 
-  const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 15000);
-  const r = await fetch(url, { headers, signal: ctrl.signal, redirect: "follow" });
-  clearTimeout(timeout);
-  if (!r.ok) throw new Error(`http_${r.status}`);
-  return await r.text();
+  const maxRetries = 3;
+  const base = 900;
+  let lastErr;
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 15000);
+      const r = await fetch(url, { headers, signal: ctrl.signal, redirect: "follow" });
+      clearTimeout(timeout);
+      if (!r.ok) throw new Error(`http_${r.status}`);
+      return await r.text();
+    } catch (e) {
+      lastErr = e;
+      await sleep(base * Math.pow(2, i) + Math.floor(Math.random() * 250));
+    }
+  }
+  throw lastErr || new Error("fetch_failed");
 }
 
 async function fetchJSON(url, headers = {}) {
-  const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 12000);
-  const r = await fetch(url, { headers, signal: ctrl.signal, redirect: "follow" });
-  clearTimeout(timeout);
-  if (!r.ok) throw new Error(`api_http_${r.status}`);
-  return await r.json();
+  const maxRetries = 3;
+  let lastErr;
+  for (let i = 0; i <= maxRetries; i++) {
+    try {
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 12000);
+      const r = await fetch(url, { headers, signal: ctrl.signal, redirect: "follow" });
+      clearTimeout(timeout);
+      if (!r.ok) throw new Error(`api_http_${r.status}`);
+      return await r.json();
+    } catch (e) {
+      lastErr = e;
+      await sleep(600 * Math.pow(2, i) + Math.floor(Math.random() * 200));
+    }
+  }
+  throw lastErr || new Error("api_fetch_failed");
 }
 
-// ---------- NHS RESULTS PAGE RESOLVER (uses lat/lon) ----------
+// ---------- NHS RESULTS PAGE RESOLVER (lat/lon URL) ----------
 async function resolveResultsPageForPostcode(pcRaw) {
   const pc = normPostcode(pcRaw);
 
-  // 1) geocode via postcodes.io
+  // 1) geocode via postcodes.io (no key)
   let lat = null, lon = null;
   try {
     const resp = await fetch(
@@ -155,14 +181,14 @@ async function resolveResultsPageForPostcode(pcRaw) {
   const label = encodeURIComponent(pc.toUpperCase());
   const candidates = [];
 
-  // 2) New NHS pattern using lat/lon
+  // 2) New NHS results pattern using lat/lon
   if (lat && lon) {
     candidates.push(
       `https://www.nhs.uk/service-search/find-a-dentist/results/${label}?latitude=${lat}&longitude=${lon}`
     );
   }
 
-  // 3) Old fallbacks
+  // 3) Old fallbacks (some regions still work)
   const BASE = (
     process.env.NHS_BASE ||
     "https://www.nhs.uk/service-search/find-a-dentist"
@@ -176,18 +202,19 @@ async function resolveResultsPageForPostcode(pcRaw) {
     `${BASE}?location=${pcEnc}`
   );
 
+  // 4) Return the first non-404 page
   for (const url of candidates) {
     try {
       const html = await fetchText(url);
       if (!/page not found|404/i.test(html)) {
         return { url, html };
       }
-    } catch {}
+    } catch { /* try next */ }
   }
   throw new Error("no_results_url_resolved");
 }
 
-// ---------- POSTMARK EMAIL ----------
+// ---------- EMAIL (Postmark) ----------
 async function sendEmail(to, subject, text, type = "availability", meta = {}) {
   const key = process.env.POSTMARK_TOKEN;
   if (!key) return { ok: false, skipped: true };
@@ -209,12 +236,7 @@ async function sendEmail(to, subject, text, type = "availability", meta = {}) {
   const body = await r.json().catch(() => ({}));
   if (r.ok) {
     await EmailLog.create({
-      to,
-      subject,
-      type,
-      providerId: body.MessageID,
-      meta,
-      sentAt: new Date(),
+      to, subject, type, providerId: body.MessageID, meta, sentAt: new Date()
     }).catch(() => {});
   }
   return { ok: r.ok, status: r.status, body };
@@ -235,7 +257,7 @@ function parsePracticeCardsHTML(html) {
     let m;
     while ((m = re.exec(html))) {
       const href = m[1];
-      const name = m[2].replace(/<[^>]+>/g, " ").trim();
+      const name = m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
       out.push({
         name: name || "Dentist",
         link: href.startsWith("http") ? href : "https://www.nhs.uk" + href,
@@ -244,7 +266,7 @@ function parsePracticeCardsHTML(html) {
     if (out.length > 0) break;
   }
 
-  // De-dup
+  // de-dup
   const seen = new Set();
   return out.filter((c) => {
     const k = c.link + "|" + c.name;
@@ -272,12 +294,12 @@ function parsePracticeCardsAPI(json) {
   return out;
 }
 
-// ---------- CARD SOURCE (API first if available) ----------
+// ---------- CARD SOURCE SELECTOR ----------
 async function getPracticeCardsForPostcode(pc) {
   const key = process.env.NHS_API_KEY || "";
   const pcEnc = encodeURIComponent(pc.toUpperCase());
 
-  // Try the official API first if you have a key
+  // Try API first if key present (optional)
   if (key) {
     const headers = { "subscription-key": key, Accept: "application/json" };
     const candidates = [
@@ -289,25 +311,17 @@ async function getPracticeCardsForPostcode(pc) {
         const json = await fetchJSON(url, headers);
         const cards = parsePracticeCardsAPI(json);
         if (cards.length > 0) return { source: "api", url, cards };
-      } catch {
-        // ignore and fall through
-      }
+      } catch { /* fall through */ }
     }
   }
 
-  // Fallback to HTML (lat/lon)
+  // Fallback to HTML (lat/lon results page)
   const { url, html } = await resolveResultsPageForPostcode(pc);
 
   if (SCAN_SNAPSHOT) {
     try {
       const snippet = html.replace(/\s+/g, " ").slice(0, 2500);
-      await ScanLog.create({
-        pc,
-        url,
-        htmlSnippet: snippet,
-        bytes: html.length,
-        when: new Date(),
-      }).catch(() => {});
+      await ScanLog.create({ pc, url, htmlSnippet: snippet, bytes: html.length, when: new Date() }).catch(() => {});
     } catch {}
   }
 
@@ -321,25 +335,23 @@ export async function runScan() {
   const LIMIT_PRACTICES = parseInt(process.env.SCAN_PRACTICES_LIMIT || "30", 10);
   const DELAY_MS = parseInt(process.env.SCAN_DELAY_MS || "1200", 10);
   const STRICT = (process.env.SCAN_MATCH_STRICT || "0") === "1";
-  const ADMIN_EMAIL = process.env.ADMIN_EMAIL || process.env.OWNER_EMAIL; // optional warning recipient
+  const ADMIN_EMAIL = process.env.ADMIN_EMAIL || process.env.OWNER_EMAIL; // optional notification
 
   const watches = await Watch.find({}, { email: 1, postcode: 1 }).lean();
   const postcodes = uniq(watches.map((w) => normPostcode(w.postcode))).slice(0, LIMIT_POSTCODES);
 
   let checked = 0, found = 0, alertsSent = 0;
+  let totalCards = 0;
   const debugMeta = { postcodesCount: postcodes.length, samples: [], flags: {} };
+  let suspectedCookieWall = false;
 
-  // Postcode → watchers map
+  // map postcode -> watchers
   const byPostcode = new Map();
   for (const w of watches) {
     const pc = normPostcode(w.postcode);
     if (!byPostcode.has(pc)) byPostcode.set(pc, []);
     byPostcode.get(pc).push(w);
   }
-
-  // Aggregate signal to detect cookie wall/layout change
-  let totalCards = 0;
-  let suspectedCookieWall = false;
 
   for (const pc of postcodes) {
     try {
@@ -350,7 +362,7 @@ export async function runScan() {
         debugMeta.samples.push({ pc, source, url, cards: cards.length });
       }
 
-      // crude cookie-wall detection
+      // crude cookie wall signal (no practice anchors + cookie words present)
       if (html && /cookie/i.test(html) && /consent/i.test(html) && !/nhsuk-card__link|services\/dentist\//i.test(html)) {
         suspectedCookieWall = true;
       }
@@ -358,14 +370,12 @@ export async function runScan() {
       for (const c of cards.slice(0, LIMIT_PRACTICES)) {
         checked++;
 
-        // determine accepting
+        // determine accepting on detail page
         let accepting = false;
         try {
           const detail = await fetchText(c.link);
           accepting = isAccepting(detail, STRICT);
-        } catch {
-          // ignore
-        }
+        } catch { /* ignore */ }
 
         const id = (c.link || c.name + "|" + pc).toLowerCase();
         const prev = await PracticeState.findOne({ practiceId: id }).lean();
@@ -398,11 +408,7 @@ Check details: ${c.link}
 Please call the practice directly to confirm before travelling.
 
 — Dentist Radar`;
-            const r = await sendEmail(w.email, subj, text, "availability", {
-              practice: c.name,
-              postcode: pc,
-              link: c.link,
-            });
+            const r = await sendEmail(w.email, subj, text, "availability", { practice: c.name, postcode: pc, link: c.link });
             if (r.ok) alertsSent++;
           }
         }
@@ -433,8 +439,7 @@ Please call the practice directly to confirm before travelling.
       { upsert: true }
     );
 
-    // After 3 consecutive zero-card runs, send a warning email
-    if (ADMIN_EMAIL && next >= 3) {
+    if ((process.env.ADMIN_EMAIL || process.env.OWNER_EMAIL) && next >= 3) {
       const warnText = `DentistRadar scanner warning:
 
 Consecutive runs with zero cards: ${next}
@@ -442,37 +447,35 @@ Suspected cookie wall: ${suspectedCookieWall ? "Yes" : "No"}
 
 Actions:
 • Open /admin.html and run Manual Scan
-• In Render -> Env, set SCAN_SNAPSHOT=1
-• Check Mongo 'scanlogs' for htmlSnippet
-• Review NHS layout / cookies
+• In Render -> Env, set SCAN_SNAPSHOT=1 and rerun
+• Check Mongo 'scanlogs' htmlSnippet
+• Review NHS layout/cookie status
 
 — DentistRadar Monitor`;
 
-      await sendEmail(
-        ADMIN_EMAIL,
-        "DentistRadar: Scanner reported zero results",
-        warnText,
-        "scanner-warning",
-        { suspectedCookieWall, zeroRuns: next }
-      ).catch(() => {});
-      await ScanStatus.updateOne(
-        { _id: "global" },
-        { $set: { lastWarnAt: new Date() } },
-        { upsert: true }
-      );
+      try {
+        await sendEmail(
+          process.env.ADMIN_EMAIL || process.env.OWNER_EMAIL,
+          "DentistRadar: Scanner reported zero results",
+          warnText,
+          "scanner-warning",
+          { suspectedCookieWall, zeroRuns: next }
+        );
+        await ScanStatus.updateOne(
+          { _id: "global" },
+          { $set: { lastWarnAt: new Date() } },
+          { upsert: true }
+        );
+      } catch {}
     }
   }
 
   const result = { checked, found, alertsSent, totalCards };
   if (SCAN_DEBUG) {
     result.meta = {
-      ...result.meta,
       samples: debugMeta.samples,
       errors: debugMeta.errors,
-      flags: {
-        suspectedCookieWall,
-        usedApi: !!process.env.NHS_API_KEY,
-      },
+      flags: { suspectedCookieWall, usedApi: !!process.env.NHS_API_KEY }
     };
   }
   return result;
