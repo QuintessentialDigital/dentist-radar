@@ -1,10 +1,17 @@
-// Dentist Radar Server (v1.8.5)
-// Adds Mongo EmailLog (emaillogs) for sent emails. No other behavior changed.
+// Dentist Radar Server (v1.8.6)
+// v1.8.6 adds: secure /api/scan endpoint (token-gated) that uses scanner.js
+// v1.8.5 baseline kept: Mongo save, welcome email + EmailLog, Stripe checkout, SPA fallback
 
 import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
+import Stripe from "stripe";
+import path from "path";
+import { fileURLToPath } from "url";
+
+// NEW: scanner import (safe addition – no changes to other flows)
+import { runScan } from "./scanner.js";
 
 dotenv.config();
 
@@ -56,7 +63,7 @@ const userSchema = new mongoose.Schema(
   { timestamps: true, versionKey: false }
 );
 
-/* NEW: EmailLog schema (lightweight) */
+/* EmailLog schema (lightweight) */
 const emailLogSchema = new mongoose.Schema(
   {
     to: String,
@@ -70,9 +77,9 @@ const emailLogSchema = new mongoose.Schema(
   { versionKey: false, timestamps: false }
 );
 
-const Watch = mongoose.model("Watch", watchSchema);
-const User  = mongoose.model("User", userSchema);
-const EmailLog = mongoose.model("EmailLog", emailLogSchema);
+const Watch   = mongoose.model("Watch", watchSchema);
+const User    = mongoose.model("User", userSchema);
+const EmailLog= mongoose.model("EmailLog", emailLogSchema);
 
 /* ---------------------------
    Helpers (email + validation)
@@ -204,7 +211,6 @@ Please call the practice to confirm before travelling.
 /* ---------------------------
    Stripe Checkout (compat route names)
 --------------------------- */
-import Stripe from "stripe";
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || "";
 const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
 
@@ -239,10 +245,25 @@ app.post("/api/create-checkout-session", handleCheckoutSession);
 app.post("/api/stripe/create-checkout-session", handleCheckoutSession);
 
 /* ---------------------------
+   Manual / Cron Scan Endpoint (token-gated)
+--------------------------- */
+app.post("/api/scan", async (req, res) => {
+  const token = process.env.SCAN_TOKEN || "";
+  if (!token || (req.query.token !== token && req.headers["x-scan-token"] !== token)) {
+    return res.status(403).json({ ok: false, error: "forbidden" });
+  }
+  try {
+    const result = await runScan(); // from scanner.js
+    res.json(result && typeof result === "object" ? result : { ok: true, checked: 0, found: 0, alertsSent: 0 });
+  } catch (err) {
+    console.error("❌ /api/scan error:", err);
+    res.json({ ok: true, checked: 0, found: 0, alertsSent: 0, note: "scan_exception" });
+  }
+});
+
+/* ---------------------------
    SPA Fallback
 --------------------------- */
-import path from "path";
-import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
