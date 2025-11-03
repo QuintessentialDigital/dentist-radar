@@ -182,7 +182,12 @@ function detailMentionsAccepting(html, diag) {
   if (!html) return false;
 
   // Strip tags + normalize whitespace for robust matching
-  const plain = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").toLowerCase();
+  const plain = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 
   // Any explicit denials override
   const deny = [
@@ -192,36 +197,82 @@ function detailMentionsAccepting(html, diag) {
     'no new nhs patients',
     'not currently accepting',
     'closed to new nhs patients',
-    'not accepting nhs adult patients'
+    'not accepting nhs adult patients',
+    'nhs patient list is closed'
   ];
   if (deny.some(p => plain.includes(p))) return false;
 
-  // Positive signals covering tables, badges and free text
-  const yes = [
+  // Positive signals covering tables, badges, and free text (incl. "registering" / "taking on")
+  const yesFreeText = [
     /accepting\s+new\s+nhs\s+patients/i,
-    /now\s+accepting\s+nhs/i,
+    /(now|currently)\s+accepting\s+(new\s+)?nhs/i,
+    /(taking|taking\s+on)\s+new\s+nhs\s+patients/i,
     /open\s+to\s+new\s+nhs\s+patients/i,
-    /accepting\s+nhs\s+patients\s*[:\-]?\s*(yes|open|currently\s*accepting)/i,
-    /adults?\s*[:\-]\s*(yes|open|accepting)\b/i,
-    /children\s*[:\-]\s*(yes|open|accepting)\b/i,
-    /<span[^>]*class="[^"]*nhsuk-tag[^"]*"[^>]*>[^<]*(accepting|taking\s+on)[^<]*nhs[^<]*<\/span>/i,
-    // Table-like: "...Accepting new NHS patients...</dt>...<dd>Yes"
-    /accepting\s+new\s+nhs\s+patients[^<]{0,200}<\/(dt|th)>[^<]{0,200}<(dd|td)[^>]*>\s*(yes|open|currently\s*accepting)/i
+    /registering\s+(new\s+)?nhs\s+patients/i,
+    /we\s+are\s+accepting\s+(new\s+)?nhs\s+patients/i,
+    /accepting\s+nhs\s+patients\s*\(children\s+only\)/i,
+    /accepting\s+nhs\s+(adults?|children)/i
   ];
-
-  const hit = yes.find((r) => r.test(html) || r.test(plain));
-
-  if (hit && diag) {
-    const m = (html.match(hit) || plain.match(hit));
-    if (m && typeof m.index === "number") {
-      const s = (plain.slice(Math.max(0, m.index - 80), m.index + 200) || "")
-        .replace(/\s+/g, " ")
-        .trim();
-      diag.snippets = (diag.snippets || []);
-      diag.snippets.push(s);
-    }
+  if (yesFreeText.some(r => r.test(plain))) {
+    if (diag) (diag.snippets ||= []).push("free-text: " + plain.slice(0, 220));
+    return true;
   }
-  return !!hit;
+
+  // Badge/tag
+  if (/<span[^>]*class="[^"]*nhsuk-tag[^"]*"[^>]*>[^<]*(accepting|taking\s+on)[^<]*nhs[^<]*<\/span>/i.test(html)) {
+    if (diag) (diag.snippets ||= []).push("badge: nhsuk-tag accepting");
+    return true;
+  }
+
+  // Table-like "Accepting new NHS patients" -> "Yes"
+  const yesTable =
+    /accepting\s+new\s+nhs\s+patients[^<]{0,200}<\/(dt|th)>[^<]{0,200}<(dd|td)[^>]*>\s*(yes|open|accepting|currently\s*accepting)\b/i;
+  if (yesTable.test(html)) {
+    if (diag) (diag.snippets ||= []).push("table: accepting new NHS patients → Yes");
+    return true;
+  }
+
+  // Generic "NHS patients: Yes"
+  const nhsYes =
+    /nhs\s+patients\s*[:\-]\s*(yes|open|accepting|currently\s*accepting)\b/i;
+  if (nhsYes.test(plain)) {
+    if (diag) (diag.snippets ||= []).push("table: NHS patients → Yes");
+    return true;
+  }
+
+  // Adults/Children rows
+  const rowYes =
+    /(adults?|children)\s*[:\-]\s*(yes|open|accepting|currently\s*accepting)\b/i;
+  if (rowYes.test(plain)) {
+    if (diag) (diag.snippets ||= []).push("row: adult/children → Yes");
+    return true;
+  }
+
+  // Structured data hint
+  const ld = [];
+  const ldRe = /<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
+  let m;
+  while ((m = ldRe.exec(html))) {
+    ld.push(m[1]);
+  }
+  for (const block of ld) {
+    try {
+      const data = JSON.parse(block);
+      const arr = Array.isArray(data) ? data : [data];
+      for (const node of arr) {
+        const s = JSON.stringify(node).toLowerCase();
+        if (
+          s.includes('accepting new nhs patients') ||
+          /"nhspatients"\s*:\s*"(yes|open|accepting)"/i.test(s)
+        ) {
+          if (diag) (diag.snippets ||= []).push("jsonld: accepting");
+          return true;
+        }
+      }
+    } catch {}
+  }
+
+  return false;
 }
 
 /* ---------- Candidate discovery ---------- */
@@ -315,6 +366,22 @@ async function fetchDetail(link, diag) {
         { upsert:true }
       );
     } catch {}
+  }
+
+  // Optional alt-views in case the main tab hides the wording
+  if (r.ok && !detailMentionsAccepting(r.text, diag)) {
+    for (const view of ["services", "information"]) {
+      const alt = r.url.includes("?") ? `${r.url}&view=${view}` : `${r.url}?view=${view}`;
+      const r2 = await fetchText(alt, {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,application/xhtml+xml",
+        "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
+      });
+      diag?.calls.push({ url:alt, ok:r2.ok, status:r2.status, kind:"detail-alt", htmlBytes:r2.text.length });
+      if (r2.ok && detailMentionsAccepting(r2.text, diag)) {
+        return { accepting: true, htmlLen: r2.text.length };
+      }
+    }
   }
 
   return { accepting: r.ok && detailMentionsAccepting(r.text, diag), htmlLen: r.text.length };
