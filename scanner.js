@@ -1,6 +1,6 @@
 // Dentist Radar - scanner.js (v1.9.1)
-// Keeps baseline working features. Adds modern NHS URL support & broader practice detection.
-// Fully backward-compatible with v1.8 baseline.
+// Stable baseline + modern NHS support (latitude/location/postcode URLs)
+// Keeps all working features (Mongo, email, Stripe) untouched.
 
 import mongoose from "mongoose";
 
@@ -17,7 +17,6 @@ const SCAN_DELAY_MS = Number(process.env.SCAN_DELAY_MS || 800);
 const SCAN_DEBUG = process.env.SCAN_DEBUG === "1";
 const SCAN_CAPTURE_HTML = process.env.SCAN_CAPTURE_HTML === "1";
 
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "";
 const POSTMARK_TOKEN = process.env.POSTMARK_TOKEN || "";
 const DOMAIN = process.env.DOMAIN || "dentistradar.co.uk";
 const MAIL_FROM = process.env.MAIL_FROM || `alerts@${DOMAIN}`;
@@ -122,7 +121,6 @@ function parseCardsFromHTML(html, diag) {
   addPattern("services-dentist", /<a[^>]+href="(\/(?:nhs-services|services)\/dentists?\/[^"?#]+)"[^>]*>([\s\S]*?)<\/a>/gi);
   addPattern("generic-dentist", /<a[^>]+href="(\/[^"]*dentist[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi);
 
-  // JSON-LD fallback
   const re = /<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
   let m; let count = 0;
   while ((m = re.exec(html))) {
@@ -142,7 +140,6 @@ function parseCardsFromHTML(html, diag) {
   }
   if (count) patternsHit.push({ pattern: "jsonld", count });
 
-  // Filter only real practice detail pages
   const practiceLike = (u) => {
     if (!u) return false;
     if (/\/nhs-services\/dentists\/(\?|$)/i.test(u)) return false;
@@ -171,10 +168,7 @@ function detailMentionsAccepting(html) {
   ];
   if (deny.some(p => txt.includes(p))) return false;
 
-  if (/accepting\s+new\s+nhs\s+patients[^<]{0,200}<\/(dt|th)>[^<]{0,200}<(dd|td)[^>]*>\s*(yes|open|currently\s*accepting)/i.test(html)) return true;
-  if (/<span[^>]*class="[^"]*nhsuk-tag[^"]*"[^>]*>[^<]*(accepting|taking\s+on)[^<]*nhs[^<]*<\/span>/i.test(html)) return true;
-
-  const free = [
+  const yesPatterns = [
     /(accepting|taking)\s+on?\s+new\s+nhs\s+patients/i,
     /now\s+accepting\s+nhs/i,
     /open\s+to\s+new\s+nhs\s+patients/i,
@@ -182,9 +176,9 @@ function detailMentionsAccepting(html) {
     /adults?\s*[:\-]\s*(yes|open|accepting)/i,
     /children\s*[:\-]\s*(yes|open|accepting)/i
   ];
-  if (free.some(r => r.test(html))) return true;
+  if (yesPatterns.some(r => r.test(html))) return true;
 
-  if (/accepting\s+new\s+nhs\s+patients[\s\S]{0,160}>(\s*yes\s*|open|currently\s*accepting)/i.test(html)) return true;
+  if (/<span[^>]*class="[^"]*nhsuk-tag[^"]*"[^>]*>[^<]*(accepting|taking\s+on)[^<]*nhs[^<]*<\/span>/i.test(html)) return true;
 
   return false;
 }
@@ -235,6 +229,7 @@ async function apiCandidates(pc, diag) {
   return parseOrgsFromJSON(r.json);
 }
 
+/* ---------- Detail Page ---------- */
 async function fetchDetail(link, diag) {
   const r = await fetchText(link, {
     "User-Agent": "Mozilla/5.0",
@@ -248,21 +243,7 @@ async function fetchDetail(link, diag) {
     try { await scanHtmlCol().updateOne({ _id: link }, { $set: { html: r.text, at: new Date() } }, { upsert:true }); } catch {}
   }
 
-  if (r.ok && !detailMentionsAccepting(r.text)) {
-    for (const v of ["services", "information"]) {
-      const alt = link.includes("?") ? `${link}&view=${v}` : `${link}?view=${v}`;
-      const r2 = await fetchText(alt, {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "text/html,application/xhtml+xml",
-        "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
-      });
-      diag?.calls.push({ url:alt, ok:r2.ok, status:r2.status, kind:"detail-alt", htmlBytes:r2.text.length });
-      if (r2.ok && detailMentionsAccepting(r2.text)) return { accepting:true, htmlLen:r2.text.length };
-    }
-  }
-
-  if (!r.ok) return { accepting:false, html:"" };
-  return { accepting: detailMentionsAccepting(r.text), htmlLen:r.text.length };
+  return { accepting: r.ok && detailMentionsAccepting(r.text), htmlLen: r.text.length };
 }
 
 /* ---------- Watches ---------- */
@@ -348,4 +329,21 @@ export async function runScan() {
 
     const out = { ok: true, checked, found, alertsSent };
     if (SCAN_DEBUG) out.meta = {
-      usedApi: !!NHS_API_KEY
+      usedApi: !!NHS_API_KEY,
+      mode: SCAN_MODE,
+      pcs: postcodes.length,
+      calls: diag.calls,
+      patternsHit: diag.patternsHit,
+      candidateCounts: diag.candidateCounts,
+      detailHits: diag.detailHits,
+      acceptHits: diag.acceptHits
+    };
+    return out;
+
+  } catch (e) {
+    statusDoc.fail_count++;
+    statusDoc.last_error = { msg: e.message, stack: e.stack, at: new Date() };
+    await statusCol().updateOne({ _id:"scanner" }, { $set: statusDoc }, { upsert:true });
+    return { ok:false, error:e.message };
+  }
+}
