@@ -1,6 +1,9 @@
-// Dentist Radar - scanner.js (v1.9.2 + Appointments-first + "accepts" phrasing)
-// Core: follow each practice's Appointments page and classify from there.
-// Change: handle "currently accepts new NHS patients for routine dental care" etc.
+// Dentist Radar - scanner.js (v1.9.2 Strict Appointments-first)
+// - Follows the practice "Appointments" page first (with Referer + slash variants)
+// - Only raises positives if the Appointments page/section confirms acceptance
+// - Blocks profile/JSON-LD-only positives (avoids stale copy FPs)
+// - Requires adults unless overridden
+// - Preserves v1.9.2 structure, collections, and exports
 
 import mongoose from "mongoose";
 
@@ -17,12 +20,17 @@ const SCAN_DELAY_MS    = Number(process.env.SCAN_DELAY_MS || 800);
 const SCAN_DEBUG       = process.env.SCAN_DEBUG === "1";
 const SCAN_CAPTURE_HTML= process.env.SCAN_CAPTURE_HTML === "1";
 
-// Optional: reconfirm positives to avoid blips
+// Optional: reconfirm positives to avoid blips (Appointments URL only)
 const RECONFIRM        = /^(1|true|yes)$/i.test(String(process.env.RECONFIRM || "0"));
 const RECONFIRM_TRIES  = Math.max(0, Number(process.env.RECONFIRM_TRIES || 1));
 const RECONFIRM_GAP_MS = Math.max(0, Number(process.env.RECONFIRM_GAP_MS || 120000));
 
-// Optional: treat "children-only" acceptance as positive
+// Strict guardrails to avoid false positives
+const STRICT_APPOINTMENTS_ONLY       = /^(1|true|yes)$/i.test(String(process.env.STRICT_APPTS_ONLY || "1")); // default ON
+const IGNORE_JSONLD_FOR_POSITIVES    = /^(1|true|yes)$/i.test(String(process.env.IGNORE_JSONLD_FOR_POS || "1"));
+const REQUIRE_ADULTS_FOR_POSITIVE    = /^(1|true|yes)$/i.test(String(process.env.REQUIRE_ADULTS_POS || "1"));
+
+// Optional: treat children-only acceptance as positive (overrides strict adults)
 const ACCEPT_CHILDREN_OK = /^(1|true|yes)$/i.test(String(process.env.ACCEPT_CHILDREN_OK || "0"));
 
 const POSTMARK_TOKEN   = process.env.POSTMARK_TOKEN || "";
@@ -71,6 +79,16 @@ function resolveUrlMaybeRelative(href, baseUrl) {
     if (href.startsWith("//")) return "https:" + href;
     return new URL(href, baseUrl).toString();
   } catch { return null; }
+}
+
+// include with and without trailing slash
+function withSlashVariants(url) {
+  try {
+    const u = new URL(url);
+    const noSlash = u.toString().replace(/\/+$/, "");
+    const withSlash = noSlash + "/";
+    return Array.from(new Set([noSlash, withSlash]));
+  } catch { return [url]; }
 }
 
 /* ---------- Email (Postmark) ---------- */
@@ -193,7 +211,7 @@ function parseCardsFromHTML(html, diag) {
   return dedupe(filtered, x => x.link || x.name);
 }
 
-/* ---------- Acceptance detector (Appointments phrasing, incl. "accepts") ---------- */
+/* ---------- Acceptance detector (STRICT: Appointments-only positives) ---------- */
 function extractJsonLd(html) {
   const out = [];
   const re = /<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
@@ -204,13 +222,25 @@ function extractJsonLd(html) {
   return out;
 }
 
-function classifyAcceptance(html, diag) {
+function classifyAcceptanceStrict(html, diag, { ignoreJsonLdForPositives = true, requireAdults = true } = {}) {
   if (!html) return { accepting: null, score: 0, snippet: "" };
 
   const plain = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").toLowerCase();
 
-  // NHS Appointments copy — now includes "accepts"/"currently accepts"
-  const HARD_NEG = [
+  // Canonical NHS phrasing (gold standard)
+  const GOLD_POS = [
+    /\b(currently\s+)?accepts?\s+new\s+nhs\s+patients\s+for\s+routine\s+dental\s+care\b/i,
+    /\b(currently\s+)?accepts?\s+new\s+nhs\s+patients\b/i,
+    /\baccepting\s+new\s+nhs\s+patients\s+for\s+routine\s+dental\s+care\b/i,
+    /\baccepting\s+new\s+nhs\s+patients\b/i
+  ];
+
+  // Adults/children detection
+  const mentionsAdults   = /\badults?\b/.test(plain) || /\b18\s*or\s*over\b/.test(plain);
+  const mentionsChildren = /\b(children|child|under\s*18|17\s*or\s*under)\b/.test(plain);
+
+  // Hard negatives
+  const HARD_NEG_STR = [
     'not accepting new nhs patients for routine dental care',
     'not accepting new nhs patients',
     'no longer accepting nhs',
@@ -219,74 +249,46 @@ function classifyAcceptance(html, diag) {
     'registrations suspended',
     'nhs list closed'
   ];
-  const SOFT_NEG = [
+  const SOFT_NEG_STR = [
     'not accepting new patients',
     'temporarily not accepting',
     'private patients only',
     'waiting list only',
     'waiting list'
   ];
-  const HARD_POS_STRINGS = [
-    'accepting new nhs patients for routine dental care',
-    'accepting new nhs patients',
-    'we are accepting new nhs',
-    "we're accepting new nhs",
-    'open to new nhs patients',
-    'taking on nhs',
-    'new nhs registrations open',
-    'accepting nhs registrations'
-  ];
-  // NEW: explicit regexes for "accepts"/"currently accepts"
-  const HARD_POS_REGEX = [
-    /\bcurrently\s+accepts?\s+new\s+nhs\s+patients\b/i,
-    /\baccepts?\s+new\s+nhs\s+patients\b/i,
-    /\b(currently\s+)?accepts?\s+new\s+nhs\s+patients\s+for\s+routine\s+dental\s+care\b/i
-  ];
-  const SOFT_POS = [
-    'accepting nhs patients',
-    'limited nhs capacity',
-    'nhs spaces available',
-    'registering nhs'
-  ];
 
-  // Children-only detection
-  const childrenOnly = /\b(accepting|accepts|registering|taking on)\b[^.]{0,50}\b(children|child|under\s*18)\b[^.]{0,50}\bnhs\b/.test(plain);
-
+  // JSON-LD (stale sometimes)
   const jsonldText = extractJsonLd(html).map(x => JSON.stringify(x)).join(' ').toLowerCase();
 
   let score = 0;
-  const markIncl = (src, arr, val, tag) => { if (arr.some(p => src.includes(p))) { score += val; if (SCAN_DEBUG) (diag.snippets ||= []).push(`[${tag}]`); } };
-  const markRe   = (src, arr, val, tag) => { if (arr.some(rx => rx.test(src))) { score += val; if (SCAN_DEBUG) (diag.snippets ||= []).push(`[${tag}]`); } };
+  const note = (tag) => { if (SCAN_DEBUG) (diag.snippets ||= []).push(tag); };
 
-  // negatives
-  markIncl(plain, HARD_NEG, -3, 'hard_neg');
-  markIncl(jsonldText, HARD_NEG, -2, 'hard_neg_jsonld');
-  markIncl(plain, SOFT_NEG, -1, 'soft_neg');
-  markIncl(jsonldText, SOFT_NEG, -1, 'soft_neg_jsonld');
+  // negatives (JSON-LD allowed to push negative)
+  if (HARD_NEG_STR.some(s => plain.includes(s))) { score -= 3; note('[hard_neg]'); }
+  if (SOFT_NEG_STR.some(s => plain.includes(s)))  { score -= 1; note('[soft_neg]'); }
+  if (HARD_NEG_STR.some(s => jsonldText.includes(s))) { score -= 2; note('[hard_neg_jsonld]'); }
+  if (SOFT_NEG_STR.some(s => jsonldText.includes(s)))  { score -= 1; note('[soft_neg_jsonld]'); }
 
-  // positives
-  markIncl(plain, HARD_POS_STRINGS, +3, 'hard_pos');
-  markIncl(jsonldText, HARD_POS_STRINGS, +2, 'hard_pos_jsonld');
-  markRe(plain, HARD_POS_REGEX, +3, 'hard_pos_regex');
+  // positives ONLY from visible text (never JSON-LD)
+  let goldHit = GOLD_POS.some(rx => rx.test(plain));
+  if (goldHit) { score += 4; note('[gold_pos]'); }
 
-  markIncl(plain, SOFT_POS, +1, 'soft_pos');
-  markIncl(jsonldText, SOFT_POS, +1, 'soft_pos_jsonld');
-
-  // table-like pattern: "...Accepting new NHS patients... Yes"
-  if (/accept(ing|s)?\s+new\s+nhs\s+patients[^<]{0,200}<\/(dt|th)>[^<]{0,200}<(dd|td)[^>]*>\s*(yes|open|currently\s*accept(ing|s)?)/i.test(html)) {
-    score += 3; if (SCAN_DEBUG) (diag.snippets ||= []).push('[table_yes]');
+  // Table-like on-page Yes
+  if (/accept(ing|s)?\s+new\s+nhs\s+patients[^<]{0,180}<\/(dt|th)>[^<]{0,160}<(dd|td)[^>]*>\s*(yes|open|currently\s*accept(ing|s)?)/i.test(html)) {
+    score += 3; note('[table_yes]');
   }
 
-  if (childrenOnly) {
-    if (ACCEPT_CHILDREN_OK) { score += 2; (diag.snippets ||= []).push('[children_only_pos]'); }
-    else { score -= 1; (diag.snippets ||= []).push('[children_only_soft_neg]'); }
+  // Adults requirement (children-only should not count unless ACCEPT_CHILDREN_OK)
+  if (requireAdults && !ACCEPT_CHILDREN_OK && mentionsChildren && !mentionsAdults) {
+    score = Math.min(score, 2); // cap below positive threshold
+    note('[children_only_guard]');
   }
 
   let accepting = null;
   if (score >= 3) accepting = true;
   else if (score <= -2) accepting = false;
 
-  return { accepting, score, snippet: plain.slice(0, 220) };
+  return { accepting, score, snippet: plain.slice(0, 220), mentionsAdults, mentionsChildren, goldHit };
 }
 
 /* ---------- Appointments discovery ---------- */
@@ -342,10 +344,16 @@ function extractAppointmentsSectionFromHtml(html) {
 function buildHardProbes(profileUrl) {
   const u = new URL(profileUrl, NHS_HTML_BASE);
   const base = u.pathname.replace(/\/+$/,'');
-  const probes = APPOINTMENT_SLUGS.map(slug => new URL(`${base}/${slug}`, u).toString());
-  probes.push(profileUrl + "#appointments");
-  probes.push(profileUrl + "#appointment");
-  return Array.from(new Set(probes));
+  const slugs = APPOINTMENT_SLUGS.map(slug => new URL(`${base}/${slug}`, u).toString());
+  // hash anchors on same page
+  const anchors = [profileUrl + "#appointments", profileUrl + "#appointment"];
+  // expand non-hash candidates with/without trailing slash
+  const out = [];
+  for (const t of [...slugs, ...anchors]) {
+    if (/#/.test(t)) out.push(t);
+    else out.push(...withSlashVariants(t));
+  }
+  return Array.from(new Set(out));
 }
 
 /* ---------- Candidate discovery ---------- */
@@ -365,6 +373,7 @@ async function htmlCandidates(pc, diag) {
 
   let cards = parseCardsFromHTML(r.text, diag);
 
+  // Fallback: broad href scan
   if (!cards.length) {
     const alts = [];
     const hrefRe = /href="([^"]+)"/gi;
@@ -411,8 +420,9 @@ async function apiCandidates(pc, diag) {
   return parseOrgsFromJSON(r.json);
 }
 
-/* ---------- Detail fetch (APPOINTMENTS LINK + HARD PROBES) ---------- */
+/* ---------- Detail fetch (Appointments-first + Referer + Slash-Variants) ---------- */
 async function fetchDetail(profileUrl, diag) {
+  // 1) Fetch profile
   const rProfile = await fetchText(profileUrl, {
     "User-Agent": "Mozilla/5.0",
     "Accept": "text/html,application/xhtml+xml",
@@ -421,9 +431,9 @@ async function fetchDetail(profileUrl, diag) {
   });
   diag?.calls.push({ url:profileUrl, ok:rProfile.ok, status:rProfile.status, kind:"detail", htmlBytes:rProfile.text.length });
 
-  if (!rProfile.ok) return { accepting:false, htmlLen: rProfile.text.length, score: 0 };
+  if (!rProfile.ok) return { accepting:false, htmlLen: rProfile.text.length, score: 0, usedAppointments:false };
 
-  if (SCAN_CAPTURE_HTML) {
+  if (SCAN_CAPTURE_HTML && rProfile.ok) {
     try {
       await scanHtmlCol().updateOne(
         { _id: profileUrl },
@@ -433,90 +443,99 @@ async function fetchDetail(profileUrl, diag) {
     } catch {}
   }
 
+  // 2) Collect Appointments targets
   const linkDerived = findAppointmentsHref(rProfile.text, profileUrl);
   const hardProbes = buildHardProbes(profileUrl);
   const appointTargets = Array.from(new Set([...linkDerived, ...hardProbes]));
 
+  // 3) Try hash section first (same HTML)
   let appointHtml = null;
   let appointUrlUsed = null;
 
-  // hash-first (same page section)
   for (const aUrl of appointTargets) {
     if (/#/.test(aUrl)) {
       const section = extractAppointmentsSectionFromHtml(rProfile.text);
       if (section) { appointHtml = section; appointUrlUsed = aUrl; break; }
     }
   }
-  // dedicated subpages next
+
+  // 4) Then try dedicated subpages — with Referer and slash variants
   if (!appointHtml) {
-    for (const aUrl of appointTargets) {
-      if (/#/.test(aUrl)) continue;
-      const rApp = await fetchText(aUrl, {
-        "User-Agent": "Mozilla/5.0",
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "en-GB,en;q=0.9",
-        "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
-      });
-      diag?.calls.push({ url:aUrl, ok:rApp.ok, status:rApp.status, kind:"appointments", htmlBytes:rApp.text.length });
-      if (rApp.ok && rApp.text) {
-        appointHtml = rApp.text; appointUrlUsed = aUrl;
-        if (SCAN_CAPTURE_HTML) {
-          try {
-            await scanHtmlCol().updateOne(
-              { _id: aUrl },
-              { $set: { html: rApp.text, at: new Date(), from: "appointments" } },
-              { upsert:true }
-            );
-          } catch {}
+    for (const aUrl0 of appointTargets) {
+      if (/#/.test(aUrl0)) continue;
+      const tryUrls = withSlashVariants(aUrl0);
+      for (const aUrl of tryUrls) {
+        const rApp = await fetchText(aUrl, {
+          "User-Agent": "Mozilla/5.0",
+          "Accept": "text/html,application/xhtml+xml",
+          "Accept-Language": "en-GB,en;q=0.9",
+          "Referer": profileUrl, // important for NHS
+          "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
+        });
+        diag?.calls.push({ url:aUrl, ok:rApp.ok, status:rApp.status, kind:"appointments", htmlBytes:rApp.text.length });
+
+        if (rApp.ok && rApp.text) {
+          appointHtml = rApp.text; appointUrlUsed = aUrl;
+          if (SCAN_CAPTURE_HTML) {
+            try {
+              await scanHtmlCol().updateOne(
+                { _id: aUrl },
+                { $set: { html: rApp.text, at: new Date(), from: "appointments" } },
+                { upsert:true }
+              );
+            } catch {}
+          }
+          break;
         }
-        break;
       }
+      if (appointHtml) break;
     }
   }
 
+  // 5) Classify using appointments content; profile only used for negatives/meta
+  const usedAppointments = !!appointHtml;
   const htmlToClassify = appointHtml || rProfile.text;
-  let cls = classifyAcceptance(htmlToClassify, diag);
-  if (SCAN_DEBUG) (diag.snippets ||= []).push(appointHtml ? `[appointments_used:${appointUrlUsed}]` : `[appointments_missing]`);
+
+  const cls = classifyAcceptanceStrict(htmlToClassify, diag, {
+    ignoreJsonLdForPositives: IGNORE_JSONLD_FOR_POSITIVES,
+    requireAdults: REQUIRE_ADULTS_FOR_POSITIVE && !ACCEPT_CHILDREN_OK
+  });
 
   let accepting = cls.accepting === true;
   let score = cls.score;
 
-  // Optional reconfirm (prefer the same appointments URL)
-  if (RECONFIRM && accepting && RECONFIRM_TRIES > 0) {
+  // Enforce Appointments-only positives if configured
+  if (STRICT_APPOINTMENTS_ONLY && accepting && !usedAppointments) {
+    accepting = false;
+    if (SCAN_DEBUG) (diag.snippets ||= []).push('[blocked_profile_positive]');
+  }
+
+  if (SCAN_DEBUG) (diag.snippets ||= []).push(usedAppointments ? `[appointments_used:${appointUrlUsed}]` : `[appointments_missing]`);
+
+  // 6) Optional reconfirm (Appointments URL only)
+  if (RECONFIRM && accepting && usedAppointments && RECONFIRM_TRIES > 0 && appointUrlUsed && !/#/.test(appointUrlUsed)) {
     let confirms = 1;
     for (let i = 0; i < RECONFIRM_TRIES; i++) {
       await sleep(RECONFIRM_GAP_MS);
-
-      let htmlAgain = null;
-      if (appointUrlUsed && !/#/.test(appointUrlUsed)) {
-        const rAgain = await fetchText(appointUrlUsed, {
-          "User-Agent": "Mozilla/5.0",
-          "Accept": "text/html,application/xhtml+xml",
-          "Accept-Language": "en-GB,en;q=0.9",
-          "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
-        });
-        if (rAgain.ok) htmlAgain = rAgain.text;
-      } else {
-        const rProf2 = await fetchText(profileUrl, {
-          "User-Agent": "Mozilla/5.0",
-          "Accept": "text/html,application/xhtml+xml",
-          "Accept-Language": "en-GB,en;q=0.9",
-          "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
-        });
-        if (rProf2.ok) htmlAgain = extractAppointmentsSectionFromHtml(rProf2.text) || rProf2.text;
-      }
-
-      if (!htmlAgain) continue;
-      const cls2 = classifyAcceptance(htmlAgain, diag);
+      const rAgain = await fetchText(appointUrlUsed, {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-GB,en;q=0.9",
+        "Referer": profileUrl,
+        "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
+      });
+      if (!rAgain.ok) continue;
+      const cls2 = classifyAcceptanceStrict(rAgain.text, diag, {
+        ignoreJsonLdForPositives: IGNORE_JSONLD_FOR_POSITIVES,
+        requireAdults: REQUIRE_ADULTS_FOR_POSITIVE && !ACCEPT_CHILDREN_OK
+      });
       if (cls2.accepting === true) { confirms++; score = Math.max(score, cls2.score); }
     }
     if (confirms < 2) accepting = false;
     (diag.snippets ||= []).push(`[reconfirm=${confirms}]`);
   }
 
-  if (SCAN_DEBUG && cls.snippet) (diag.snippets ||= []).push(cls.snippet.slice(0, 220));
-
-  return { accepting, htmlLen: rProfile.text.length, score };
+  return { accepting, htmlLen: rProfile.text.length, score, usedAppointments };
 }
 
 /* ---------- Watches ---------- */
@@ -573,9 +592,9 @@ export async function runScan() {
 
       for (const c of ordered) {
         if (!c.link) continue;
-        const detail = await fetchDetail(c.link, diag);  // Appointments page (or profile fallback)
+        const detail = await fetchDetail(c.link, diag);  // Appointments-first + strict
         localDetailHits++;
-        if (detail.accepting) {
+        if (detail.accepting && detail.usedAppointments) { // only alert when Appointments produced the positive
           localAcceptHits++; found++;
           const watchers = await usersWatching(pc);
           for (const u of watchers) {
@@ -642,6 +661,6 @@ export async function debugCandidateLinks(pc) {
 }
 
 /* ---------- Compatibility exports ---------- */
-export default runScan;
-export { runScan as runscan };
-export { runScan as run_scan };
+export default runScan;          // default import
+export { runScan as runscan };  // tolerate lowercase import
+export { runScan as run_scan }; // tolerate snake_case import
