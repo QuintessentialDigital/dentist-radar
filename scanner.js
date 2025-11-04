@@ -1,17 +1,16 @@
-// Dentist Radar - scanner.js (v1.9.2+ with Appointments-first detection)
-// Safe for production: keeps your exports, Mongo collections, email flow, and routes.
+// Dentist Radar - scanner.js (v1.9.2++ Appointments-link first)
+// Safe for production: keeps routes, Mongo, email, env flags. ESM + tolerant exports.
 
 import mongoose from "mongoose";
 
 /* ---------- Config ---------- */
 const NHS_API_BASE     = process.env.NHS_API_BASE     || "https://api.nhs.uk/service-search";
 const NHS_API_VERSION  = process.env.NHS_API_VERSION  || "2";
-const NHS_API_KEY      = process.env.NHS_API_KEY      || "";   // optional but helpful
+const NHS_API_KEY      = process.env.NHS_API_KEY      || "";   // optional
 
 const NHS_HTML_BASE    = "https://www.nhs.uk";
 
-// We prefer HTML path but keep the flag for completeness
-const SCAN_MODE        = (process.env.SCAN_MODE || "both").toLowerCase(); // html|api|both
+const SCAN_MODE        = (process.env.SCAN_MODE || "html").toLowerCase(); // html|api|both
 const SCAN_MAX_PCS     = Number(process.env.SCAN_MAX_PCS || 40);
 const SCAN_DELAY_MS    = Number(process.env.SCAN_DELAY_MS || 800);
 const SCAN_DEBUG       = process.env.SCAN_DEBUG === "1";
@@ -19,8 +18,8 @@ const SCAN_CAPTURE_HTML= process.env.SCAN_CAPTURE_HTML === "1";
 
 // Optional: reconfirm positives to avoid blips
 const RECONFIRM        = /^(1|true|yes)$/i.test(String(process.env.RECONFIRM || "0"));
-const RECONFIRM_TRIES  = Math.max(0, Number(process.env.RECONFIRM_TRIES || 1));        // extra checks after first hit
-const RECONFIRM_GAP_MS = Math.max(0, Number(process.env.RECONFIRM_GAP_MS || 120000));  // 2 minutes
+const RECONFIRM_TRIES  = Math.max(0, Number(process.env.RECONFIRM_TRIES || 1));
+const RECONFIRM_GAP_MS = Math.max(0, Number(process.env.RECONFIRM_GAP_MS || 120000));
 
 // Optional: treat "children-only" acceptance as positive
 const ACCEPT_CHILDREN_OK = /^(1|true|yes)$/i.test(String(process.env.ACCEPT_CHILDREN_OK || "0"));
@@ -62,6 +61,15 @@ function dedupe(arr, keyFn) {
   const seen = new Set(); const out = [];
   for (const it of arr) { const k = keyFn(it); if (!seen.has(k)) { seen.add(k); out.push(it); } }
   return out;
+}
+
+function resolveUrlMaybeRelative(href, baseUrl) {
+  try {
+    if (!href) return null;
+    if (/^https?:\/\//i.test(href)) return href;
+    if (href.startsWith("//")) return "https:" + href;
+    return new URL(href, baseUrl).toString();
+  } catch { return null; }
 }
 
 /* ---------- Email (Postmark) ---------- */
@@ -127,7 +135,7 @@ function parseCardsFromHTML(html, diag) {
     while ((m = regex.exec(html))) {
       let href = m[1];
       if (!href) continue;
-      if (!href.startsWith("http")) href = prefix + href;
+      href = resolveUrlMaybeRelative(href, prefix);
       const name = (m[2] || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() || "Dentist";
       results.push({ name, link: href });
       count++;
@@ -135,17 +143,12 @@ function parseCardsFromHTML(html, diag) {
     if (count) patternsHit.push({ pattern, count });
   };
 
-  // Card link styles commonly used on NHS search pages
   addPattern("card__link",
     /<a[^>]+class="[^"]*nhsuk-card__link[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
   );
-
-  // Dentist links in both "services" and "nhs-services" namespaces
   addPattern("services-dentist",
     /<a[^>]+href="(\/(?:nhs-services|services)\/dentists?\/[^"?#]+)"[^>]*>([\s\S]*?)<\/a>/gi
   );
-
-  // Fallback: any anchor with "dentist" segment
   addPattern("generic-dentist",
     /<a[^>]+href="(\/[^"]*dentist[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
   );
@@ -161,7 +164,7 @@ function parseCardsFromHTML(html, diag) {
         const name = n.name || n?.item?.name;
         let url = n.url || n?.item?.url;
         if (name && url) {
-          if (!/^https?:\/\/|^\/\//i.test(url)) url = NHS_HTML_BASE + url;
+          url = resolveUrlMaybeRelative(url, NHS_HTML_BASE);
           results.push({ name: String(name).trim(), link: url });
           count++;
         }
@@ -170,7 +173,7 @@ function parseCardsFromHTML(html, diag) {
   }
   if (count) patternsHit.push({ pattern: "jsonld", count });
 
-  // Keep only links that look like actual practice detail pages, not category landing
+  // Keep only links that look like practice detail pages
   const practiceLike = (u) => {
     if (!u) return false;
     if (/\/nhs-services\/dentists\/(\?|$)/i.test(u)) return false; // landing page
@@ -189,78 +192,78 @@ function parseCardsFromHTML(html, diag) {
   return dedupe(filtered, x => x.link || x.name);
 }
 
-/* ---------- Acceptance detector ---------- */
-// Extract JSON-LD blocks (sometimes holds status-like hints)
+/* ---------- Acceptance detector (phrases tuned to Appointments page) ---------- */
 function extractJsonLd(html) {
   const out = [];
   const re = /<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
   let m;
   while ((m = re.exec(html))) {
-    try {
-      const node = JSON.parse(m[1]);
-      out.push(node);
-    } catch {}
+    try { out.push(JSON.parse(m[1])); } catch {}
   }
   return out;
 }
 
-// Main ensemble classifier for an HTML blob (profile or appointments)
 function classifyAcceptance(html, diag) {
   if (!html) return { accepting: null, score: 0, snippet: "" };
 
   const plain = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").toLowerCase();
 
-  // children-only detection
-  const childrenOnly = /\b(accepting|registering|taking on)\b[^.]{0,50}\b(children|child|under\s*18)\b[^.]{0,50}\bnhs\b/.test(plain);
-
+  // NHS copy seen on "Appointments" pages
   const HARD_NEG = [
-    'not accepting new nhs patients','no longer accepting nhs','no new nhs patients',
-    'not currently accepting','closed to new nhs patients','nhs registrations closed',
-    'nhs list closed','registrations suspended','nhs closed','waiting list only'
+    'not accepting new nhs patients for routine dental care',
+    'not accepting new nhs patients',
+    'no longer accepting nhs',
+    'closed to new nhs patients',
+    'nhs registrations closed',
+    'registrations suspended',
+    'nhs list closed'
   ];
   const SOFT_NEG = [
-    'not accepting new patients','temporarily not accepting','private patients only','waiting list'
+    'not accepting new patients',
+    'temporarily not accepting',
+    'private patients only',
+    'waiting list only',
+    'waiting list'
   ];
   const HARD_POS = [
-    'accepting new nhs patients','we are accepting new nhs',"we're accepting new nhs",
-    'open to new nhs patients','taking on nhs','taking on new nhs',
-    'accepting nhs registrations','new nhs registrations open'
+    'accepting new nhs patients for routine dental care',
+    'accepting new nhs patients',
+    'we are accepting new nhs',
+    "we're accepting new nhs",
+    'open to new nhs patients',
+    'taking on nhs',
+    'new nhs registrations open',
+    'accepting nhs registrations'
   ];
   const SOFT_POS = [
-    'accepting nhs patients','limited nhs capacity','nhs spaces available','registering nhs'
+    'accepting nhs patients',
+    'limited nhs capacity',
+    'nhs spaces available',
+    'registering nhs'
   ];
 
-  const badgeRe = /<span[^>]*class="[^"]*nhsuk-tag[^"]*"[^>]*>([\s\S]*?)<\/span>/i;
-  const badge = (html.match(badgeRe)?.[1] || '').toLowerCase();
+  // Children-only detection
+  const childrenOnly = /\b(accepting|registering|taking on)\b[^.]{0,50}\b(children|child|under\s*18)\b[^.]{0,50}\bnhs\b/.test(plain);
+
+  // quick JSON-LD scan (rarely holds acceptance, but harmless)
   const jsonldText = extractJsonLd(html).map(x => JSON.stringify(x)).join(' ').toLowerCase();
 
   let score = 0;
-  const mark = (src, arr, val, tag) => {
-    if (arr.some(p => src.includes(p))) { score += val; if (SCAN_DEBUG) (diag.snippets ||= []).push(`[${tag}]`); }
-  };
+  const mark = (src, arr, val, tag) => { if (arr.some(p => src.includes(p))) { score += val; if (SCAN_DEBUG) (diag.snippets ||= []).push(`[${tag}]`); } };
 
   // negatives
-  mark(plain, HARD_NEG, -3, 'hard_neg');
-  mark(badge, HARD_NEG, -3, 'hard_neg_badge');
-  mark(jsonldText, HARD_NEG, -2, 'hard_neg_jsonld');
-  mark(plain, SOFT_NEG, -1, 'soft_neg');
-  mark(badge, SOFT_NEG, -1, 'soft_neg_badge');
-  mark(jsonldText, SOFT_NEG, -1, 'soft_neg_jsonld');
+  mark(plain, HARD_NEG, -3, 'hard_neg'); mark(jsonldText, HARD_NEG, -2, 'hard_neg_jsonld');
+  mark(plain, SOFT_NEG, -1, 'soft_neg'); mark(jsonldText, SOFT_NEG, -1, 'soft_neg_jsonld');
 
   // positives
-  mark(plain, HARD_POS, +3, 'hard_pos');
-  mark(badge, HARD_POS, +3, 'hard_pos_badge');
-  mark(jsonldText, HARD_POS, +2, 'hard_pos_jsonld');
-  mark(plain, SOFT_POS, +1, 'soft_pos');
-  mark(badge, SOFT_POS, +1, 'soft_pos_badge');
-  mark(jsonldText, SOFT_POS, +1, 'soft_pos_jsonld');
+  mark(plain, HARD_POS, +3, 'hard_pos'); mark(jsonldText, HARD_POS, +2, 'hard_pos_jsonld');
+  mark(plain, SOFT_POS, +1, 'soft_pos'); mark(jsonldText, SOFT_POS, +1, 'soft_pos_jsonld');
 
-  // Table-like pattern: "...Accepting new NHS patients...</dt>...<dd>Yes"
+  // table-like pattern: "...Accepting new NHS patients... Yes"
   if (/accepting\s+new\s+nhs\s+patients[^<]{0,200}<\/(dt|th)>[^<]{0,200}<(dd|td)[^>]*>\s*(yes|open|currently\s*accepting)/i.test(html)) {
     score += 3; if (SCAN_DEBUG) (diag.snippets ||= []).push('[table_yes]');
   }
 
-  // children-only logic
   if (childrenOnly) {
     if (ACCEPT_CHILDREN_OK) { score += 2; (diag.snippets ||= []).push('[children_only_pos]'); }
     else { score -= 1; (diag.snippets ||= []).push('[children_only_soft_neg]'); }
@@ -270,47 +273,66 @@ function classifyAcceptance(html, diag) {
   if (score >= 3) accepting = true;
   else if (score <= -2) accepting = false;
 
-  return { accepting, score, snippet: badge || plain.slice(0, 220) };
+  // small snippet for debug
+  const snippet = plain.slice(0, 220);
+  return { accepting, score, snippet };
 }
 
-/* ---------- Appointments page helpers ---------- */
-// Build candidate appointment URLs from a profile URL
-function buildAppointmentsCandidates(profileUrl) {
-  const u = new URL(profileUrl, NHS_HTML_BASE);
-  const candidates = [];
+/* ---------- Appointments link helpers ---------- */
+// 1) Pull the real "Appointments" link from the practice page
+function findAppointmentsHref(html, profileUrl) {
+  const anchors = [];
+  const aRe = /<a\b([^>]+)>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = aRe.exec(html))) {
+    const attrs = m[1] || "";
+    const inner = (m[2] || "").replace(/<[^>]+>/g, " ").trim();
+    const innerNorm = norm(inner);
+    const hrefMatch = attrs.match(/\bhref="([^"]+)"/i) || attrs.match(/\bhref='([^']+)'/i);
+    const href = hrefMatch ? hrefMatch[1] : null;
+    if (!href) continue;
 
-  // Typical NHS subpage slugs we’ve seen
-  const slugVariants = [
-    "appointments",
-    "appointments-and-opening-times",
-    "appointments-and-opening-hours",
-    "opening-times-and-appointments"
-  ];
+    // Prioritise anchors whose text says "appointments"
+    const isAppointmentsText =
+      /\bappointments?\b/.test(innerNorm) ||
+      /\bappointments?\b/.test(norm(attrs)) ||
+      /appointments/i.test(href);
 
-  // 1) Explicit /<slug> subpages
-  for (const slug of slugVariants) {
-    candidates.push(new URL(`${u.pathname.replace(/\/+$/,'')}/${slug}`, u).toString());
+    if (isAppointmentsText) {
+      const abs = resolveUrlMaybeRelative(href, profileUrl);
+      if (abs) anchors.push(abs);
+    }
   }
 
-  // 2) Hash anchors (same page) — we’ll interpret these in HTML
-  candidates.push(profileUrl + "#appointments");
-  candidates.push(profileUrl + "#appointment");
-  candidates.push(profileUrl + "#opening-times-and-appointments");
+  // If nothing by text, fall back to slugs commonly used
+  if (!anchors.length) {
+    const slugCandidates = [
+      "appointments",
+      "appointments-and-opening-times",
+      "appointments-and-opening-hours",
+      "opening-times-and-appointments"
+    ];
+    for (const slug of slugCandidates) {
+      const abs = resolveUrlMaybeRelative(slug, profileUrl);
+      if (abs) anchors.push(abs);
+    }
+    // also common hash anchors
+    anchors.push(profileUrl + "#appointments");
+    anchors.push(profileUrl + "#appointment");
+  }
 
-  // Dedupe while preserving order
-  return Array.from(new Set(candidates));
+  // Deduplicate preserving order
+  return Array.from(new Set(anchors));
 }
 
-// Extract the "appointments" section if present in the same HTML
+// 2) If the appointments content is on the same page (hash), extract just that section
 function extractAppointmentsSectionFromHtml(html) {
-  // Grab a slice around the appointments region to bias classification
   const idx = html.search(/id=["']appointments["']|>appointments</i);
   if (idx >= 0) {
     const start = Math.max(0, idx - 3000);
     const end = Math.min(html.length, idx + 8000);
     return html.slice(start, end);
   }
-  // fallback: section headings often include h2/h3 with 'Appointments'
   const hIdx = html.search(/<h[23][^>]*>\s*appointments\s*<\/h[23]>/i);
   if (hIdx >= 0) {
     const start = Math.max(0, hIdx - 2000);
@@ -323,58 +345,47 @@ function extractAppointmentsSectionFromHtml(html) {
 /* ---------- Candidate discovery ---------- */
 async function htmlCandidates(pc, diag) {
   const enc = encodeURIComponent(pc);
+  const url = `${NHS_HTML_BASE}/service-search/find-a-dentist/results/${enc}?distance=30`;
 
-  // Known-good list page:
-  // https://www.nhs.uk/service-search/find-a-dentist/results/<POSTCODE>?distance=30
-  const urls = [
-    `${NHS_HTML_BASE}/service-search/find-a-dentist/results/${enc}?distance=30`
-  ];
+  const r = await fetchText(url, {
+    "User-Agent": "Mozilla/5.0",
+    "Accept": "text/html",
+    "Referer": `${NHS_HTML_BASE}/service-search/find-a-dentist/`,
+    "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
+  });
+  diag?.calls.push({ url, ok:r.ok, status:r.status, source:"html", htmlBytes:r.text.length });
 
-  let out = [];
-  for (const url of urls) {
-    const r = await fetchText(url, {
-      "User-Agent": "Mozilla/5.0",
-      "Accept": "text/html",
-      "Referer": `${NHS_HTML_BASE}/service-search/find-a-dentist/`,
-      "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
-    });
-    diag?.calls.push({ url, ok:r.ok, status:r.status, source:"html", htmlBytes:r.text.length });
+  if (!r.ok) return [];
 
-    if (!r.ok) continue;
+  // Pass 1: parse card-like links & JSON-LD
+  let cards = parseCardsFromHTML(r.text, diag);
 
-    // Pass 1: parse card-like links & JSON-LD
-    let cards = parseCardsFromHTML(r.text, diag);
-
-    // Pass 2: href fallback scan (broad)
-    if (!cards.length) {
-      const alts = [];
-      const hrefRe = /href="([^"]+)"/gi;
-      let m;
-      while ((m = hrefRe.exec(r.text))) {
-        const href = m[1];
-        if (!href) continue;
-        const abs = href.startsWith("http") ? href : NHS_HTML_BASE + href;
-        if (/nhs\.uk\/(services\/dentist\/|nhs-services\/dentists\/[^/?#]+)/i.test(abs)
-            && !/\/nhs-services\/dentists\/(\?|$)/i.test(abs)) {
-          alts.push({ name: "Dentist", link: abs });
-        }
-      }
-      if (alts.length) {
-        (diag.patternsHit ||= []).push({ pattern: "href-fallback", count: alts.length });
-        cards = cards.concat(alts);
-        if (diag) {
-          diag.candidateCounts = {
-            raw: (diag.candidateCounts?.raw || 0) + alts.length,
-            filtered: (diag.candidateCounts?.filtered || 0) + alts.length
-          };
-        }
+  // Pass 2: href fallback
+  if (!cards.length) {
+    const alts = [];
+    const hrefRe = /href="([^"]+)"/gi;
+    let m;
+    while ((m = hrefRe.exec(r.text))) {
+      const href = m[1];
+      const abs = resolveUrlMaybeRelative(href, NHS_HTML_BASE);
+      if (/nhs\.uk\/(services\/dentist\/|nhs-services\/dentists\/[^/?#]+)/i.test(abs)
+          && !/\/nhs-services\/dentists\/(\?|$)/i.test(abs)) {
+        alts.push({ name: "Dentist", link: abs });
       }
     }
-
-    out = out.concat(cards);
-    if (cards.length) break; // stop after first working list page
+    if (alts.length) {
+      (diag.patternsHit ||= []).push({ pattern: "href-fallback", count: alts.length });
+      cards = cards.concat(alts);
+      if (diag) {
+        diag.candidateCounts = {
+          raw: (diag.candidateCounts?.raw || 0) + alts.length,
+          filtered: (diag.candidateCounts?.filtered || 0) + alts.length
+        };
+      }
+    }
   }
-  return dedupe(out, x => x.link || x.name);
+
+  return dedupe(cards, x => x.link || x.name);
 }
 
 async function apiCandidates(pc, diag) {
@@ -396,9 +407,9 @@ async function apiCandidates(pc, diag) {
   return parseOrgsFromJSON(r.json);
 }
 
-/* ---------- Detail fetch + APPOINTMENTS-FIRST classification ---------- */
+/* ---------- Detail fetch (APPOINTMENTS LINK FIRST) ---------- */
 async function fetchDetail(profileUrl, diag) {
-  // 1) Fetch the profile page
+  // Fetch profile
   const rProfile = await fetchText(profileUrl, {
     "User-Agent": "Mozilla/5.0",
     "Accept": "text/html,application/xhtml+xml",
@@ -407,7 +418,9 @@ async function fetchDetail(profileUrl, diag) {
   });
   diag?.calls.push({ url:profileUrl, ok:rProfile.ok, status:rProfile.status, kind:"detail", htmlBytes:rProfile.text.length });
 
-  if (SCAN_CAPTURE_HTML && rProfile.ok) {
+  if (!rProfile.ok) return { accepting:false, htmlLen: rProfile.text.length, score: 0 };
+
+  if (SCAN_CAPTURE_HTML) {
     try {
       await scanHtmlCol().updateOne(
         { _id: profileUrl },
@@ -416,26 +429,27 @@ async function fetchDetail(profileUrl, diag) {
       );
     } catch {}
   }
-  if (!rProfile.ok) return { accepting:false, htmlLen: rProfile.text.length, score: 0 };
 
-  // 2) Try to get an Appointments subpage or section
-  const appointCandidates = buildAppointmentsCandidates(profileUrl);
+  // Find the actual "Appointments" link(s) from the profile HTML
+  const appointLinks = findAppointmentsHref(rProfile.text, profileUrl);
+
   let appointHtml = null;
   let appointUrlUsed = null;
 
-  // 2a) If a hash anchor, try extracting section from the same HTML first
-  const section = extractAppointmentsSectionFromHtml(rProfile.text);
-  if (section) {
-    appointHtml = section;
-    appointUrlUsed = profileUrl + "#appointments";
+  // First, if we have a hash-only link, try extracting the section from this HTML
+  for (const aUrl of appointLinks) {
+    if (/#/.test(aUrl)) {
+      const section = extractAppointmentsSectionFromHtml(rProfile.text);
+      if (section) {
+        appointHtml = section; appointUrlUsed = aUrl; break;
+      }
+    }
   }
 
-  // 2b) If we still don't have a section, try fetching the subpages
+  // Otherwise, fetch the first working appointments subpage
   if (!appointHtml) {
-    for (const aUrl of appointCandidates) {
-      // Skip hash-only variants here; we already attempted the section extraction
-      if (aUrl.includes('#')) continue;
-
+    for (const aUrl of appointLinks) {
+      if (/#/.test(aUrl)) continue; // already handled hash
       const rApp = await fetchText(aUrl, {
         "User-Agent": "Mozilla/5.0",
         "Accept": "text/html,application/xhtml+xml",
@@ -443,11 +457,8 @@ async function fetchDetail(profileUrl, diag) {
         "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
       });
       diag?.calls.push({ url:aUrl, ok:rApp.ok, status:rApp.status, kind:"appointments", htmlBytes:rApp.text.length });
-
       if (rApp.ok && rApp.text) {
-        appointHtml = rApp.text;
-        appointUrlUsed = aUrl;
-
+        appointHtml = rApp.text; appointUrlUsed = aUrl;
         if (SCAN_CAPTURE_HTML) {
           try {
             await scanHtmlCol().updateOne(
@@ -457,35 +468,33 @@ async function fetchDetail(profileUrl, diag) {
             );
           } catch {}
         }
-        break; // stop at first working appointments page
+        break;
       }
     }
   }
 
-  // 3) Classify: appointments page first, fall back to full profile
-  let cls = appointHtml ? classifyAcceptance(appointHtml, diag) : { accepting:null, score:0, snippet:"" };
-  if (SCAN_DEBUG) {
-    (diag.snippets ||= []).push(appointHtml ? `[appointments_used:${appointUrlUsed}]` : `[appointments_missing]`);
+  // If still nothing, last resort: try to extract an appointments section from profile page
+  if (!appointHtml) {
+    appointHtml = extractAppointmentsSectionFromHtml(rProfile.text);
+    appointUrlUsed = appointHtml ? (profileUrl + "#appointments") : null;
   }
-  if (cls.accepting === null) {
-    // fallback to the profile whole page
-    const clsProfile = classifyAcceptance(rProfile.text, diag);
-    // prefer explicit negative from profile if appointments was null
-    cls = clsProfile;
-  }
+
+  // Classify using appointments content if available, else full profile
+  let cls = appointHtml ? classifyAcceptance(appointHtml, diag) : classifyAcceptance(rProfile.text, diag);
+  if (SCAN_DEBUG) (diag.snippets ||= []).push(appointHtml ? `[appointments_used:${appointUrlUsed}]` : `[appointments_missing]`);
 
   let accepting = cls.accepting === true;
   let score = cls.score;
 
-  // 4) Optional reconfirmation on the *appointments* page (if we had one)
+  // Reconfirm on appointments content (or profile if no appointments HTML)
   if (RECONFIRM && accepting && RECONFIRM_TRIES > 0) {
     let confirms = 1;
     for (let i = 0; i < RECONFIRM_TRIES; i++) {
       await sleep(RECONFIRM_GAP_MS);
-      let rAgain = null, htmlAgain = null;
 
-      if (appointUrlUsed && !appointUrlUsed.includes('#')) {
-        rAgain = await fetchText(appointUrlUsed, {
+      let htmlAgain = null;
+      if (appointUrlUsed && !/#/.test(appointUrlUsed)) {
+        const rAgain = await fetchText(appointUrlUsed, {
           "User-Agent": "Mozilla/5.0",
           "Accept": "text/html,application/xhtml+xml",
           "Accept-Language": "en-GB,en;q=0.9",
@@ -493,7 +502,6 @@ async function fetchDetail(profileUrl, diag) {
         });
         if (rAgain.ok) htmlAgain = rAgain.text;
       } else {
-        // hash anchor or section: refetch the profile and re-extract section
         const rProf2 = await fetchText(profileUrl, {
           "User-Agent": "Mozilla/5.0",
           "Accept": "text/html,application/xhtml+xml",
@@ -507,7 +515,7 @@ async function fetchDetail(profileUrl, diag) {
       const cls2 = classifyAcceptance(htmlAgain, diag);
       if (cls2.accepting === true) { confirms++; score = Math.max(score, cls2.score); }
     }
-    if (confirms < 2) accepting = false; // require stability
+    if (confirms < 2) accepting = false;
     (diag.snippets ||= []).push(`[reconfirm=${confirms}]`);
   }
 
@@ -570,7 +578,7 @@ export async function runScan() {
 
       for (const c of ordered) {
         if (!c.link) continue;
-        const detail = await fetchDetail(c.link, diag);  // <-- APPOINTMENTS-FIRST classification
+        const detail = await fetchDetail(c.link, diag);  // Appointments link first
         localDetailHits++;
         if (detail.accepting) {
           localAcceptHits++; found++;
@@ -581,8 +589,8 @@ export async function runScan() {
             if (exists) continue;
 
             const subject = `NHS dentist update: ${c.name} — accepting near ${pc}`;
-            const body = `Good news! ${c.name} is showing as accepting new NHS patients near ${pc}.\n\n${c.link}\n\nPlease call the practice directly to confirm availability before travelling.\n\n— Dentist Radar`;
-            await sendEmail(u.email, subject, body, "availability", { pc, practice: c.name, link: c.link });
+            const body = `Good news! ${c.name} shows as accepting new NHS patients near ${pc} (per their Appointments page).\n\n${c.link}\n\nPlease call the practice directly to confirm before travelling.\n\n— Dentist Radar`;
+            await sendEmail(u.email, subject, body, "availability", { pc, practice:c.name, link:c.link });
 
             await notifiedCol().updateOne(
               { _id:key },
@@ -638,7 +646,7 @@ export async function debugCandidateLinks(pc) {
   return fromHtml.map(c => c.link).filter(Boolean);
 }
 
-/* ---------- Compatibility exports (ESM + tolerant named imports) ---------- */
+/* ---------- Compatibility exports ---------- */
 export default runScan;          // default import support
 export { runScan as runscan };  // tolerate lowercase alias
 export { runScan as run_scan }; // tolerate snake_case alias
