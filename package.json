@@ -13,8 +13,10 @@
     "axios-retry": "^3.9.1",
     "cheerio": "^1.0.0-rc.12",
     "dayjs": "^1.11.11",
+    "express": "^4.19.2",
     "mongoose": "^8.6.0",
     "nodemailer": "^6.9.11",
+    "stripe": "^15.11.0",
     "p-limit": "^5.0.0"
   },
   "engines": {
