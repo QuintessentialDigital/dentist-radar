@@ -1,46 +1,41 @@
 /**
- * DentistRadar — scanner.js (v2.2, Postmark-only, User-targeted)
- * ----------------------------------------------------------------
- * - Scans NHS practices within radius from MongoDB SearchAreas.
- * - Visits ONLY the "Appointments" page to read acceptance status.
+ * DentistRadar — scanner.js (v2.3, Postmark-only, User-targeted)
+ * ---------------------------------------------------------------
+ * - Reads ONLY the "Appointments" page to determine acceptance.
  * - Classifies: ACCEPTING / CHILD_ONLY / NOT_CONFIRMED.
- * - Sends ONE summary email PER SearchArea to *actual users* fetched
- *   from MongoDB (not from env). Supports simple audience targeting:
- *     - Users.active === true AND Users.receiveAlerts === true
- *     - Optional targeting by postcode via Users.postcodes or Users.areas[].postcode
- * - Exports runScan(opts) for programmatic use; also self-runs via CLI.
+ * - Sends ONE summary email PER SearchArea to Users from DB:
+ *      active === true AND receiveAlerts === true
+ *      + optional postcode targeting (postcodes/areas.postcode)
+ * - Exports runScan(opts). Also self-runs via CLI.
  *
  * ENV (required):
- *   MONGO_URI="mongodb+srv://..."
- *   POSTMARK_SERVER_TOKEN="your-postmark-server-token"
- *   EMAIL_FROM="DentistRadar <alerts@yourverifieddomain.com>"
+ *   MONGO_URI
+ *   POSTMARK_SERVER_TOKEN
+ *   EMAIL_FROM   e.g., "DentistRadar <alerts@yourdomain.com>"
  *
  * ENV (optional):
- *   POSTMARK_MESSAGE_STREAM="outbound"   // default 'outbound'
- *   INCLUDE_CHILD_ONLY="false"           // "true" to include child-only hits
+ *   POSTMARK_MESSAGE_STREAM="outbound"
+ *   INCLUDE_CHILD_ONLY="false"
  *   MAX_CONCURRENCY="5"
- *
- * Users collection assumptions (flexible; adapt selectors below if needed):
- *   Users: {
- *     email: String,                 // required
- *     active: Boolean,               // true to receive anything
- *     receiveAlerts: Boolean,        // true to receive scan emails
- *     postcodes?: [String],          // optional explicit list (e.g., ["RG6 1AB","RG1"])
- *     areas?: [{ postcode: String, radiusMiles?: Number }], // optional objects
- *     // ...other fields ok
- *   }
- *
- * NOTE: This file uses only Axios to call Postmark HTTP API — no SMTP.
  */
 
-import mongoose from 'mongoose';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import pLimit from 'p-limit';
 import dayjs from 'dayjs';
 import axiosRetry from 'axios-retry';
+import {
+  connectMongo,
+  disconnectMongo,
+  SearchArea,
+  Practice,
+  EmailLog,
+  User
+} from './models.js';
 
-// ----------------------- Config -----------------------
+/* =========================
+   Config
+   ========================= */
 const {
   MONGO_URI,
   POSTMARK_SERVER_TOKEN,
@@ -59,18 +54,21 @@ const INCLUDE_CHILD =
   (String(INCLUDE_CHILD_ONLY).toLowerCase() === 'true');
 const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 5);
 
-// ----------------------- Retry Config -----------------
+/* =========================
+   Axios retry
+   ========================= */
 axiosRetry(axios, {
   retries: 3,
-  retryDelay: (retry) =>
-    1000 * Math.pow(2, retry) + Math.floor(Math.random() * 500),
+  retryDelay: (retry) => 1000 * Math.pow(2, retry) + Math.floor(Math.random() * 500),
   retryCondition: (err) => {
     const status = err?.response?.status;
     return !status || [429, 403, 500, 502, 503, 504].includes(status);
   },
 });
 
-// ----------------------- Helpers ----------------------
+/* =========================
+   Helpers
+   ========================= */
 const UAS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36',
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15',
@@ -79,56 +77,22 @@ const UAS = [
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// ----------------------- DB Models --------------------
-const SearchAreaSchema = new mongoose.Schema(
-  {
-    postcode: { type: String, required: true },
-    radiusMiles: { type: Number, required: true },
-    active: { type: Boolean, default: true },
-  },
-  { collection: 'SearchAreas' }
-);
+function normalizeText(s) {
+  return String(s || '').replace(/\s+/g, ' ').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
+}
 
-const PracticeSchema = new mongoose.Schema(
-  {
-    name: String,
-    postcode: String,
-    detailsUrl: String,
-    distanceMiles: Number, // precomputed for the current search index
-  },
-  { collection: 'Practices' }
-);
+function normalizePostcode(pc) {
+  return String(pc || '').toUpperCase().replace(/\s+/g, ' ').trim();
+}
 
-const EmailLogSchema = new mongoose.Schema(
-  {
-    jobId: { type: mongoose.Schema.Types.ObjectId, index: true },
-    practiceId: { type: mongoose.Schema.Types.ObjectId, index: true },
-    practiceUrl: String,
-    status: { type: String, enum: ['ACCEPTING', 'CHILD_ONLY'] },
-    dateKey: { type: String, index: true },
-    createdAt: { type: Date, default: Date.now },
-  },
-  { collection: 'EmailLog' }
-);
+function sanitizeEmail(s) {
+  const x = String(s || '').trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x) ? x : '';
+}
 
-// Minimal Users model to enable Mongoose helpers; structure is flexible
-const UserSchema = new mongoose.Schema(
-  {
-    email: { type: String, required: true },
-    active: { type: Boolean, default: true },
-    receiveAlerts: { type: Boolean, default: true },
-    postcodes: [String],
-    areas: [{ postcode: String, radiusMiles: Number }],
-  },
-  { collection: 'Users' }
-);
-
-const SearchArea = mongoose.model('SearchArea', SearchAreaSchema);
-const Practice = mongoose.model('Practice', PracticeSchema);
-const EmailLog = mongoose.model('EmailLog', EmailLogSchema);
-const User = mongoose.model('User', UserSchema);
-
-// ---------------- Acceptance Parsing ------------------
+/* =========================
+   Acceptance parsing
+   ========================= */
 function classifyAcceptance(rawHtmlOrText) {
   const text = normalizeText(rawHtmlOrText);
 
@@ -150,61 +114,26 @@ function classifyAcceptance(rawHtmlOrText) {
   if (childOnlyExact || (/only accepts.*children/i.test(text) && /new nhs patients/i.test(text))) {
     return { status: 'CHILD_ONLY', matched: 'child-only' };
   }
-
   if (acceptingAdults || genericAccepting) {
     return { status: 'ACCEPTING', matched: 'accepting' };
   }
-
   if (notConfirmed) return { status: 'NOT_CONFIRMED', matched: 'not-confirmed' };
-
   return { status: 'NOT_CONFIRMED', matched: 'unknown' };
 }
 
-function normalizeText(s) {
-  return String(s || '')
-    .replace(/\s+/g, ' ')
-    .replace(/[\u200B-\u200D\uFEFF]/g, '')
-    .trim();
-}
-
-// ----------------- HTML: Appointments tab --------------
-async function loadAppointmentsHtml(detailsUrl) {
-  if (!detailsUrl) return null;
-
-  const detailsHtml = await httpGet(detailsUrl);
-  if (!detailsHtml) return null;
-
-  const $ = cheerio.load(detailsHtml);
-
-  // Prefer link by text content
-  let href = $('a')
-    .filter((_, el) => {
-      const t = normalizeText($(el).text()).toLowerCase();
-      return t.includes('appointment');
-    })
-    .first()
-    .attr('href');
-
-  // Fallback by URL hint
-  if (!href) href = $('a[href*="/appointments"]').first().attr('href');
-  if (!href) return null;
-
-  const appointmentsUrl = new URL(href, detailsUrl).toString();
-  await sleep(200 + Math.floor(Math.random() * 200));
-  return httpGet(appointmentsUrl);
-}
-
-// ------------------ HTTP util --------------------------
+/* =========================
+   HTTP + Appointments loader
+   ========================= */
 async function httpGet(url) {
   try {
     const ua = UAS[Math.floor(Math.random() * UAS.length)];
     const { data, status } = await axios.get(url, {
       headers: {
         'User-Agent': ua,
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-GB,en;q=0.9',
         'Cache-Control': 'no-cache',
-        Pragma: 'no-cache',
+        'Pragma': 'no-cache',
       },
       timeout: 15000,
       validateStatus: (s) => s >= 200 && s < 400,
@@ -217,58 +146,65 @@ async function httpGet(url) {
   }
 }
 
-// ---------------- Audience (Users) targeting ------------
-/**
- * Returns distinct recipient emails for this SearchArea job.
- * Targeting rules:
- *  - active === true AND receiveAlerts === true
- *  - If users specify postcodes array or areas[].postcode, match job.postcode
- *  - Otherwise, include as global recipients (they get all alerts)
- */
+async function loadAppointmentsHtml(detailsUrl) {
+  if (!detailsUrl) return null;
+
+  const detailsHtml = await httpGet(detailsUrl);
+  if (!detailsHtml) return null;
+
+  const $ = cheerio.load(detailsHtml);
+
+  // Prefer link by visible text
+  let href = $('a')
+    .filter((_, el) => normalizeText($(el).text()).toLowerCase().includes('appointment'))
+    .first()
+    .attr('href');
+
+  // Fallback by URL hint
+  if (!href) href = $('a[href*="/appointments"]').first().attr('href');
+  if (!href) return null;
+
+  const appointmentsUrl = new URL(href, detailsUrl).toString();
+  await sleep(200 + Math.floor(Math.random() * 200));
+  return httpGet(appointmentsUrl);
+}
+
+/* =========================
+   Audience targeting (Users)
+   ========================= */
 async function getRecipientsForJob(job, opts = {}) {
   if (Array.isArray(opts.overrideRecipients) && opts.overrideRecipients.length) {
-    // developer override
     return [...new Set(opts.overrideRecipients.map(sanitizeEmail))].filter(Boolean);
   }
 
   const jobPC = normalizePostcode(job.postcode);
 
-  // Build targeting filter with OR on preference fields; fallback captures global subscribers
-  const filter = {
+  // Active + opted-in users; either explicitly targeted to this postcode
+  // or global subscribers (no targeting fields present)
+  const users = await User.find({
     active: true,
     receiveAlerts: true,
     $or: [
-      { postcodes: jobPC }, // exact postcode match in simple array
-      { 'areas.postcode': jobPC }, // match in areas array
-      // fallback: users with no specific targeting fields get everything
-      { $and: [{ postcodes: { $in: [null, [], undefined] } }, { areas: { $in: [null, [], undefined] } }] },
+      { postcodes: jobPC },
+      { 'areas.postcode': jobPC },
       { $and: [{ postcodes: { $exists: false } }, { areas: { $exists: false } }] },
+      { $and: [{ postcodes: { $in: [null, [], undefined] } }, { areas: { $in: [null, [], undefined] } }] },
     ],
-  };
+  })
+    .select('email')
+    .lean();
 
-  const users = await User.find(filter).select('email').lean();
-  const emails = users.map(u => sanitizeEmail(u.email)).filter(Boolean);
-  // Deduplicate and keep a reasonable cap to avoid accidental blasts
-  const unique = [...new Set(emails)].slice(0, 5000);
-  return unique;
+  const emails = users.map((u) => sanitizeEmail(u.email)).filter(Boolean);
+  return [...new Set(emails)].slice(0, 5000);
 }
 
-function normalizePostcode(pc) {
-  return String(pc || '').toUpperCase().replace(/\s+/g, ' ').trim();
-}
-
-function sanitizeEmail(s) {
-  const x = String(s || '').trim();
-  // crude sanity check
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x) ? x : '';
-}
-
-// ------------------- Core Scan Logic -------------------
+/* =========================
+   Core scan
+   ========================= */
 async function scanJob(job) {
   const { _id: jobId, postcode, radiusMiles } = job;
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
-  // Assumes Practices are pre-indexed with distanceMiles
   const practices = await Practice.find({
     distanceMiles: { $lte: radiusMiles },
     detailsUrl: { $exists: true, $ne: '' },
@@ -290,7 +226,7 @@ async function scanJob(job) {
   await Promise.all(
     practices.map((p) =>
       limit(async () => {
-        // Skip if already emailed today for this job/practice
+        // per-day per-job per-practice de-dup
         const already = await EmailLog.findOne({ jobId, practiceId: p._id, dateKey }).lean();
         if (already) return;
 
@@ -307,7 +243,6 @@ async function scanJob(job) {
             url: p.detailsUrl,
             distanceMiles: p.distanceMiles,
           });
-
           await EmailLog.create({
             jobId, practiceId: p._id, practiceUrl: p.detailsUrl,
             status: 'ACCEPTING', dateKey,
@@ -320,7 +255,6 @@ async function scanJob(job) {
             url: p.detailsUrl,
             distanceMiles: p.distanceMiles,
           });
-
           await EmailLog.create({
             jobId, practiceId: p._id, practiceUrl: p.detailsUrl,
             status: 'CHILD_ONLY', dateKey,
@@ -333,11 +267,13 @@ async function scanJob(job) {
   return { accepting, childOnly };
 }
 
-// ------------------- Email via Postmark -----------------
+/* =========================
+   Email via Postmark
+   ========================= */
 async function sendJobEmail(job, found, opts = {}) {
   const recipients = await getRecipientsForJob(job, opts);
   if (!recipients.length) {
-    console.log('No recipients resolved for this job; skipping email.');
+    console.log('No recipients for this job; skipping email.');
     return;
   }
 
@@ -382,9 +318,7 @@ async function sendJobEmail(job, found, opts = {}) {
       <div style="color:#444;margin:0 0 12px">Date: ${dayjs().format('YYYY-MM-DD HH:mm')}</div>
       ${lines.join('\n')}
       <hr style="margin:16px 0;border:0;border-top:1px solid #e5e5e5">
-      <div style="font-size:12px;color:#777">
-        This email only includes practices verified on the Appointments page.
-      </div>
+      <div style="font-size:12px;color:#777">This email only includes practices verified on the Appointments page.</div>
     </div>
   `;
 
@@ -392,7 +326,6 @@ async function sendJobEmail(job, found, opts = {}) {
     `DentistRadar: ${job.postcode} (${job.radiusMiles} mi) — ` +
     `${found.accepting.length} accepting${INCLUDE_CHILD ? `, ${found.childOnly.length} child-only` : ''}`;
 
-  // Send via Postmark HTTP API (single request with comma-separated To)
   await axios.post(
     'https://api.postmarkapp.com/email',
     {
@@ -423,7 +356,9 @@ function escapeHtml(s) {
     .replaceAll('>', '&gt;');
 }
 
-// ------------------- Exported Runner -------------------
+/* =========================
+   Exported Runner
+   ========================= */
 /**
  * Run the scanner.
  * @param {Object} [opts]
@@ -438,18 +373,15 @@ export async function runScan(opts = {}) {
     globalThis.__INCLUDE_CHILD_ONLY_OVERRIDE__ = includeChildOnlyOverride;
   }
 
-  console.log('Connecting to Mongo…');
-  await mongoose.connect(MONGO_URI, { maxPoolSize: 10 });
+  await connectMongo(MONGO_URI);
   console.log('Mongo connected.');
 
   const query = { active: true };
-  if (opts.postcode)
-    query.postcode = normalizePostcode(opts.postcode);
+  if (opts.postcode) query.postcode = normalizePostcode(opts.postcode);
 
   const jobs = await SearchArea.find(query).lean();
   if (!jobs.length) {
     console.log('No active SearchAreas.');
-    await mongoose.disconnect();
     return { jobs: 0, summaries: [] };
   }
 
@@ -470,19 +402,20 @@ export async function runScan(opts = {}) {
     await sleep(800 + Math.floor(Math.random() * 700));
   }
 
-  await mongoose.disconnect();
   console.log('Done.');
   return { jobs: jobs.length, summaries };
 }
 
-// Default export for convenience
+// Default export
 export default { runScan };
 
-// Self-run when called directly
+// Self-run for CLI
 if (import.meta.url === `file://${process.argv[1]}`) {
-  runScan().catch(async (e) => {
-    console.error(e);
-    try { await mongoose.disconnect(); } catch {}
-    process.exit(1);
-  });
+  runScan()
+    .then(async () => { await disconnectMongo(); process.exit(0); })
+    .catch(async (e) => {
+      console.error(e);
+      try { await disconnectMongo(); } catch {}
+      process.exit(1);
+    });
 }
