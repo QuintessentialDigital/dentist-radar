@@ -1,6 +1,7 @@
-// Dentist Radar - scanner.js (v1.9.2 + Appointments-first + NHS exact phrases)
-// Status-aware: ACCEPT_ALL, ACCEPT_CHILDREN_ONLY, NOT_CONFIRMED, NOT_ACCEPTING, SPECIALIST_ONLY
-// Alerts: ACCEPT_ALL (always), ACCEPT_CHILDREN_ONLY (if ACCEPT_CHILDREN_OK=1)
+// Dentist Radar - scanner.js (v1.9.2+++ Appointments-first + NHS exact phrases + tolerant fallbacks)
+// - ALWAYS probes known Appointments slugs (even if the link isn't visible on the profile page).
+// - Classifies using exact NHS sentences you provided, then broader tolerant patterns.
+// - Preserves v1.9.2 structure, Mongo collections, email flow, and export aliases.
 
 import mongoose from "mongoose";
 
@@ -17,7 +18,7 @@ const SCAN_DELAY_MS    = Number(process.env.SCAN_DELAY_MS || 800);
 const SCAN_DEBUG       = process.env.SCAN_DEBUG === "1";
 const SCAN_CAPTURE_HTML= process.env.SCAN_CAPTURE_HTML === "1";
 
-// Optional: reconfirm positives to avoid blips
+// Optional: reconfirm positives to avoid blips/temporary cache mismatches
 const RECONFIRM        = /^(1|true|yes)$/i.test(String(process.env.RECONFIRM || "0"));
 const RECONFIRM_TRIES  = Math.max(0, Number(process.env.RECONFIRM_TRIES || 1));
 const RECONFIRM_GAP_MS = Math.max(0, Number(process.env.RECONFIRM_GAP_MS || 120000));
@@ -126,7 +127,7 @@ function parseOrgsFromJSON(obj) {
   return dedupe(out, x => x.link || x.name || x.id);
 }
 
-/* ---------- HTML parsing (list pages) ---------- */
+/* ---------- List-page parsing ---------- */
 function parseCardsFromHTML(html, diag) {
   const results = [];
   const patternsHit = [];
@@ -154,7 +155,7 @@ function parseCardsFromHTML(html, diag) {
     /<a[^>]+href="(\/[^"]*dentist[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
   );
 
-  // JSON-LD (structured data) fallback
+  // JSON-LD fallback
   const re = /<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
   let m; let count = 0;
   while ((m = re.exec(html))) {
@@ -193,7 +194,7 @@ function parseCardsFromHTML(html, diag) {
   return dedupe(filtered, x => x.link || x.name);
 }
 
-/* ---------- Acceptance detector (Appointments page; exact NHS phrases first) ---------- */
+/* ---------- Acceptance detector (Appointments page; NHS exact phrases first) ---------- */
 const STATUS = {
   ACCEPT_ALL: "ACCEPT_ALL",
   ACCEPT_CHILDREN_ONLY: "ACCEPT_CHILDREN_ONLY",
@@ -216,92 +217,55 @@ function extractJsonLd(html) {
 function classifyAcceptance(html, diag) {
   if (!html) return { accepting: null, score: 0, snippet: "", status: STATUS.UNKNOWN };
 
-  const plain = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").toLowerCase();
+  // normalize: strip tags, collapse whitespace, lowercase; normalize NBSP to space
+  const plain = html
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .trim();
 
-  // --- Exact sentences you provided (highest precision) ---
-  const exact = {
-    ACCEPT_ALL: /this dentist currently accepts new nhs patients for routine dental care if they are:/i,
-    ACCEPT_CHILDREN_ONLY: /this dentist currently only accepts new nhs patients for routine dental care if they are children aged 17 or under\./i,
-    NOT_CONFIRMED: /this dentist has not confirmed if they currently accept new nhs patients for routine dental care\./i,
-    NOT_ACCEPTING_1: /this dentist does not accept new nhs patients for routine dental care\./i,
-    NOT_ACCEPTING_2: /this dentist does not currently accept new nhs patients for routine dental care\./i,
-    SPECIALIST_ONLY: /this dentist only accepts new nhs patients for specialist dental care by clinical referral from another dentist\./i
-  };
+  // helper for optional punctuation/colon and flexible spacing
+  const rx = (s) => new RegExp(
+    s
+      .replace(/\s+/g, "\\s+")      // any whitespace
+      .replace(/:/g, "[:]?" ),      // colon optional
+    "i"
+  );
 
-  // Check exact phrases first
-  if (exact.ACCEPT_ALL.test(plain)) {
-    return { accepting: true,  score: 5, snippet: plain.slice(0,220), status: STATUS.ACCEPT_ALL };
-  }
-  if (exact.ACCEPT_CHILDREN_ONLY.test(plain)) {
-    // positive only if configured
-    const accepting = !!ACCEPT_CHILDREN_OK;
-    const score = accepting ? 4 : -1;
-    return { accepting, score, snippet: plain.slice(0,220), status: STATUS.ACCEPT_CHILDREN_ONLY };
-  }
-  if (exact.NOT_CONFIRMED.test(plain)) {
-    return { accepting: null, score: 0, snippet: plain.slice(0,220), status: STATUS.NOT_CONFIRMED };
-  }
-  if (exact.SPECIALIST_ONLY.test(plain)) {
-    return { accepting: false, score: -3, snippet: plain.slice(0,220), status: STATUS.SPECIALIST_ONLY };
-  }
-  if (exact.NOT_ACCEPTING_1.test(plain) || exact.NOT_ACCEPTING_2.test(plain)) {
-    return { accepting: false, score: -3, snippet: plain.slice(0,220), status: STATUS.NOT_ACCEPTING };
-  }
+  // Exact sentences (highest precision)
+  const ACCEPT_ALL =
+    /\b(this\s+dentist\s+currently\s+)?accept(ing|s)?\s+new\s+nhs\s+patients(\s+for\s+routine\s+dental\s+care)?\s+if\s+they\s+are[:]?\b/i;
+  const ACCEPT_CHILDREN_ONLY =
+    rx("this dentist currently only accepts new nhs patients for routine dental care if they are children aged 17 or under[.]?");
+  const NOT_CONFIRMED =
+    rx("this dentist has not confirmed if they currently accept new nhs patients for routine dental care[.]?");
+  const NOT_ACCEPTING_1 =
+    rx("this dentist does not accept new nhs patients for routine dental care[.]?");
+  const NOT_ACCEPTING_2 =
+    rx("this dentist does not currently accept new nhs patients for routine dental care[.]?");
+  const SPECIALIST_ONLY =
+    rx("this dentist only accepts new nhs patients for specialist dental care by clinical referral from another dentist[.]?");
 
-  // --- Broader fallback rules (kept, but lower weight) ---
-  const HARD_NEG = [
-    'not accepting new nhs patients for routine dental care',
-    'not accepting new nhs patients',
-    'no longer accepting nhs',
-    'closed to new nhs patients',
-    'nhs registrations closed',
-    'registrations suspended',
-    'nhs list closed'
-  ];
-  const SOFT_NEG = [
-    'not accepting new patients',
-    'temporarily not accepting',
-    'private patients only',
-    'waiting list only',
-    'waiting list'
-  ];
-  const HARD_POS_STRINGS = [
-    'accepting new nhs patients for routine dental care',
-    'accepting new nhs patients',
-    'we are accepting new nhs',
-    "we're accepting new nhs",
-    'open to new nhs patients',
-    'taking on nhs',
-    'new nhs registrations open',
-    'accepting nhs registrations',
-    'currently accepts new nhs patients' // generic helper
-  ];
-  const HARD_POS_REGEX = [
-    /\bcurrently\s+accepts?\s+new\s+nhs\s+patients\b/i,
-    /\baccepts?\s+new\s+nhs\s+patients\b/i,
-    /\b(currently\s+)?accepts?\s+new\s+nhs\s+patients\s+for\s+routine\s+dental\s+care\b/i
-  ];
-  const SOFT_POS = [
-    'accepting nhs patients',
-    'limited nhs capacity',
-    'nhs spaces available',
-    'registering nhs'
-  ];
+  // Exact-status gates
+  if (SPECIALIST_ONLY.test(plain))   return { accepting: false, score: -4, snippet: plain.slice(0,220), status: STATUS.SPECIALIST_ONLY };
+  if (NOT_ACCEPTING_1.test(plain) || NOT_ACCEPTING_2.test(plain))
+                                     return { accepting: false, score: -3, snippet: plain.slice(0,220), status: STATUS.NOT_ACCEPTING };
+  if (NOT_CONFIRMED.test(plain))     return { accepting: null,  score:  0, snippet: plain.slice(0,220), status: STATUS.NOT_CONFIRMED };
+  if (ACCEPT_CHILDREN_ONLY.test(plain)) {
+    const accepting = !!ACCEPT_CHILDREN_OK; // alert only if configured
+    return { accepting, score: accepting ? 4 : -1, snippet: plain.slice(0,220), status: STATUS.ACCEPT_CHILDREN_ONLY };
+  }
+  if (ACCEPT_ALL.test(plain))        return { accepting: true,  score:  5, snippet: plain.slice(0,220), status: STATUS.ACCEPT_ALL };
 
-  const jsonldText = extractJsonLd(html).map(x => JSON.stringify(x)).join(' ').toLowerCase();
+  // Fallback (tolerant but lower weight)
   let score = 0;
-  const markIncl = (src, arr, val) => { if (arr.some(p => src.includes(p))) score += val; };
-  const markRe   = (src, arr, val)  => { if (arr.some(rx => rx.test(src))) score += val; };
+  if (/\baccept(ing|s)?\s+new\s+nhs\s+patients\b/i.test(plain)) score += 3;
+  if (/\bfor\s+routine\s+dental\s+care\b/i.test(plain)) score += 1;
+  if (/\bnot\s+accept(ing|s)?\s+new\s+nhs\s+patients\b/i.test(plain)) score -= 3;
 
-  markIncl(plain, HARD_NEG, -3); markIncl(jsonldText, HARD_NEG, -2);
-  markIncl(plain, SOFT_NEG, -1); markIncl(jsonldText, SOFT_NEG, -1);
-
-  markIncl(plain, HARD_POS_STRINGS, +3); markIncl(jsonldText, HARD_POS_STRINGS, +2);
-  markRe(plain, HARD_POS_REGEX, +3);
-  markIncl(plain, SOFT_POS, +1); markIncl(jsonldText, SOFT_POS, +1);
-
-  // children-only heuristic in fallback
-  const childrenOnly = /\b(accepting|accepts|registering|taking on)\b[^.]{0,50}\b(children|child|under\s*18)\b[^.]{0,50}\bnhs\b/.test(plain);
+  // children-only fallback
+  const childrenOnly = /\b(accepts?|accepting|registering|taking\s+on)\b[^.]{0,50}\b(children|child|under\s*18)\b[^.]{0,50}\bnhs\b/i.test(plain);
   if (childrenOnly) score += (ACCEPT_CHILDREN_OK ? +2 : -1);
 
   let accepting = null;
@@ -319,6 +283,7 @@ const APPOINTMENT_SLUGS = [
   "opening-times-and-appointments"
 ];
 
+// Find explicit appointments link(s) on the profile page
 function findAppointmentsHref(html, profileUrl) {
   const anchors = [];
   const aRe = /<a\b([^>]+)>([\s\S]*?)<\/a>/gi;
@@ -431,8 +396,9 @@ async function apiCandidates(pc, diag) {
   return parseOrgsFromJSON(r.json);
 }
 
-/* ---------- Detail fetch (APPOINTMENTS LINK + HARD PROBES) ---------- */
+/* ---------- Detail fetch (Appointments-first) ---------- */
 async function fetchDetail(profileUrl, diag) {
+  // Fetch profile
   const rProfile = await fetchText(profileUrl, {
     "User-Agent": "Mozilla/5.0",
     "Accept": "text/html,application/xhtml+xml",
@@ -453,14 +419,17 @@ async function fetchDetail(profileUrl, diag) {
     } catch {}
   }
 
+  // A) links visible on profile
   const linkDerived = findAppointmentsHref(rProfile.text, profileUrl);
+  // B) hard probes (canonical slugs + hash fragments)
   const hardProbes = buildHardProbes(profileUrl);
+  // C) try all (links first, then probes)
   const appointTargets = Array.from(new Set([...linkDerived, ...hardProbes]));
 
   let appointHtml = null;
   let appointUrlUsed = null;
 
-  // hash-first (same page section)
+  // hash-first (section on same page)
   for (const aUrl of appointTargets) {
     if (/#/.test(aUrl)) {
       const section = extractAppointmentsSectionFromHtml(rProfile.text);
@@ -494,6 +463,7 @@ async function fetchDetail(profileUrl, diag) {
     }
   }
 
+  // classify
   const htmlToClassify = appointHtml || rProfile.text;
   let cls = classifyAcceptance(htmlToClassify, diag);
   if (SCAN_DEBUG) (diag.snippets ||= []).push(appointHtml ? `[appointments_used:${appointUrlUsed}]` : `[appointments_missing]`);
@@ -660,7 +630,23 @@ export async function debugCandidateLinks(pc) {
   return fromHtml.map(c => c.link).filter(Boolean);
 }
 
+/* ---------- Single-page tester (optional) ---------- */
+export async function testOne(appointmentsUrl) {
+  const r = await fetch(appointmentsUrl, {
+    headers: {
+      "User-Agent": "Mozilla/5.0",
+      "Accept": "text/html,application/xhtml+xml",
+      "Accept-Language": "en-GB,en;q=0.9",
+      "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
+    },
+    redirect: "follow"
+  });
+  const html = await r.text();
+  const cls = classifyAcceptance(html);
+  return { ok: r.ok, status: r.status, accepting: cls.accepting, statusLabel: cls.status, score: cls.score };
+}
+
 /* ---------- Compatibility exports ---------- */
-export default runScan;
-export { runScan as runscan };
-export { runScan as run_scan };
+export default runScan;          // default import support
+export { runScan as runscan };  // tolerate lowercase alias
+export { runScan as run_scan }; // tolerate snake_case alias
