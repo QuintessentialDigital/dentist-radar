@@ -1,14 +1,13 @@
-// Dentist Radar - scanner.js (v1.9.2++++ Appointments-first + Referer + Slash-Variants + "accepts")
-// Safe for production: preserves routes, Mongo collections, email flow, env flags, and exports.
-// Core: For each practice, follow the actual "Appointments" link if present;
-// otherwise, hard-probe canonical slugs (with/without trailing slash). Classify from that page first.
+// Dentist Radar - scanner.js (v1.9.2 + Appointments-first + "accepts" phrasing)
+// Core: follow each practice's Appointments page and classify from there.
+// Change: handle "currently accepts new NHS patients for routine dental care" etc.
 
 import mongoose from "mongoose";
 
 /* ---------- Config ---------- */
 const NHS_API_BASE     = process.env.NHS_API_BASE     || "https://api.nhs.uk/service-search";
 const NHS_API_VERSION  = process.env.NHS_API_VERSION  || "2";
-const NHS_API_KEY      = process.env.NHS_API_KEY      || "";   // optional but helpful
+const NHS_API_KEY      = process.env.NHS_API_KEY      || "";   // optional
 
 const NHS_HTML_BASE    = "https://www.nhs.uk";
 
@@ -72,16 +71,6 @@ function resolveUrlMaybeRelative(href, baseUrl) {
     if (href.startsWith("//")) return "https:" + href;
     return new URL(href, baseUrl).toString();
   } catch { return null; }
-}
-
-// include with and without trailing slash
-function withSlashVariants(url) {
-  try {
-    const u = new URL(url);
-    const noSlash = u.toString().replace(/\/+$/, "");
-    const withSlash = noSlash + "/";
-    return Array.from(new Set([noSlash, withSlash]));
-  } catch { return [url]; }
 }
 
 /* ---------- Email (Postmark) ---------- */
@@ -204,7 +193,7 @@ function parseCardsFromHTML(html, diag) {
   return dedupe(filtered, x => x.link || x.name);
 }
 
-/* ---------- Acceptance detector (Appointments phrasing; handles "accepts") ---------- */
+/* ---------- Acceptance detector (Appointments phrasing, incl. "accepts") ---------- */
 function extractJsonLd(html) {
   const out = [];
   const re = /<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
@@ -220,7 +209,7 @@ function classifyAcceptance(html, diag) {
 
   const plain = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").toLowerCase();
 
-  // Negatives and positives tuned to NHS Appointments copy
+  // NHS Appointments copy — now includes "accepts"/"currently accepts"
   const HARD_NEG = [
     'not accepting new nhs patients for routine dental care',
     'not accepting new nhs patients',
@@ -247,7 +236,7 @@ function classifyAcceptance(html, diag) {
     'new nhs registrations open',
     'accepting nhs registrations'
   ];
-  // Explicit regexes for "accepts / currently accepts"
+  // NEW: explicit regexes for "accepts"/"currently accepts"
   const HARD_POS_REGEX = [
     /\bcurrently\s+accepts?\s+new\s+nhs\s+patients\b/i,
     /\baccepts?\s+new\s+nhs\s+patients\b/i,
@@ -270,16 +259,20 @@ function classifyAcceptance(html, diag) {
   const markRe   = (src, arr, val, tag) => { if (arr.some(rx => rx.test(src))) { score += val; if (SCAN_DEBUG) (diag.snippets ||= []).push(`[${tag}]`); } };
 
   // negatives
-  markIncl(plain, HARD_NEG, -3, 'hard_neg'); markIncl(jsonldText, HARD_NEG, -2, 'hard_neg_jsonld');
-  markIncl(plain, SOFT_NEG, -1, 'soft_neg'); markIncl(jsonldText, SOFT_NEG, -1, 'soft_neg_jsonld');
+  markIncl(plain, HARD_NEG, -3, 'hard_neg');
+  markIncl(jsonldText, HARD_NEG, -2, 'hard_neg_jsonld');
+  markIncl(plain, SOFT_NEG, -1, 'soft_neg');
+  markIncl(jsonldText, SOFT_NEG, -1, 'soft_neg_jsonld');
 
   // positives
-  markIncl(plain, HARD_POS_STRINGS, +3, 'hard_pos'); markIncl(jsonldText, HARD_POS_STRINGS, +2, 'hard_pos_jsonld');
+  markIncl(plain, HARD_POS_STRINGS, +3, 'hard_pos');
+  markIncl(jsonldText, HARD_POS_STRINGS, +2, 'hard_pos_jsonld');
   markRe(plain, HARD_POS_REGEX, +3, 'hard_pos_regex');
 
-  markIncl(plain, SOFT_POS, +1, 'soft_pos'); markIncl(jsonldText, SOFT_POS, +1, 'soft_pos_jsonld');
+  markIncl(plain, SOFT_POS, +1, 'soft_pos');
+  markIncl(jsonldText, SOFT_POS, +1, 'soft_pos_jsonld');
 
-  // Table-like: "...Accepting/Accepts new NHS patients... Yes"
+  // table-like pattern: "...Accepting new NHS patients... Yes"
   if (/accept(ing|s)?\s+new\s+nhs\s+patients[^<]{0,200}<\/(dt|th)>[^<]{0,200}<(dd|td)[^>]*>\s*(yes|open|currently\s*accept(ing|s)?)/i.test(html)) {
     score += 3; if (SCAN_DEBUG) (diag.snippets ||= []).push('[table_yes]');
   }
@@ -349,16 +342,10 @@ function extractAppointmentsSectionFromHtml(html) {
 function buildHardProbes(profileUrl) {
   const u = new URL(profileUrl, NHS_HTML_BASE);
   const base = u.pathname.replace(/\/+$/,'');
-  const slugs = APPOINTMENT_SLUGS.map(slug => new URL(`${base}/${slug}`, u).toString());
-  // hash anchors on same page
-  const anchors = [profileUrl + "#appointments", profileUrl + "#appointment"];
-  // expand non-hash candidates with/without trailing slash
-  const out = [];
-  for (const t of [...slugs, ...anchors]) {
-    if (/#/.test(t)) out.push(t);
-    else out.push(...withSlashVariants(t));
-  }
-  return Array.from(new Set(out));
+  const probes = APPOINTMENT_SLUGS.map(slug => new URL(`${base}/${slug}`, u).toString());
+  probes.push(profileUrl + "#appointments");
+  probes.push(profileUrl + "#appointment");
+  return Array.from(new Set(probes));
 }
 
 /* ---------- Candidate discovery ---------- */
@@ -376,10 +363,8 @@ async function htmlCandidates(pc, diag) {
 
   if (!r.ok) return [];
 
-  // Parse card-like links & JSON-LD
   let cards = parseCardsFromHTML(r.text, diag);
 
-  // Broad href fallback (rarely needed now)
   if (!cards.length) {
     const alts = [];
     const hrefRe = /href="([^"]+)"/gi;
@@ -426,9 +411,8 @@ async function apiCandidates(pc, diag) {
   return parseOrgsFromJSON(r.json);
 }
 
-/* ---------- Detail fetch (APPOINTMENTS LINK + HARD PROBES + REFERER) ---------- */
+/* ---------- Detail fetch (APPOINTMENTS LINK + HARD PROBES) ---------- */
 async function fetchDetail(profileUrl, diag) {
-  // 1) Fetch profile
   const rProfile = await fetchText(profileUrl, {
     "User-Agent": "Mozilla/5.0",
     "Accept": "text/html,application/xhtml+xml",
@@ -439,7 +423,7 @@ async function fetchDetail(profileUrl, diag) {
 
   if (!rProfile.ok) return { accepting:false, htmlLen: rProfile.text.length, score: 0 };
 
-  if (SCAN_CAPTURE_HTML && rProfile.ok) {
+  if (SCAN_CAPTURE_HTML) {
     try {
       await scanHtmlCol().updateOne(
         { _id: profileUrl },
@@ -449,56 +433,47 @@ async function fetchDetail(profileUrl, diag) {
     } catch {}
   }
 
-  // 2) Collect Appointments targets
   const linkDerived = findAppointmentsHref(rProfile.text, profileUrl);
   const hardProbes = buildHardProbes(profileUrl);
   const appointTargets = Array.from(new Set([...linkDerived, ...hardProbes]));
 
-  // 3) Try hash section first (same HTML)
   let appointHtml = null;
   let appointUrlUsed = null;
 
+  // hash-first (same page section)
   for (const aUrl of appointTargets) {
     if (/#/.test(aUrl)) {
       const section = extractAppointmentsSectionFromHtml(rProfile.text);
       if (section) { appointHtml = section; appointUrlUsed = aUrl; break; }
     }
   }
-
-  // 4) Then try dedicated subpages — with Referer and slash variants
+  // dedicated subpages next
   if (!appointHtml) {
-    for (const aUrl0 of appointTargets) {
-      if (/#/.test(aUrl0)) continue;
-      const tryUrls = withSlashVariants(aUrl0);
-      for (const aUrl of tryUrls) {
-        const rApp = await fetchText(aUrl, {
-          "User-Agent": "Mozilla/5.0",
-          "Accept": "text/html,application/xhtml+xml",
-          "Accept-Language": "en-GB,en;q=0.9",
-          "Referer": profileUrl, // important for NHS
-          "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
-        });
-        diag?.calls.push({ url:aUrl, ok:rApp.ok, status:rApp.status, kind:"appointments", htmlBytes:rApp.text.length });
-
-        if (rApp.ok && rApp.text) {
-          appointHtml = rApp.text; appointUrlUsed = aUrl;
-          if (SCAN_CAPTURE_HTML) {
-            try {
-              await scanHtmlCol().updateOne(
-                { _id: aUrl },
-                { $set: { html: rApp.text, at: new Date(), from: "appointments" } },
-                { upsert:true }
-              );
-            } catch {}
-          }
-          break;
+    for (const aUrl of appointTargets) {
+      if (/#/.test(aUrl)) continue;
+      const rApp = await fetchText(aUrl, {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "en-GB,en;q=0.9",
+        "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
+      });
+      diag?.calls.push({ url:aUrl, ok:rApp.ok, status:rApp.status, kind:"appointments", htmlBytes:rApp.text.length });
+      if (rApp.ok && rApp.text) {
+        appointHtml = rApp.text; appointUrlUsed = aUrl;
+        if (SCAN_CAPTURE_HTML) {
+          try {
+            await scanHtmlCol().updateOne(
+              { _id: aUrl },
+              { $set: { html: rApp.text, at: new Date(), from: "appointments" } },
+              { upsert:true }
+            );
+          } catch {}
         }
+        break;
       }
-      if (appointHtml) break;
     }
   }
 
-  // 5) Classify using appointments content if present; otherwise fall back to profile page
   const htmlToClassify = appointHtml || rProfile.text;
   let cls = classifyAcceptance(htmlToClassify, diag);
   if (SCAN_DEBUG) (diag.snippets ||= []).push(appointHtml ? `[appointments_used:${appointUrlUsed}]` : `[appointments_missing]`);
@@ -506,7 +481,7 @@ async function fetchDetail(profileUrl, diag) {
   let accepting = cls.accepting === true;
   let score = cls.score;
 
-  // 6) Optional reconfirm (prefer the same appointments URL; keep Referer)
+  // Optional reconfirm (prefer the same appointments URL)
   if (RECONFIRM && accepting && RECONFIRM_TRIES > 0) {
     let confirms = 1;
     for (let i = 0; i < RECONFIRM_TRIES; i++) {
@@ -518,7 +493,6 @@ async function fetchDetail(profileUrl, diag) {
           "User-Agent": "Mozilla/5.0",
           "Accept": "text/html,application/xhtml+xml",
           "Accept-Language": "en-GB,en;q=0.9",
-          "Referer": profileUrl,
           "Cookie": "nhsuk-cookie-consent=accepted; nhsuk_preferences=true; geoip_country=GB"
         });
         if (rAgain.ok) htmlAgain = rAgain.text;
@@ -599,7 +573,7 @@ export async function runScan() {
 
       for (const c of ordered) {
         if (!c.link) continue;
-        const detail = await fetchDetail(c.link, diag);  // Appointments-first
+        const detail = await fetchDetail(c.link, diag);  // Appointments page (or profile fallback)
         localDetailHits++;
         if (detail.accepting) {
           localAcceptHits++; found++;
@@ -668,6 +642,6 @@ export async function debugCandidateLinks(pc) {
 }
 
 /* ---------- Compatibility exports ---------- */
-export default runScan;          // default import
-export { runScan as runscan };  // tolerate lowercase import
-export { runScan as run_scan }; // tolerate snake_case import
+export default runScan;
+export { runScan as runscan };
+export { runScan as run_scan };
