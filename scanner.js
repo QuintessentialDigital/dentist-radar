@@ -1,22 +1,11 @@
 /**
- * DentistRadar — scanner.js (v2.3, Postmark-only, User-targeted)
- * ---------------------------------------------------------------
- * - Reads ONLY the "Appointments" page to determine acceptance.
- * - Classifies: ACCEPTING / CHILD_ONLY / NOT_CONFIRMED.
- * - Sends ONE summary email PER SearchArea to Users from DB:
- *      active === true AND receiveAlerts === true
- *      + optional postcode targeting (postcodes/areas.postcode)
- * - Exports runScan(opts). Also self-runs via CLI.
- *
- * ENV (required):
- *   MONGO_URI
- *   POSTMARK_SERVER_TOKEN
- *   EMAIL_FROM   e.g., "DentistRadar <alerts@yourdomain.com>"
- *
- * ENV (optional):
- *   POSTMARK_MESSAGE_STREAM="outbound"
- *   INCLUDE_CHILD_ONLY="false"
- *   MAX_CONCURRENCY="5"
+ * DentistRadar — scanner.js (v2.4, Postmark-only, Watch-driven)
+ * -------------------------------------------------------------
+ * - Builds scan jobs from Watch collection (unique postcodes).
+ * - For each job: finds Practices in radius, reads ONLY Appointments page,
+ *   classifies ACCEPTING / CHILD_ONLY / NOT_CONFIRMED.
+ * - Emails real users from Users (active+receiveAlerts; targeted or global).
+ * - Postmark HTTP API only (no SMTP).
  */
 
 import axios from 'axios';
@@ -25,12 +14,8 @@ import pLimit from 'p-limit';
 import dayjs from 'dayjs';
 import axiosRetry from 'axios-retry';
 import {
-  connectMongo,
-  disconnectMongo,
-  SearchArea,
-  Practice,
-  EmailLog,
-  User
+  connectMongo, disconnectMongo,
+  Practice, EmailLog, User, Watch
 } from './models.js';
 
 /* =========================
@@ -39,8 +24,8 @@ import {
 const {
   MONGO_URI,
   POSTMARK_SERVER_TOKEN,
-  POSTMARK_MESSAGE_STREAM = 'outbound',
   EMAIL_FROM,
+  POSTMARK_MESSAGE_STREAM = 'outbound',
   INCLUDE_CHILD_ONLY = 'false',
   MAX_CONCURRENCY = '5',
 } = process.env;
@@ -77,18 +62,16 @@ const UAS = [
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function normalizeText(s) {
-  return String(s || '').replace(/\s+/g, ' ').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
-}
+const normalizeText = (s) =>
+  String(s || '').replace(/\s+/g, ' ').replace(/[\u200B-\u200D\uFEFF]/g, '').trim();
 
-function normalizePostcode(pc) {
-  return String(pc || '').toUpperCase().replace(/\s+/g, ' ').trim();
-}
+const normalizePostcode = (pc) =>
+  String(pc || '').toUpperCase().replace(/\s+/g, ' ').trim();
 
-function sanitizeEmail(s) {
+const sanitizeEmail = (s) => {
   const x = String(s || '').trim();
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x) ? x : '';
-}
+};
 
 /* =========================
    Acceptance parsing
@@ -114,9 +97,7 @@ function classifyAcceptance(rawHtmlOrText) {
   if (childOnlyExact || (/only accepts.*children/i.test(text) && /new nhs patients/i.test(text))) {
     return { status: 'CHILD_ONLY', matched: 'child-only' };
   }
-  if (acceptingAdults || genericAccepting) {
-    return { status: 'ACCEPTING', matched: 'accepting' };
-  }
+  if (acceptingAdults || genericAccepting) return { status: 'ACCEPTING', matched: 'accepting' };
   if (notConfirmed) return { status: 'NOT_CONFIRMED', matched: 'not-confirmed' };
   return { status: 'NOT_CONFIRMED', matched: 'unknown' };
 }
@@ -132,8 +113,7 @@ async function httpGet(url) {
         'User-Agent': ua,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-GB,en;q=0.9',
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
+        'Cache-Control': 'no-cache', 'Pragma': 'no-cache',
       },
       timeout: 15000,
       validateStatus: (s) => s >= 200 && s < 400,
@@ -148,17 +128,15 @@ async function httpGet(url) {
 
 async function loadAppointmentsHtml(detailsUrl) {
   if (!detailsUrl) return null;
-
   const detailsHtml = await httpGet(detailsUrl);
   if (!detailsHtml) return null;
 
   const $ = cheerio.load(detailsHtml);
 
   // Prefer link by visible text
-  let href = $('a')
-    .filter((_, el) => normalizeText($(el).text()).toLowerCase().includes('appointment'))
-    .first()
-    .attr('href');
+  let href = $('a').filter((_, el) =>
+    normalizeText($(el).text()).toLowerCase().includes('appointment')
+  ).first().attr('href');
 
   // Fallback by URL hint
   if (!href) href = $('a[href*="/appointments"]').first().attr('href');
@@ -172,45 +150,58 @@ async function loadAppointmentsHtml(detailsUrl) {
 /* =========================
    Audience targeting (Users)
    ========================= */
-async function getRecipientsForJob(job, opts = {}) {
+async function getRecipientsForPostcode(jobPostcode, opts = {}) {
   if (Array.isArray(opts.overrideRecipients) && opts.overrideRecipients.length) {
     return [...new Set(opts.overrideRecipients.map(sanitizeEmail))].filter(Boolean);
   }
 
-  const jobPC = normalizePostcode(job.postcode);
+  const pc = normalizePostcode(jobPostcode);
 
-  // Active + opted-in users; either explicitly targeted to this postcode
-  // or global subscribers (no targeting fields present)
   const users = await User.find({
     active: true,
     receiveAlerts: true,
     $or: [
-      { postcodes: jobPC },
-      { 'areas.postcode': jobPC },
+      { postcodes: pc },
+      { 'areas.postcode': pc },
+      // global subscribers (no targeting fields present)
       { $and: [{ postcodes: { $exists: false } }, { areas: { $exists: false } }] },
       { $and: [{ postcodes: { $in: [null, [], undefined] } }, { areas: { $in: [null, [], undefined] } }] },
     ],
-  })
-    .select('email')
-    .lean();
+  }).select('email').lean();
 
-  const emails = users.map((u) => sanitizeEmail(u.email)).filter(Boolean);
+  const emails = users.map(u => sanitizeEmail(u.email)).filter(Boolean);
   return [...new Set(emails)].slice(0, 5000);
 }
 
 /* =========================
-   Core scan
+   Job builder (Watch → jobs)
    ========================= */
-async function scanJob(job) {
-  const { _id: jobId, postcode, radiusMiles } = job;
+async function buildJobsFromWatch(filterPostcode) {
+  const match = filterPostcode ? { postcode: normalizePostcode(filterPostcode) } : {};
+
+  // Group by postcode to get unique jobs; take first radius seen
+  const watches = await Watch.aggregate([
+    { $match: match },
+    { $group: { _id: '$postcode', radiusMiles: { $first: '$radius' } } },
+    { $project: { _id: 0, postcode: '$_id', radiusMiles: '$radiusMiles' } }
+  ]);
+
+  return watches.map(w => ({
+    postcode: normalizePostcode(w.postcode),
+    radiusMiles: Math.max(1, Math.min(30, Number(w.radiusMiles) || 10)),
+  }));
+}
+
+/* =========================
+   Core scan per job
+   ========================= */
+async function scanPostcodeJob({ postcode, radiusMiles }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
   const practices = await Practice.find({
     distanceMiles: { $lte: radiusMiles },
     detailsUrl: { $exists: true, $ne: '' },
-  })
-    .select('_id name postcode detailsUrl distanceMiles')
-    .lean();
+  }).select('_id name postcode detailsUrl distanceMiles').lean();
 
   if (!practices.length) {
     console.log('No practices found in radius.');
@@ -223,46 +214,34 @@ async function scanJob(job) {
   const accepting = [];
   const childOnly = [];
 
-  await Promise.all(
-    practices.map((p) =>
-      limit(async () => {
-        // per-day per-job per-practice de-dup
-        const already = await EmailLog.findOne({ jobId, practiceId: p._id, dateKey }).lean();
-        if (already) return;
+  await Promise.all(practices.map(p => limit(async () => {
+    // De-dup per day per practice (no jobId since Watch-derived)
+    const already = await EmailLog.findOne({ practiceId: p._id, dateKey }).lean();
+    if (already) return;
 
-        const apptHtml = await loadAppointmentsHtml(p.detailsUrl);
-        if (!apptHtml) return;
+    const apptHtml = await loadAppointmentsHtml(p.detailsUrl);
+    if (!apptHtml) return;
 
-        const verdict = classifyAcceptance(apptHtml);
+    const verdict = classifyAcceptance(apptHtml);
 
-        if (verdict.status === 'ACCEPTING') {
-          accepting.push({
-            id: p._id.toString(),
-            name: p.name,
-            postcode: p.postcode,
-            url: p.detailsUrl,
-            distanceMiles: p.distanceMiles,
-          });
-          await EmailLog.create({
-            jobId, practiceId: p._id, practiceUrl: p.detailsUrl,
-            status: 'ACCEPTING', dateKey,
-          });
-        } else if (verdict.status === 'CHILD_ONLY' && INCLUDE_CHILD) {
-          childOnly.push({
-            id: p._id.toString(),
-            name: p.name,
-            postcode: p.postcode,
-            url: p.detailsUrl,
-            distanceMiles: p.distanceMiles,
-          });
-          await EmailLog.create({
-            jobId, practiceId: p._id, practiceUrl: p.detailsUrl,
-            status: 'CHILD_ONLY', dateKey,
-          });
-        }
-      })
-    )
-  );
+    if (verdict.status === 'ACCEPTING') {
+      accepting.push({
+        id: p._id.toString(),
+        name: p.name, postcode: p.postcode, url: p.detailsUrl, distanceMiles: p.distanceMiles,
+      });
+      await EmailLog.create({
+        practiceId: p._id, practiceUrl: p.detailsUrl, status: 'ACCEPTING', dateKey,
+      });
+    } else if (verdict.status === 'CHILD_ONLY' && INCLUDE_CHILD) {
+      childOnly.push({
+        id: p._id.toString(),
+        name: p.name, postcode: p.postcode, url: p.detailsUrl, distanceMiles: p.distanceMiles,
+      });
+      await EmailLog.create({
+        practiceId: p._id, practiceUrl: p.detailsUrl, status: 'CHILD_ONLY', dateKey,
+      });
+    }
+  })));
 
   return { accepting, childOnly };
 }
@@ -270,10 +249,10 @@ async function scanJob(job) {
 /* =========================
    Email via Postmark
    ========================= */
-async function sendJobEmail(job, found, opts = {}) {
-  const recipients = await getRecipientsForJob(job, opts);
+async function sendEmailForJob(job, found, opts = {}) {
+  const recipients = await getRecipientsForPostcode(job.postcode, opts);
   if (!recipients.length) {
-    console.log('No recipients for this job; skipping email.');
+    console.log('No recipients; skipping email.');
     return;
   }
 
@@ -285,32 +264,24 @@ async function sendJobEmail(job, found, opts = {}) {
   }
 
   const lines = [];
-
   if (hasAccepting) {
     lines.push(`✅ <b>Accepting (adults/all)</b> — ${found.accepting.length}`);
-    found.accepting
-      .sort((a, b) => (a.distanceMiles || 999) - (b.distanceMiles || 999))
-      .forEach((p, i) => {
-        lines.push(
-          `${i + 1}. ${escapeHtml(p.name)} — ${p.postcode} — ${p.distanceMiles?.toFixed?.(1) ?? '?'} mi<br/>` +
-          `<a href="${p.url}">${p.url}</a>`
-        );
-      });
+    found.accepting.sort((a,b)=>(a.distanceMiles||999)-(b.distanceMiles||999)).forEach((p,i)=>{
+      lines.push(`${i+1}. ${escapeHtml(p.name)} — ${p.postcode} — ${p.distanceMiles?.toFixed?.(1) ?? '?'} mi<br/><a href="${p.url}">${p.url}</a>`);
+    });
+    lines.push('<br/>');
+  }
+  if (hasChildOnly) {
+    lines.push(`🟨 <b>Children-only</b> — ${found.childOnly.length}`);
+    found.childOnly.sort((a,b)=>(a.distanceMiles||999)-(b.distanceMiles||999)).forEach((p,i)=>{
+      lines.push(`${i+1}. ${escapeHtml(p.name)} — ${p.postcode} — ${p.distanceMiles?.toFixed?.(1) ?? '?'} mi<br/><a href="${p.url}">${p.url}</a>`);
+    });
     lines.push('<br/>');
   }
 
-  if (hasChildOnly) {
-    lines.push(`🟨 <b>Children-only</b> — ${found.childOnly.length}`);
-    found.childOnly
-      .sort((a, b) => (a.distanceMiles || 999) - (b.distanceMiles || 999))
-      .forEach((p, i) => {
-        lines.push(
-          `${i + 1}. ${escapeHtml(p.name)} — ${p.postcode} — ${p.distanceMiles?.toFixed?.(1) ?? '?'} mi<br/>` +
-          `<a href="${p.url}">${p.url}</a>`
-        );
-      });
-    lines.push('<br/>');
-  }
+  const subject =
+    `DentistRadar: ${job.postcode} (${job.radiusMiles} mi) — ` +
+    `${found.accepting.length} accepting${INCLUDE_CHILD ? `, ${found.childOnly.length} child-only` : ''}`;
 
   const html = `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;">
@@ -322,15 +293,11 @@ async function sendJobEmail(job, found, opts = {}) {
     </div>
   `;
 
-  const subject =
-    `DentistRadar: ${job.postcode} (${job.radiusMiles} mi) — ` +
-    `${found.accepting.length} accepting${INCLUDE_CHILD ? `, ${found.childOnly.length} child-only` : ''}`;
-
   await axios.post(
     'https://api.postmarkapp.com/email',
     {
       From: EMAIL_FROM,
-      To: recipients.join(','), // Postmark accepts comma-separated list
+      To: recipients.join(','),
       Subject: subject,
       HtmlBody: html,
       MessageStream: POSTMARK_MESSAGE_STREAM,
@@ -350,17 +317,13 @@ async function sendJobEmail(job, found, opts = {}) {
 }
 
 function escapeHtml(s) {
-  return String(s || '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
+  return String(s || '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
 }
 
 /* =========================
-   Exported Runner
+   Exported Runner (Watch-driven)
    ========================= */
 /**
- * Run the scanner.
  * @param {Object} [opts]
  * @param {string} [opts.postcode]              - Only scan this postcode.
  * @param {boolean} [opts.includeChildOnly]     - Override INCLUDE_CHILD_ONLY.
@@ -376,20 +339,17 @@ export async function runScan(opts = {}) {
   await connectMongo(MONGO_URI);
   console.log('Mongo connected.');
 
-  const query = { active: true };
-  if (opts.postcode) query.postcode = normalizePostcode(opts.postcode);
-
-  const jobs = await SearchArea.find(query).lean();
+  const jobs = await buildJobsFromWatch(opts.postcode);
   if (!jobs.length) {
-    console.log('No active SearchAreas.');
+    console.log('[RESULT] No Watch entries → nothing to scan.');
     return { jobs: 0, summaries: [] };
   }
 
   const summaries = [];
   for (const job of jobs) {
     try {
-      const found = await scanJob(job);
-      await sendJobEmail(job, found, opts);
+      const found = await scanPostcodeJob(job);
+      await sendEmailForJob(job, found, opts);
       summaries.push({
         postcode: job.postcode,
         radiusMiles: job.radiusMiles,
@@ -402,7 +362,7 @@ export async function runScan(opts = {}) {
     await sleep(800 + Math.floor(Math.random() * 700));
   }
 
-  console.log('Done.');
+  console.log('[DONE]', summaries);
   return { jobs: jobs.length, summaries };
 }
 
@@ -413,9 +373,5 @@ export default { runScan };
 if (import.meta.url === `file://${process.argv[1]}`) {
   runScan()
     .then(async () => { await disconnectMongo(); process.exit(0); })
-    .catch(async (e) => {
-      console.error(e);
-      try { await disconnectMongo(); } catch {}
-      process.exit(1);
-    });
+    .catch(async (e) => { console.error(e); try { await disconnectMongo(); } catch {} process.exit(1); });
 }
