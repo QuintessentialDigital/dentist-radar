@@ -1,7 +1,6 @@
-// Dentist Radar - scanner.js (v1.9.2+++ Appointments-slug hard probe)
-// Key change: for each practice we now ALWAYS probe known Appointments slugs
-// (e.g. .../appointments) even if no link is visible on the profile page.
-// Preserves v1.9.2 behaviour, collections and exports.
+// Dentist Radar - scanner.js (v1.9.2 + Appointments-first + "accepts" phrasing)
+// Core: follow each practice's Appointments page and classify from there.
+// Change: handle "currently accepts new NHS patients for routine dental care" etc.
 
 import mongoose from "mongoose";
 
@@ -194,7 +193,7 @@ function parseCardsFromHTML(html, diag) {
   return dedupe(filtered, x => x.link || x.name);
 }
 
-/* ---------- Acceptance detector (Appointments phrasing) ---------- */
+/* ---------- Acceptance detector (Appointments phrasing, incl. "accepts") ---------- */
 function extractJsonLd(html) {
   const out = [];
   const re = /<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
@@ -210,7 +209,7 @@ function classifyAcceptance(html, diag) {
 
   const plain = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").toLowerCase();
 
-  // Exact NHS copy seen on Appointments pages
+  // NHS Appointments copy — now includes "accepts"/"currently accepts"
   const HARD_NEG = [
     'not accepting new nhs patients for routine dental care',
     'not accepting new nhs patients',
@@ -227,7 +226,7 @@ function classifyAcceptance(html, diag) {
     'waiting list only',
     'waiting list'
   ];
-  const HARD_POS = [
+  const HARD_POS_STRINGS = [
     'accepting new nhs patients for routine dental care',
     'accepting new nhs patients',
     'we are accepting new nhs',
@@ -237,6 +236,12 @@ function classifyAcceptance(html, diag) {
     'new nhs registrations open',
     'accepting nhs registrations'
   ];
+  // NEW: explicit regexes for "accepts"/"currently accepts"
+  const HARD_POS_REGEX = [
+    /\bcurrently\s+accepts?\s+new\s+nhs\s+patients\b/i,
+    /\baccepts?\s+new\s+nhs\s+patients\b/i,
+    /\b(currently\s+)?accepts?\s+new\s+nhs\s+patients\s+for\s+routine\s+dental\s+care\b/i
+  ];
   const SOFT_POS = [
     'accepting nhs patients',
     'limited nhs capacity',
@@ -245,24 +250,30 @@ function classifyAcceptance(html, diag) {
   ];
 
   // Children-only detection
-  const childrenOnly = /\b(accepting|registering|taking on)\b[^.]{0,50}\b(children|child|under\s*18)\b[^.]{0,50}\bnhs\b/.test(plain);
+  const childrenOnly = /\b(accepting|accepts|registering|taking on)\b[^.]{0,50}\b(children|child|under\s*18)\b[^.]{0,50}\bnhs\b/.test(plain);
 
-  // quick JSON-LD scan (rarely holds acceptance, but harmless)
   const jsonldText = extractJsonLd(html).map(x => JSON.stringify(x)).join(' ').toLowerCase();
 
   let score = 0;
-  const mark = (src, arr, val, tag) => { if (arr.some(p => src.includes(p))) { score += val; if (SCAN_DEBUG) (diag.snippets ||= []).push(`[${tag}]`); } };
+  const markIncl = (src, arr, val, tag) => { if (arr.some(p => src.includes(p))) { score += val; if (SCAN_DEBUG) (diag.snippets ||= []).push(`[${tag}]`); } };
+  const markRe   = (src, arr, val, tag) => { if (arr.some(rx => rx.test(src))) { score += val; if (SCAN_DEBUG) (diag.snippets ||= []).push(`[${tag}]`); } };
 
   // negatives
-  mark(plain, HARD_NEG, -3, 'hard_neg'); mark(jsonldText, HARD_NEG, -2, 'hard_neg_jsonld');
-  mark(plain, SOFT_NEG, -1, 'soft_neg'); mark(jsonldText, SOFT_NEG, -1, 'soft_neg_jsonld');
+  markIncl(plain, HARD_NEG, -3, 'hard_neg');
+  markIncl(jsonldText, HARD_NEG, -2, 'hard_neg_jsonld');
+  markIncl(plain, SOFT_NEG, -1, 'soft_neg');
+  markIncl(jsonldText, SOFT_NEG, -1, 'soft_neg_jsonld');
 
   // positives
-  mark(plain, HARD_POS, +3, 'hard_pos'); mark(jsonldText, HARD_POS, +2, 'hard_pos_jsonld');
-  mark(plain, SOFT_POS, +1, 'soft_pos'); mark(jsonldText, SOFT_POS, +1, 'soft_pos_jsonld');
+  markIncl(plain, HARD_POS_STRINGS, +3, 'hard_pos');
+  markIncl(jsonldText, HARD_POS_STRINGS, +2, 'hard_pos_jsonld');
+  markRe(plain, HARD_POS_REGEX, +3, 'hard_pos_regex');
+
+  markIncl(plain, SOFT_POS, +1, 'soft_pos');
+  markIncl(jsonldText, SOFT_POS, +1, 'soft_pos_jsonld');
 
   // table-like pattern: "...Accepting new NHS patients... Yes"
-  if (/accepting\s+new\s+nhs\s+patients[^<]{0,200}<\/(dt|th)>[^<]{0,200}<(dd|td)[^>]*>\s*(yes|open|currently\s*accepting)/i.test(html)) {
+  if (/accept(ing|s)?\s+new\s+nhs\s+patients[^<]{0,200}<\/(dt|th)>[^<]{0,200}<(dd|td)[^>]*>\s*(yes|open|currently\s*accept(ing|s)?)/i.test(html)) {
     score += 3; if (SCAN_DEBUG) (diag.snippets ||= []).push('[table_yes]');
   }
 
@@ -286,7 +297,7 @@ const APPOINTMENT_SLUGS = [
   "opening-times-and-appointments"
 ];
 
-// Find explicit appointments link(s) on the profile page (best-effort)
+// Find explicit appointments link(s) on the profile page
 function findAppointmentsHref(html, profileUrl) {
   const anchors = [];
   const aRe = /<a\b([^>]+)>([\s\S]*?)<\/a>/gi;
@@ -308,7 +319,6 @@ function findAppointmentsHref(html, profileUrl) {
       if (abs) anchors.push(abs);
     }
   }
-  // Dedup
   return Array.from(new Set(anchors));
 }
 
@@ -330,11 +340,9 @@ function extractAppointmentsSectionFromHtml(html) {
 }
 
 function buildHardProbes(profileUrl) {
-  // Guarantee we try canonical slugs even if no link is found on the profile page.
   const u = new URL(profileUrl, NHS_HTML_BASE);
   const base = u.pathname.replace(/\/+$/,'');
   const probes = APPOINTMENT_SLUGS.map(slug => new URL(`${base}/${slug}`, u).toString());
-  // Also try common anchors on the same page
   probes.push(profileUrl + "#appointments");
   probes.push(profileUrl + "#appointment");
   return Array.from(new Set(probes));
@@ -355,10 +363,8 @@ async function htmlCandidates(pc, diag) {
 
   if (!r.ok) return [];
 
-  // Pass 1: parse card-like links & JSON-LD
   let cards = parseCardsFromHTML(r.text, diag);
 
-  // Pass 2: href fallback
   if (!cards.length) {
     const alts = [];
     const hrefRe = /href="([^"]+)"/gi;
@@ -407,7 +413,6 @@ async function apiCandidates(pc, diag) {
 
 /* ---------- Detail fetch (APPOINTMENTS LINK + HARD PROBES) ---------- */
 async function fetchDetail(profileUrl, diag) {
-  // Fetch profile
   const rProfile = await fetchText(profileUrl, {
     "User-Agent": "Mozilla/5.0",
     "Accept": "text/html,application/xhtml+xml",
@@ -428,27 +433,21 @@ async function fetchDetail(profileUrl, diag) {
     } catch {}
   }
 
-  // A) explicit links on page (best signal)
   const linkDerived = findAppointmentsHref(rProfile.text, profileUrl);
-
-  // B) hard probes we always attempt (covers cases like your Bhandal URL)
   const hardProbes = buildHardProbes(profileUrl);
-
-  // C) merge: explicit links first, then hard probes (dedup)
   const appointTargets = Array.from(new Set([...linkDerived, ...hardProbes]));
 
-  // Try in order: hash sections first (same page), then fetch subpages
   let appointHtml = null;
   let appointUrlUsed = null;
 
-  // hash-first
+  // hash-first (same page section)
   for (const aUrl of appointTargets) {
     if (/#/.test(aUrl)) {
       const section = extractAppointmentsSectionFromHtml(rProfile.text);
       if (section) { appointHtml = section; appointUrlUsed = aUrl; break; }
     }
   }
-  // subpages
+  // dedicated subpages next
   if (!appointHtml) {
     for (const aUrl of appointTargets) {
       if (/#/.test(aUrl)) continue;
@@ -475,7 +474,6 @@ async function fetchDetail(profileUrl, diag) {
     }
   }
 
-  // fallback to whole profile if nothing was found
   const htmlToClassify = appointHtml || rProfile.text;
   let cls = classifyAcceptance(htmlToClassify, diag);
   if (SCAN_DEBUG) (diag.snippets ||= []).push(appointHtml ? `[appointments_used:${appointUrlUsed}]` : `[appointments_missing]`);
@@ -483,7 +481,7 @@ async function fetchDetail(profileUrl, diag) {
   let accepting = cls.accepting === true;
   let score = cls.score;
 
-  // Optional reconfirm (prefer reconfirming the same appointments URL)
+  // Optional reconfirm (prefer the same appointments URL)
   if (RECONFIRM && accepting && RECONFIRM_TRIES > 0) {
     let confirms = 1;
     for (let i = 0; i < RECONFIRM_TRIES; i++) {
@@ -644,6 +642,6 @@ export async function debugCandidateLinks(pc) {
 }
 
 /* ---------- Compatibility exports ---------- */
-export default runScan;          // default import support
-export { runScan as runscan };  // tolerate lowercase alias
-export { runScan as run_scan }; // tolerate snake_case alias
+export default runScan;
+export { runScan as runscan };
+export { runScan as run_scan };
