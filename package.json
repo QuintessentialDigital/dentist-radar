@@ -5,11 +5,12 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js"
+    "start": "node -r ./polyfills.cjs scanner.js",
+    "scan": "node -r ./polyfills.cjs scanner.js",
+    "dev": "node -r ./polyfills.cjs scanner.js"
   },
-  {
-  "engines": { "node": "20.x" }
+  "engines": {
+    "node": ">=18.x"
   },
   "dependencies": {
     "cheerio": "^1.0.0-rc.12",
