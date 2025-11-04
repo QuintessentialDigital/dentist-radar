@@ -9,7 +9,7 @@
     "dev": "node server.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "20.x"
   },
   "dependencies": {
     "cheerio": "^1.0.0-rc.12",
