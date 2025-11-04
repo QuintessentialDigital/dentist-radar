@@ -1,5 +1,7 @@
-// Dentist Radar - scanner.js (v1.9.2++ Appointments-link first)
-// Safe for production: keeps routes, Mongo, email, env flags. ESM + tolerant exports.
+// Dentist Radar - scanner.js (v1.9.2+++ Appointments-slug hard probe)
+// Key change: for each practice we now ALWAYS probe known Appointments slugs
+// (e.g. .../appointments) even if no link is visible on the profile page.
+// Preserves v1.9.2 behaviour, collections and exports.
 
 import mongoose from "mongoose";
 
@@ -192,7 +194,7 @@ function parseCardsFromHTML(html, diag) {
   return dedupe(filtered, x => x.link || x.name);
 }
 
-/* ---------- Acceptance detector (phrases tuned to Appointments page) ---------- */
+/* ---------- Acceptance detector (Appointments phrasing) ---------- */
 function extractJsonLd(html) {
   const out = [];
   const re = /<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
@@ -208,7 +210,7 @@ function classifyAcceptance(html, diag) {
 
   const plain = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").toLowerCase();
 
-  // NHS copy seen on "Appointments" pages
+  // Exact NHS copy seen on Appointments pages
   const HARD_NEG = [
     'not accepting new nhs patients for routine dental care',
     'not accepting new nhs patients',
@@ -273,13 +275,18 @@ function classifyAcceptance(html, diag) {
   if (score >= 3) accepting = true;
   else if (score <= -2) accepting = false;
 
-  // small snippet for debug
-  const snippet = plain.slice(0, 220);
-  return { accepting, score, snippet };
+  return { accepting, score, snippet: plain.slice(0, 220) };
 }
 
-/* ---------- Appointments link helpers ---------- */
-// 1) Pull the real "Appointments" link from the practice page
+/* ---------- Appointments discovery ---------- */
+const APPOINTMENT_SLUGS = [
+  "appointments",
+  "appointments-and-opening-times",
+  "appointments-and-opening-hours",
+  "opening-times-and-appointments"
+];
+
+// Find explicit appointments link(s) on the profile page (best-effort)
 function findAppointmentsHref(html, profileUrl) {
   const anchors = [];
   const aRe = /<a\b([^>]+)>([\s\S]*?)<\/a>/gi;
@@ -292,40 +299,20 @@ function findAppointmentsHref(html, profileUrl) {
     const href = hrefMatch ? hrefMatch[1] : null;
     if (!href) continue;
 
-    // Prioritise anchors whose text says "appointments"
     const isAppointmentsText =
       /\bappointments?\b/.test(innerNorm) ||
       /\bappointments?\b/.test(norm(attrs)) ||
       /appointments/i.test(href);
-
     if (isAppointmentsText) {
       const abs = resolveUrlMaybeRelative(href, profileUrl);
       if (abs) anchors.push(abs);
     }
   }
-
-  // If nothing by text, fall back to slugs commonly used
-  if (!anchors.length) {
-    const slugCandidates = [
-      "appointments",
-      "appointments-and-opening-times",
-      "appointments-and-opening-hours",
-      "opening-times-and-appointments"
-    ];
-    for (const slug of slugCandidates) {
-      const abs = resolveUrlMaybeRelative(slug, profileUrl);
-      if (abs) anchors.push(abs);
-    }
-    // also common hash anchors
-    anchors.push(profileUrl + "#appointments");
-    anchors.push(profileUrl + "#appointment");
-  }
-
-  // Deduplicate preserving order
+  // Dedup
   return Array.from(new Set(anchors));
 }
 
-// 2) If the appointments content is on the same page (hash), extract just that section
+// If the appointments content is on the same page (hash), extract that section
 function extractAppointmentsSectionFromHtml(html) {
   const idx = html.search(/id=["']appointments["']|>appointments</i);
   if (idx >= 0) {
@@ -340,6 +327,17 @@ function extractAppointmentsSectionFromHtml(html) {
     return html.slice(start, end);
   }
   return null;
+}
+
+function buildHardProbes(profileUrl) {
+  // Guarantee we try canonical slugs even if no link is found on the profile page.
+  const u = new URL(profileUrl, NHS_HTML_BASE);
+  const base = u.pathname.replace(/\/+$/,'');
+  const probes = APPOINTMENT_SLUGS.map(slug => new URL(`${base}/${slug}`, u).toString());
+  // Also try common anchors on the same page
+  probes.push(profileUrl + "#appointments");
+  probes.push(profileUrl + "#appointment");
+  return Array.from(new Set(probes));
 }
 
 /* ---------- Candidate discovery ---------- */
@@ -407,7 +405,7 @@ async function apiCandidates(pc, diag) {
   return parseOrgsFromJSON(r.json);
 }
 
-/* ---------- Detail fetch (APPOINTMENTS LINK FIRST) ---------- */
+/* ---------- Detail fetch (APPOINTMENTS LINK + HARD PROBES) ---------- */
 async function fetchDetail(profileUrl, diag) {
   // Fetch profile
   const rProfile = await fetchText(profileUrl, {
@@ -430,26 +428,30 @@ async function fetchDetail(profileUrl, diag) {
     } catch {}
   }
 
-  // Find the actual "Appointments" link(s) from the profile HTML
-  const appointLinks = findAppointmentsHref(rProfile.text, profileUrl);
+  // A) explicit links on page (best signal)
+  const linkDerived = findAppointmentsHref(rProfile.text, profileUrl);
 
+  // B) hard probes we always attempt (covers cases like your Bhandal URL)
+  const hardProbes = buildHardProbes(profileUrl);
+
+  // C) merge: explicit links first, then hard probes (dedup)
+  const appointTargets = Array.from(new Set([...linkDerived, ...hardProbes]));
+
+  // Try in order: hash sections first (same page), then fetch subpages
   let appointHtml = null;
   let appointUrlUsed = null;
 
-  // First, if we have a hash-only link, try extracting the section from this HTML
-  for (const aUrl of appointLinks) {
+  // hash-first
+  for (const aUrl of appointTargets) {
     if (/#/.test(aUrl)) {
       const section = extractAppointmentsSectionFromHtml(rProfile.text);
-      if (section) {
-        appointHtml = section; appointUrlUsed = aUrl; break;
-      }
+      if (section) { appointHtml = section; appointUrlUsed = aUrl; break; }
     }
   }
-
-  // Otherwise, fetch the first working appointments subpage
+  // subpages
   if (!appointHtml) {
-    for (const aUrl of appointLinks) {
-      if (/#/.test(aUrl)) continue; // already handled hash
+    for (const aUrl of appointTargets) {
+      if (/#/.test(aUrl)) continue;
       const rApp = await fetchText(aUrl, {
         "User-Agent": "Mozilla/5.0",
         "Accept": "text/html,application/xhtml+xml",
@@ -473,20 +475,15 @@ async function fetchDetail(profileUrl, diag) {
     }
   }
 
-  // If still nothing, last resort: try to extract an appointments section from profile page
-  if (!appointHtml) {
-    appointHtml = extractAppointmentsSectionFromHtml(rProfile.text);
-    appointUrlUsed = appointHtml ? (profileUrl + "#appointments") : null;
-  }
-
-  // Classify using appointments content if available, else full profile
-  let cls = appointHtml ? classifyAcceptance(appointHtml, diag) : classifyAcceptance(rProfile.text, diag);
+  // fallback to whole profile if nothing was found
+  const htmlToClassify = appointHtml || rProfile.text;
+  let cls = classifyAcceptance(htmlToClassify, diag);
   if (SCAN_DEBUG) (diag.snippets ||= []).push(appointHtml ? `[appointments_used:${appointUrlUsed}]` : `[appointments_missing]`);
 
   let accepting = cls.accepting === true;
   let score = cls.score;
 
-  // Reconfirm on appointments content (or profile if no appointments HTML)
+  // Optional reconfirm (prefer reconfirming the same appointments URL)
   if (RECONFIRM && accepting && RECONFIRM_TRIES > 0) {
     let confirms = 1;
     for (let i = 0; i < RECONFIRM_TRIES; i++) {
@@ -578,7 +575,7 @@ export async function runScan() {
 
       for (const c of ordered) {
         if (!c.link) continue;
-        const detail = await fetchDetail(c.link, diag);  // Appointments link first
+        const detail = await fetchDetail(c.link, diag);  // Appointments page (or profile fallback)
         localDetailHits++;
         if (detail.accepting) {
           localAcceptHits++; found++;
