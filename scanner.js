@@ -31,7 +31,7 @@
 
 import mongoose from 'mongoose';
 import axios from 'axios';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 import nodemailer from 'nodemailer';
 import pLimit from 'p-limit';
 import dayjs from 'dayjs';
