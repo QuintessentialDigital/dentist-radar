@@ -1,30 +1,23 @@
 {
-  "name": "dentist-radar",
-  "version": "2.0.0",
-  "description": "Dentist Radar — micro-SaaS to alert users when NHS dentists open",
+  "name": "dentistradar",
+  "version": "2.0.2",
+  "description": "DentistRadar NHS Scanner Service",
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node scanner.js",
+    "start": "node -e \"console.log('Node:',process.version,'File?',!!global.File)\" && node server.js",
     "scan": "node scanner.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "axios-retry": "^3.9.1",
+    "cheerio": "^1.0.0-rc.12",
+    "dayjs": "^1.11.11",
+    "mongoose": "^8.6.0",
+    "nodemailer": "^6.9.11",
+    "p-limit": "^5.0.0"
   },
   "engines": {
     "node": "20.x"
-  },
-  "dependencies": {
-    "cheerio": "^1.0.0-rc.12",
-    "axios": "^1.7.0",
-    "axios-retry": "^3.9.1",
-    "cors": "^2.8.5",
-    "dayjs": "^1.11.13",
-    "nodemailer": "^6.9.11",
-    "p-limit": "^5.0.0",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "mongoose": "^8.6.3",
-    "node-fetch": "^3.3.2",
-    "p-queue": "^7.4.1",
-    "p-retry": "^6.0.0",
-    "stripe": "^15.11.0"
   }
 }
