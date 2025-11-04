@@ -1,5 +1,5 @@
-// Dentist Radar - scanner.js (v1.9.2+)
-// Stable baseline + modern NHS list discovery + broader acceptance detection
+// Dentist Radar - scanner.js (v1.9.2+ hardened)
+// Stable baseline + modern NHS list discovery + broader acceptance detection.
 // Safe for production: does NOT change UI, Mongo schemas, Stripe, or routes outside scanner usage.
 
 import mongoose from "mongoose";
@@ -11,16 +11,20 @@ const NHS_API_KEY      = process.env.NHS_API_KEY      || "";   // optional but h
 
 const NHS_HTML_BASE    = "https://www.nhs.uk";
 
+// Keep env flag for completeness, but we’ll prefer the known-good HTML path.
 const SCAN_MODE        = (process.env.SCAN_MODE || "both").toLowerCase(); // html|api|both
 const SCAN_MAX_PCS     = Number(process.env.SCAN_MAX_PCS || 40);
 const SCAN_DELAY_MS    = Number(process.env.SCAN_DELAY_MS || 800);
 const SCAN_DEBUG       = process.env.SCAN_DEBUG === "1";
 const SCAN_CAPTURE_HTML= process.env.SCAN_CAPTURE_HTML === "1";
 
-// NEW: temporal reconfirmation before emailing
+// Optional: reconfirm positives to avoid blips
 const RECONFIRM        = /^(1|true|yes)$/i.test(String(process.env.RECONFIRM || "0"));
-const RECONFIRM_TRIES  = Math.max(0, Number(process.env.RECONFIRM_TRIES || 1));   // additional tries after first hit
-const RECONFIRM_GAP_MS = Math.max(0, Number(process.env.RECONFIRM_GAP_MS || 120000)); // 2 minutes
+const RECONFIRM_TRIES  = Math.max(0, Number(process.env.RECONFIRM_TRIES || 1));        // extra checks after first hit
+const RECONFIRM_GAP_MS = Math.max(0, Number(process.env.RECONFIRM_GAP_MS || 120000));  // 2 minutes
+
+// Optional: treat "children-only" acceptance as positive
+const ACCEPT_CHILDREN_OK = /^(1|true|yes)$/i.test(String(process.env.ACCEPT_CHILDREN_OK || "0"));
 
 const POSTMARK_TOKEN   = process.env.POSTMARK_TOKEN || "";
 const DOMAIN           = process.env.DOMAIN || "dentistradar.co.uk";
@@ -61,7 +65,7 @@ function dedupe(arr, keyFn) {
   return out;
 }
 
-/* ---------- Email (simple Postmark) ---------- */
+/* ---------- Email (Postmark) ---------- */
 async function sendEmail(to, subject, text, type = "availability", meta = {}) {
   if (!POSTMARK_TOKEN) return { ok:false, skipped:true };
   const res = await fetch("https://api.postmarkapp.com/email", {
@@ -158,7 +162,7 @@ function parseCardsFromHTML(html, diag) {
         const name = n.name || n?.item?.name;
         let url = n.url || n?.item?.url;
         if (name && url) {
-          if (!/^https?:\/\//i.test(url)) url = NHS_HTML_BASE + url;
+          if (!/^https?:\/\/|^\/\//i.test(url)) url = NHS_HTML_BASE + url;
           results.push({ name: String(name).trim(), link: url });
           count++;
         }
@@ -178,13 +182,16 @@ function parseCardsFromHTML(html, diag) {
 
   if (diag) {
     diag.patternsHit = (diag.patternsHit || []).concat(patternsHit);
-    diag.candidateCounts = { raw: results.length, filtered: filtered.length };
+    // We update candidateCounts later too if we add href fallbacks
+    diag.candidateCounts = {
+      raw: (diag.candidateCounts?.raw || 0) + results.length,
+      filtered: (diag.candidateCounts?.filtered || 0) + filtered.length
+    };
   }
   return dedupe(filtered, x => x.link || x.name);
 }
 
 /* ---------- Acceptance detector (detail pages) ---------- */
-/** Extract JSON-LD blocks for extra hints (sometimes status appears there) */
 function extractJsonLd(html) {
   const out = [];
   const re = /<script[^>]+type="application\/ld\+json"[^>]*>([\s\S]*?)<\/script>/gi;
@@ -198,107 +205,86 @@ function extractJsonLd(html) {
   return out;
 }
 
-/** Classify acceptance using multi-signal ensemble (badge + body + jsonld) */
 function classifyAcceptance(html, diag) {
   if (!html) return { accepting: null, score: 0, snippet: "" };
 
-  // Keep original HTML for DOM-ish checks
   const plain = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").toLowerCase();
 
-  // Negative phrases (strong/soft)
+  // children-only detection
+  const childrenOnly = /\b(accepting|registering|taking on)\b[^.]{0,50}\b(children|child|under\s*18)\b[^.]{0,50}\bnhs\b/.test(plain);
+
   const HARD_NEG = [
-    'not accepting new nhs patients',
-    'no longer accepting nhs',
-    'no new nhs patients',
-    'not currently accepting',
-    'closed to new nhs patients',
-    'not accepting nhs adult patients',
-    'nhs registrations closed',
-    'nhs closed',
-    'waiting list only'
+    'not accepting new nhs patients','no longer accepting nhs','no new nhs patients',
+    'not currently accepting','closed to new nhs patients','nhs registrations closed',
+    'nhs list closed','registrations suspended','nhs closed','waiting list only'
   ];
   const SOFT_NEG = [
-    'not accepting new patients',
-    'temporarily not accepting',
-    'private patients only',
-    'accepting children nhs only',
-    'waiting list'
+    'not accepting new patients','temporarily not accepting','private patients only','waiting list'
   ];
-
-  // Positive phrases (strong/soft)
   const HARD_POS = [
-    'accepting new nhs patients',
-    'taking new nhs patients',
-    'currently accepting nhs patients',
-    'now accepting nhs',
-    'open to new nhs patients'
+    'accepting new nhs patients','we are accepting new nhs',"we're accepting new nhs",
+    'open to new nhs patients','taking on nhs','taking on new nhs',
+    'accepting nhs registrations','new nhs registrations open'
   ];
   const SOFT_POS = [
-    'accepting nhs patients',
-    'limited nhs spaces',
-    'nhs registrations open',
-    'adults: yes',
-    'children: yes'
+    'accepting nhs patients','limited nhs capacity','nhs spaces available','registering nhs'
   ];
 
-  // Badge/tag quick scan with a small DOM-ish regex (kept simple to avoid cheerio here)
+  // Badge/tag quick scan
   const badgeRe = /<span[^>]*class="[^"]*nhsuk-tag[^"]*"[^>]*>([\s\S]*?)<\/span>/i;
-  const badgeMatch = html.match(badgeRe);
-  const badgeText  = badgeMatch ? norm(badgeMatch[1]) : "";
+  const badge = (html.match(badgeRe)?.[1] || '').toLowerCase();
 
-  const jsonldRaw = extractJsonLd(html);
-  const jsonld    = norm(JSON.stringify(jsonldRaw));
+  // Simple JSON-LD check
+  const jsonldText = extractJsonLd(html).map(x => JSON.stringify(x)).join(' ').toLowerCase();
 
   let score = 0;
-  const add = (n, why) => { score += n; if (SCAN_DEBUG) (diag.snippets ||= []).push(`[${why}]`); };
+  const mark = (src, arr, val, tag) => {
+    if (arr.some(p => src.includes(p))) { score += val; if (SCAN_DEBUG) (diag.snippets ||= []).push(`[${tag}]`); }
+  };
 
-  // Hard negatives first (override bias)
-  if (HARD_NEG.some(p => plain.includes(p)) || HARD_NEG.some(p => badgeText.includes(p)) || HARD_NEG.some(p => jsonld.includes(p))) {
-    add(-3, "hard_neg");
-  }
-  if (SOFT_NEG.some(p => plain.includes(p)) || SOFT_NEG.some(p => badgeText.includes(p)) || SOFT_NEG.some(p => jsonld.includes(p))) {
-    add(-1, "soft_neg");
-  }
+  // negatives
+  mark(plain, HARD_NEG, -3, 'hard_neg');
+  mark(badge, HARD_NEG, -3, 'hard_neg_badge');
+  mark(jsonldText, HARD_NEG, -2, 'hard_neg_jsonld');
+  mark(plain, SOFT_NEG, -1, 'soft_neg');
+  mark(badge, SOFT_NEG, -1, 'soft_neg_badge');
+  mark(jsonldText, SOFT_NEG, -1, 'soft_neg_jsonld');
 
-  // Hard positives
-  if (HARD_POS.some(p => plain.includes(p)) || HARD_POS.some(p => badgeText.includes(p)) || HARD_POS.some(p => jsonld.includes(p))) {
-    add(+3, "hard_pos");
-  }
-  // Soft positives
-  if (SOFT_POS.some(p => plain.includes(p)) || SOFT_POS.some(p => badgeText.includes(p)) || SOFT_POS.some(p => jsonld.includes(p))) {
-    add(+1, "soft_pos");
-  }
+  // positives
+  mark(plain, HARD_POS, +3, 'hard_pos');
+  mark(badge, HARD_POS, +3, 'hard_pos_badge');
+  mark(jsonldText, HARD_POS, +2, 'hard_pos_jsonld');
+  mark(plain, SOFT_POS, +1, 'soft_pos');
+  mark(badge, SOFT_POS, +1, 'soft_pos_badge');
+  mark(jsonldText, SOFT_POS, +1, 'soft_pos_jsonld');
 
   // Table-like pattern: "...Accepting new NHS patients...</dt>...<dd>Yes"
-  const tableYes = /accepting\s+new\s+nhs\s+patients[^<]{0,200}<\/(dt|th)>[^<]{0,200}<(dd|td)[^>]*>\s*(yes|open|currently\s*accepting)/i.test(html);
-  if (tableYes) add(+3, "table_yes");
+  if (/accepting\s+new\s+nhs\s+patients[^<]{0,200}<\/(dt|th)>[^<]{0,200}<(dd|td)[^>]*>\s*(yes|open|currently\s*accepting)/i.test(html)) {
+    score += 3; if (SCAN_DEBUG) (diag.snippets ||= []).push('[table_yes]');
+  }
 
-  // Badge that explicitly contains accepting + nhs
-  const badgeYes = /<span[^>]*class="[^"]*nhsuk-tag[^"]*"[^>]*>[^<]*(accepting|taking\s+on)[^<]*nhs[^<]*<\/span>/i.test(html);
-  if (badgeYes) add(+3, "badge_yes");
+  // children-only logic
+  if (childrenOnly) {
+    if (ACCEPT_CHILDREN_OK) { score += 2; (diag.snippets ||= []).push('[children_only_pos]'); }
+    else { score -= 1; (diag.snippets ||= []).push('[children_only_soft_neg]'); }
+  }
 
-  // Decide 3-way label
   let accepting = null;
   if (score >= 3) accepting = true;
   else if (score <= -2) accepting = false;
 
-  // Build a short snippet for debug (body segment around most relevant hit)
-  let snippet = badgeText || plain.slice(0, 220);
-  return { accepting, score, snippet };
+  return { accepting, score, snippet: badge || plain.slice(0, 220) };
 }
 
 /* ---------- Candidate discovery ---------- */
 async function htmlCandidates(pc, diag) {
-  const { lat, lon } = await geocode(pc);
   const enc = encodeURIComponent(pc);
+
+  // Prefer the known-good path that returned 200s in live logs:
+  // https://www.nhs.uk/service-search/find-a-dentist/results/<POSTCODE>?distance=30
   const urls = [
-    (lat && lon) ? `${NHS_HTML_BASE}/service-search/find-a-dentist/results?latitude=${lat}&longitude=${lon}&distance=30` : null,
-    `${NHS_HTML_BASE}/service-search/find-a-dentist/results?location=${enc}&distance=30`,
-    `${NHS_HTML_BASE}/service-search/find-a-dentist/results?postcode=${enc}&distance=30`,
-    `${NHS_HTML_BASE}/service-search/find-a-dentist/results/${enc}?distance=30`,
-    `${NHS_HTML_BASE}/service-search/other-services/Dentists/LocationSearch/${enc}?distance=30`,
-    `${NHS_HTML_BASE}/find-a-dentist/results/${enc}?distance=30`
-  ].filter(Boolean);
+    `${NHS_HTML_BASE}/service-search/find-a-dentist/results/${enc}?distance=30`
+  ];
 
   let out = [];
   for (const url of urls) {
@@ -312,10 +298,10 @@ async function htmlCandidates(pc, diag) {
 
     if (!r.ok) continue;
 
-    // Pass 1: regular card parsers
+    // Pass 1: parse card-like links & JSON-LD
     let cards = parseCardsFromHTML(r.text, diag);
 
-    // Pass 2: href fallback (scan all anchors for dentist detail patterns)
+    // Pass 2: href fallback scan (broad)
     if (!cards.length) {
       const alts = [];
       const hrefRe = /href="([^"]+)"/gi;
@@ -332,6 +318,14 @@ async function htmlCandidates(pc, diag) {
       if (alts.length) {
         (diag.patternsHit ||= []).push({ pattern: "href-fallback", count: alts.length });
         cards = cards.concat(alts);
+
+        // Update candidateCounts for fallback adds
+        if (diag) {
+          diag.candidateCounts = {
+            raw: (diag.candidateCounts?.raw || 0) + alts.length,
+            filtered: (diag.candidateCounts?.filtered || 0) + alts.length
+          };
+        }
       }
     }
 
@@ -360,7 +354,7 @@ async function apiCandidates(pc, diag) {
   return parseOrgsFromJSON(r.json);
 }
 
-/* ---------- Detail fetch + reconfirm ---------- */
+/* ---------- Detail fetch + optional reconfirm ---------- */
 async function fetchDetail(link, diag) {
   const r = await fetchText(link, {
     "User-Agent": "Mozilla/5.0",
@@ -382,12 +376,10 @@ async function fetchDetail(link, diag) {
 
   if (!r.ok) return { accepting:false, htmlLen: r.text.length, score: 0 };
 
-  // primary classification
   const cls = classifyAcceptance(r.text, diag);
   let accepting = cls.accepting === true;
   let score = cls.score;
 
-  // optional reconfirm to reduce false positives
   if (RECONFIRM && accepting && RECONFIRM_TRIES > 0) {
     let confirms = 1;
     for (let i = 0; i < RECONFIRM_TRIES; i++) {
@@ -400,20 +392,13 @@ async function fetchDetail(link, diag) {
       });
       if (!r2.ok) continue;
       const cls2 = classifyAcceptance(r2.text, diag);
-      if (cls2.accepting === true) {
-        confirms++;
-        score = Math.max(score, cls2.score);
-      }
+      if (cls2.accepting === true) { confirms++; score = Math.max(score, cls2.score); }
     }
-    // require at least 2 successful confirmations total
-    if (confirms < 2) accepting = false;
+    if (confirms < 2) accepting = false; // require stability
     (diag.snippets ||= []).push(`[reconfirm=${confirms}]`);
   }
 
-  // stash a short snippet for debug
-  if (SCAN_DEBUG && cls.snippet) {
-    (diag.snippets ||= []).push(cls.snippet.slice(0, 220));
-  }
+  if (SCAN_DEBUG && cls.snippet) (diag.snippets ||= []).push(cls.snippet.slice(0, 220));
 
   return { accepting, htmlLen: r.text.length, score };
 }
@@ -540,7 +525,7 @@ export async function debugCandidateLinks(pc) {
   return fromHtml.map(c => c.link).filter(Boolean);
 }
 
-/* ---------- Compatibility exports (ESM + CJS callers) ---------- */
+/* ---------- Compatibility exports (ESM + tolerant named imports) ---------- */
 export default runScan;          // default import support
 export { runScan as runscan };  // tolerate lowercase alias
 export { runScan as run_scan }; // tolerate snake_case alias
