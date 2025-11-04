@@ -1,16 +1,15 @@
 {
   "name": "dentist-radar",
-  "version": "1.8.0",
+  "version": "2.0.0",
   "description": "Dentist Radar — micro-SaaS to alert users when NHS dentists open",
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node -r ./polyfills.cjs scanner.js",
-    "scan": "node -r ./polyfills.cjs scanner.js",
-    "dev": "node -r ./polyfills.cjs scanner.js"
+    "start": "node scanner.js",
+    "scan": "node scanner.js"
   },
   "engines": {
-    "node": ">=18.x"
+    "node": "20.x"
   },
   "dependencies": {
     "cheerio": "^1.0.0-rc.12",
