@@ -12,7 +12,7 @@ import { fileURLToPath } from "url";
 import mongoose from "mongoose";
 
 import { runScan } from "./scanner.js";
-import { connectMongo, SearchArea, Practice, EmailLog, User } from "./models.js";
+import { connectMongo, Watch, Practice, EmailLog, User } from "./models.js";
 
 dotenv.config();
 
