@@ -1,17 +1,27 @@
 /**
- * DentistRadar — scanner.js (v2.0)
+ * DentistRadar — scanner.js (v2.1, Postmark-only)
  * ---------------------------------------------------------
  * - Scans NHS practices within radius from MongoDB SearchAreas.
  * - Visits the Appointments page only.
  * - Classifies: ACCEPTING / CHILD_ONLY / NOT_CONFIRMED.
- * - Emails all practices currently accepting new NHS patients.
+ * - Emails all accepting practices via Postmark HTTP API (no SMTP).
  * - Exports runScan() for programmatic use (server.js or cron).
+ *
+ * Required ENV:
+ *   MONGO_URI="mongodb+srv://..."
+ *   POSTMARK_SERVER_TOKEN="your-postmark-server-token"
+ *   EMAIL_FROM="DentistRadar <alerts@yourverifieddomain.com>"
+ *   EMAIL_TO="you@example.com,team@example.com"
+ *
+ * Optional ENV:
+ *   POSTMARK_MESSAGE_STREAM="outbound"   // default 'outbound'
+ *   INCLUDE_CHILD_ONLY="false"           // "true" to include child-only hits
+ *   MAX_CONCURRENCY="5"
  */
 
 import mongoose from 'mongoose';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import nodemailer from 'nodemailer';
 import pLimit from 'p-limit';
 import dayjs from 'dayjs';
 import axiosRetry from 'axios-retry';
@@ -19,10 +29,8 @@ import axiosRetry from 'axios-retry';
 // ----------------------- Config -----------------------
 const {
   MONGO_URI,
-  SMTP_HOST,
-  SMTP_PORT,
-  SMTP_USER,
-  SMTP_PASS,
+  POSTMARK_SERVER_TOKEN,
+  POSTMARK_MESSAGE_STREAM = 'outbound',
   EMAIL_FROM,
   EMAIL_TO,
   INCLUDE_CHILD_ONLY = 'false',
@@ -30,10 +38,8 @@ const {
 } = process.env;
 
 if (!MONGO_URI) throw new Error('MONGO_URI is required');
-if (!SMTP_HOST || !SMTP_PORT || !SMTP_USER || !SMTP_PASS)
-  throw new Error('SMTP config is required');
-if (!EMAIL_FROM || !EMAIL_TO)
-  throw new Error('EMAIL_FROM and EMAIL_TO are required');
+if (!POSTMARK_SERVER_TOKEN) throw new Error('POSTMARK_SERVER_TOKEN is required');
+if (!EMAIL_FROM || !EMAIL_TO) throw new Error('EMAIL_FROM and EMAIL_TO are required');
 
 const INCLUDE_CHILD =
   globalThis.__INCLUDE_CHILD_ONLY_OVERRIDE__ ??
@@ -96,42 +102,26 @@ const SearchArea = mongoose.model('SearchArea', SearchAreaSchema);
 const Practice = mongoose.model('Practice', PracticeSchema);
 const EmailLog = mongoose.model('EmailLog', EmailLogSchema);
 
-// ------------------- Email Transport ------------------
-const transporter = nodemailer.createTransport({
-  host: SMTP_HOST,
-  port: Number(SMTP_PORT),
-  secure: Number(SMTP_PORT) === 465,
-  auth: { user: SMTP_USER, pass: SMTP_PASS },
-});
-
 // ---------------- Acceptance Parsing ------------------
 function classifyAcceptance(rawHtmlOrText) {
   const text = normalizeText(rawHtmlOrText);
 
   const acceptingAdults =
     /currently accepts new nhs patients for routine dental care/i.test(text) &&
-    /(adults|adults aged 18|adults entitled|children aged 17 or under)/i.test(
-      text
-    ) &&
+    /(adults|adults aged 18|adults entitled|children aged 17 or under)/i.test(text) &&
     !/only accepts.*children/i.test(text);
 
   const childOnlyExact =
-    /currently only accepts new nhs patients for routine dental care.*children aged 17 or under/i.test(
-      text
-    );
+    /currently only accepts new nhs patients for routine dental care.*children aged 17 or under/i.test(text);
 
   const genericAccepting =
-    /(currently )?accepts new nhs patients( for routine dental care)?/i.test(
-      text
-    ) && !/only accepts.*children/i.test(text);
+    /(currently )?accepts new nhs patients( for routine dental care)?/i.test(text) &&
+    !/only accepts.*children/i.test(text);
 
   const notConfirmed =
     /has not confirmed if .* accept(s)? new nhs patients/i.test(text);
 
-  if (
-    childOnlyExact ||
-    (/only accepts.*children/i.test(text) && /new nhs patients/i.test(text))
-  ) {
+  if (childOnlyExact || (/only accepts.*children/i.test(text) && /new nhs patients/i.test(text))) {
     return { status: 'CHILD_ONLY', matched: 'child-only' };
   }
 
@@ -139,9 +129,7 @@ function classifyAcceptance(rawHtmlOrText) {
     return { status: 'ACCEPTING', matched: 'accepting' };
   }
 
-  if (notConfirmed) {
-    return { status: 'NOT_CONFIRMED', matched: 'not-confirmed' };
-  }
+  if (notConfirmed) return { status: 'NOT_CONFIRMED', matched: 'not-confirmed' };
 
   return { status: 'NOT_CONFIRMED', matched: 'unknown' };
 }
@@ -162,6 +150,7 @@ async function loadAppointmentsHtml(detailsUrl) {
 
   const $ = cheerio.load(detailsHtml);
 
+  // Find "Appointments" tab/link by text first
   let href = $('a')
     .filter((_, el) => {
       const t = normalizeText($(el).text()).toLowerCase();
@@ -170,6 +159,7 @@ async function loadAppointmentsHtml(detailsUrl) {
     .first()
     .attr('href');
 
+  // Fallback by href pattern
   if (!href) href = $('a[href*="/appointments"]').first().attr('href');
   if (!href) return null;
 
@@ -185,8 +175,7 @@ async function httpGet(url) {
     const { data, status } = await axios.get(url, {
       headers: {
         'User-Agent': ua,
-        Accept:
-          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-GB,en;q=0.9',
         'Cache-Control': 'no-cache',
         Pragma: 'no-cache',
@@ -207,6 +196,7 @@ async function scanJob(job) {
   const { _id: jobId, postcode, radiusMiles } = job;
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
+  // Assumes Practices are pre-indexed with distanceMiles
   const practices = await Practice.find({
     distanceMiles: { $lte: radiusMiles },
     detailsUrl: { $exists: true, $ne: '' },
@@ -228,11 +218,8 @@ async function scanJob(job) {
   await Promise.all(
     practices.map((p) =>
       limit(async () => {
-        const already = await EmailLog.findOne({
-          jobId,
-          practiceId: p._id,
-          dateKey,
-        }).lean();
+        // Skip if already emailed today for this job/practice
+        const already = await EmailLog.findOne({ jobId, practiceId: p._id, dateKey }).lean();
         if (already) return;
 
         const apptHtml = await loadAppointmentsHtml(p.detailsUrl);
@@ -248,12 +235,10 @@ async function scanJob(job) {
             url: p.detailsUrl,
             distanceMiles: p.distanceMiles,
           });
+
           await EmailLog.create({
-            jobId,
-            practiceId: p._id,
-            practiceUrl: p.detailsUrl,
-            status: 'ACCEPTING',
-            dateKey,
+            jobId, practiceId: p._id, practiceUrl: p.detailsUrl,
+            status: 'ACCEPTING', dateKey,
           });
         } else if (verdict.status === 'CHILD_ONLY' && INCLUDE_CHILD) {
           childOnly.push({
@@ -263,12 +248,10 @@ async function scanJob(job) {
             url: p.detailsUrl,
             distanceMiles: p.distanceMiles,
           });
+
           await EmailLog.create({
-            jobId,
-            practiceId: p._id,
-            practiceUrl: p.detailsUrl,
-            status: 'CHILD_ONLY',
-            dateKey,
+            jobId, practiceId: p._id, practiceUrl: p.detailsUrl,
+            status: 'CHILD_ONLY', dateKey,
           });
         }
       })
@@ -278,7 +261,7 @@ async function scanJob(job) {
   return { accepting, childOnly };
 }
 
-// ------------------- Email Composer --------------------
+// ------------------- Email via Postmark -----------------
 async function sendJobEmail(job, found) {
   const recipients = EMAIL_TO.split(',').map((s) => s.trim()).filter(Boolean);
   if (!recipients.length) return;
@@ -298,9 +281,8 @@ async function sendJobEmail(job, found) {
       .sort((a, b) => (a.distanceMiles || 999) - (b.distanceMiles || 999))
       .forEach((p, i) => {
         lines.push(
-          `${i + 1}. ${escapeHtml(p.name)} — ${p.postcode} — ${
-            p.distanceMiles?.toFixed?.(1) ?? '?'
-          } mi<br/><a href="${p.url}">${p.url}</a>`
+          `${i + 1}. ${escapeHtml(p.name)} — ${p.postcode} — ${p.distanceMiles?.toFixed?.(1) ?? '?'} mi<br/>` +
+          `<a href="${p.url}">${p.url}</a>`
         );
       });
     lines.push('<br/>');
@@ -312,9 +294,8 @@ async function sendJobEmail(job, found) {
       .sort((a, b) => (a.distanceMiles || 999) - (b.distanceMiles || 999))
       .forEach((p, i) => {
         lines.push(
-          `${i + 1}. ${escapeHtml(p.name)} — ${p.postcode} — ${
-            p.distanceMiles?.toFixed?.(1) ?? '?'
-          } mi<br/><a href="${p.url}">${p.url}</a>`
+          `${i + 1}. ${escapeHtml(p.name)} — ${p.postcode} — ${p.distanceMiles?.toFixed?.(1) ?? '?'} mi<br/>` +
+          `<a href="${p.url}">${p.url}</a>`
         );
       });
     lines.push('<br/>');
@@ -322,12 +303,8 @@ async function sendJobEmail(job, found) {
 
   const html = `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;">
-      <h2 style="margin:0 0 8px">DentistRadar – ${escapeHtml(
-        job.postcode
-      )} (${job.radiusMiles} mi)</h2>
-      <div style="color:#444;margin:0 0 12px">Date: ${dayjs().format(
-        'YYYY-MM-DD HH:mm'
-      )}</div>
+      <h2 style="margin:0 0 8px">DentistRadar – ${escapeHtml(job.postcode)} (${job.radiusMiles} mi)</h2>
+      <div style="color:#444;margin:0 0 12px">Date: ${dayjs().format('YYYY-MM-DD HH:mm')}</div>
       ${lines.join('\n')}
       <hr style="margin:16px 0;border:0;border-top:1px solid #e5e5e5">
       <div style="font-size:12px;color:#777">
@@ -336,16 +313,30 @@ async function sendJobEmail(job, found) {
     </div>
   `;
 
-  const subject = `DentistRadar: ${job.postcode} (${job.radiusMiles} mi) — ${
-    found.accepting.length
-  } accepting${INCLUDE_CHILD ? `, ${found.childOnly.length} child-only` : ''}`;
+  const subject =
+    `DentistRadar: ${job.postcode} (${job.radiusMiles} mi) — ` +
+    `${found.accepting.length} accepting${INCLUDE_CHILD ? `, ${found.childOnly.length} child-only` : ''}`;
 
-  await transporter.sendMail({
-    from: EMAIL_FROM,
-    to: recipients,
-    subject,
-    html,
-  });
+  // Send via Postmark HTTP API (single request with comma-separated To)
+  await axios.post(
+    'https://api.postmarkapp.com/email',
+    {
+      From: EMAIL_FROM,
+      To: recipients.join(','),
+      Subject: subject,
+      HtmlBody: html,
+      MessageStream: POSTMARK_MESSAGE_STREAM,
+      Tag: 'dentistradar-scan',
+    },
+    {
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-Postmark-Server-Token': POSTMARK_SERVER_TOKEN,
+      },
+      timeout: 10000,
+    }
+  );
 
   console.log(`Email sent: ${subject}`);
 }
@@ -360,9 +351,7 @@ function escapeHtml(s) {
 // ------------------- Exported Runner -------------------
 export async function runScan(opts = {}) {
   const includeChildOnlyOverride =
-    typeof opts.includeChildOnly === 'boolean'
-      ? opts.includeChildOnly
-      : null;
+    typeof opts.includeChildOnly === 'boolean' ? opts.includeChildOnly : null;
   if (includeChildOnlyOverride !== null) {
     globalThis.__INCLUDE_CHILD_ONLY_OVERRIDE__ = includeChildOnlyOverride;
   }
@@ -411,9 +400,7 @@ export default { runScan };
 if (import.meta.url === `file://${process.argv[1]}`) {
   runScan().catch(async (e) => {
     console.error(e);
-    try {
-      await mongoose.disconnect();
-    } catch {}
+    try { await mongoose.disconnect(); } catch {}
     process.exit(1);
   });
 }
