@@ -1,13 +1,13 @@
 /**
- * DentistRadar — scanner.js (v2.9)
+ * DentistRadar — scanner.js (v2.8)
  * -------------------------------------------------------------------------
  * - Jobs from Watch (unique postcodes; radius from Watch.radius).
  * - Haversine distance using Postcodes.lat/lon; POSTCODE_COORDS env map
  *   overrides DB lookups to avoid "No coords" and enable instant trials.
- * - Accepts any practice URL field (detailsUrl / nhsUrl / url) via unified p._url.
- * - If geo-filter yields 0 practices, scans a sample batch (SCAN_SAMPLE_LIMIT).
+ * - If geo-filter finds 0 practices, auto-fallback to scan a sample batch.
  * - Recipients: Users first; if none, fall back to Watch emails for postcode.
  * - Robust Appointments discovery + focused text extraction + broad matcher.
+ * - Accepts any legacy practice URL field (detailsUrl / nhsUrl / url).
  * - Postmark email only.
  *
  * ENV (required):
@@ -322,7 +322,7 @@ async function getRecipientsForPostcode(jobPostcode, opts = {}) {
       { 'areas.postcode': pc },
       // global subscribers (no targeting specified)
       { $and: [{ postcodes: { $exists: false } }, { areas: { $exists: false } }] },
-      { $and: [{ postcodes: { $in: [null, [], undefined] } }, { areas: { $in:[null, [], undefined] } }] },
+      { $and: [{ postcodes: { $in: [null, [], undefined] } }, { areas: { $in: [null, [], undefined] } }] },
     ],
   }).select('email').lean();
 
@@ -356,7 +356,7 @@ async function buildJobsFromWatch(filterPostcode) {
 }
 
 /* =========================
-   Scan one job (Haversine + robust URL handling + fallback)
+   Scan one job (Haversine + fallback; unified URL)
    ========================= */
 async function scanPostcodeJob({ postcode, radiusMiles }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
@@ -382,7 +382,6 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
     p._url = p.detailsUrl || p.nhsUrl || p.url || '';
   }
 
-  // Distance filtering (if we have coords), otherwise fallback to sample
   if (jobCoords) {
     // Compute distance (prefer practice lat/lon; else postcode lookup; else legacy distanceMiles)
     for (const p of practicesBase) {
@@ -402,11 +401,12 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
       }
     }
 
+    // Filter to radius & sort
     practicesBase = practicesBase
       .filter(p => p._computedDistance <= radiusMiles)
       .sort((a, b) => (a._computedDistance ?? 999) - (b._computedDistance ?? 999));
 
-    // Hard fallback: radius empty → sample batch
+    // Hard fallback if radius filter yields zero
     if (!practicesBase.length) {
       console.log('[INFO] Radius filter returned 0 — sampling', SAMPLE_LIMIT, 'practices as fallback.');
       practicesBase = await Practice.find({
@@ -421,7 +421,15 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
     }
   } else {
     console.log('[WARN] No coords for job postcode', postcode, '— using sampling fallback.');
-    practicesBase = practicesBase.slice(0, SAMPLE_LIMIT); // reuse the set we already loaded
+    practicesBase = await Practice.find({
+      $or: [
+        { detailsUrl: { $exists: true, $ne: '' } },
+        { nhsUrl:     { $exists: true, $ne: '' } },
+        { url:        { $exists: true, $ne: '' } },
+      ]
+    }).select('_id name postcode detailsUrl nhsUrl url').limit(SAMPLE_LIMIT).lean();
+
+    for (const p of practicesBase) p._url = p.detailsUrl || p.nhsUrl || p.url || '';
   }
 
   if (!practicesBase.length) {
