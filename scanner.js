@@ -1,9 +1,11 @@
 /**
- * DentistRadar — scanner.js (Sitemap-only v2.1)
+ * DentistRadar — scanner.js (Seed-First v3)
  * Flow:
- *   Watch → NHS dentist detail URLs via sitemaps (no results pages)
- *   → extract practice postcode → radius filter (Postcodes)
- *   → Appointments page → classify → email Watchers
+ *   Watch → (Seeds: PRACTICE_URLS + SEED_BY_POSTCODE) → expand neighbors from each seed
+ *   → Appointments page → classify (Accepting / Children-only / Not confirmed)
+ *   → email Watchers for that postcode.
+ *
+ * If seeds are empty, will attempt sitemap discovery (best-effort, non-blocking).
  *
  * ENV (required):
  *   MONGO_URI
@@ -16,9 +18,10 @@
  *   MAX_CONCURRENCY="5"
  *   DEBUG_APPTS="0|1"
  *   POSTCODE_COORDS="RG41 4UW:51.411,-0.864;SW1A 1AA:51.501,-0.142"
- *   SITEMAP_PAGES="2"              // how many dentist sitemap files to scan
- *   SITEMAP_URL_LIMIT="200"        // max dentist URLs tested per scan
- *   PRACTICE_URLS="https://...;https://..." // manual seeds (detail pages)
+ *   PRACTICE_URLS="https://www.nhs.uk/services/dentists/...;https://..."       // global seeds
+ *   SEED_BY_POSTCODE='{"RG41 4UW":["https://www.nhs.uk/services/dentists/..."]}' // postcode-targeted seeds (JSON)
+ *   SITEMAP_PAGES="2"
+ *   SITEMAP_URL_LIMIT="150"
  */
 
 import axios from 'axios';
@@ -40,9 +43,10 @@ const {
   MAX_CONCURRENCY = '5',
   DEBUG_APPTS = '0',
   POSTCODE_COORDS = '',
+  PRACTICE_URLS = '',
+  SEED_BY_POSTCODE = '{}',
   SITEMAP_PAGES = '2',
-  SITEMAP_URL_LIMIT = '200',
-  PRACTICE_URLS = ''
+  SITEMAP_URL_LIMIT = '150'
 } = process.env;
 
 if (!MONGO_URI) throw new Error('MONGO_URI is required');
@@ -53,12 +57,18 @@ const INCLUDE_CHILD = String(INCLUDE_CHILD_ONLY).toLowerCase() === 'true';
 const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 5);
 const DEBUG = String(DEBUG_APPTS) === '1';
 const SITEMAP_PAGES_INT = Math.max(1, Number(SITEMAP_PAGES) || 2);
-const SITEMAP_URL_LIMIT_INT = Math.max(50, Number(SITEMAP_URL_LIMIT) || 200);
+const SITEMAP_URL_LIMIT_INT = Math.max(50, Number(SITEMAP_URL_LIMIT) || 150);
 
-const SEED_URLS = String(PRACTICE_URLS || '')
+const GLOBAL_SEEDS = String(PRACTICE_URLS || '')
   .split(';')
   .map(s => s.trim())
   .filter(u => /^https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(u));
+
+let POSTCODE_SEEDS = {};
+try {
+  const j = JSON.parse(SEED_BY_POSTCODE || '{}');
+  if (j && typeof j === 'object') POSTCODE_SEEDS = j;
+} catch (_) { POSTCODE_SEEDS = {}; }
 
 /* ─────────────────────────
    Mongo: minimal models
@@ -84,11 +94,7 @@ const EmailLogSchema = new mongoose.Schema(
 EmailLogSchema.index({ practiceUrl: 1, dateKey: 1 }, { unique: true });
 
 const PostcodeSchema = new mongoose.Schema(
-  {
-    postcode: { type: String, unique: true, index: true }, // normalized "RG41 4UW"
-    lat: Number,
-    lon: Number
-  },
+  { postcode: { type: String, unique: true, index: true }, lat: Number, lon: Number },
   { collection: 'Postcodes', versionKey: false }
 );
 
@@ -150,9 +156,7 @@ const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s||'').trim()
 function parsePostcodeCoordsEnv(raw) {
   const map = new Map();
   String(raw || '')
-    .split(';')
-    .map(s => s.trim())
-    .filter(Boolean)
+    .split(';').map(s => s.trim()).filter(Boolean)
     .forEach(pair => {
       const [pcRaw, coords] = pair.split(':').map(s => (s || '').trim());
       if (!pcRaw || !coords) return;
@@ -174,7 +178,6 @@ async function coordsForPostcode(pcRaw) {
   if (!doc) return null;
   return { lat: doc.lat, lon: doc.lon };
 }
-
 function haversineMiles(lat1, lon1, lat2, lon2) {
   const toRad = (d) => (d * Math.PI) / 180;
   const R = 3958.7613;
@@ -187,7 +190,7 @@ function haversineMiles(lat1, lon1, lat2, lon2) {
 }
 
 /* ─────────────────────────
-   1) Build jobs from Watch
+   Jobs from Watch
    ───────────────────────── */
 async function buildJobs(filterPostcode) {
   const match = filterPostcode ? { postcode: normPc(filterPostcode) } : {};
@@ -204,10 +207,52 @@ async function buildJobs(filterPostcode) {
 }
 
 /* ─────────────────────────
-   2) NHS sitemaps → dentist detail URLs
+   Seed assembly (global + per-postcode)
+   ───────────────────────── */
+function seedsForPostcode(pc) {
+  const out = new Set(GLOBAL_SEEDS);
+  const list = POSTCODE_SEEDS[pc] || POSTCODE_SEEDS[normPc(pc)] || [];
+  for (const u of list) {
+    if (/^https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(u)) out.add(u);
+  }
+  return Array.from(out);
+}
+
+/* ─────────────────────────
+   Neighbor expansion from a seed page (BFS depth=1)
+   ───────────────────────── */
+function scrapeDentistUrlsFromHtml(html, base = 'https://www.nhs.uk') {
+  const out = new Set();
+  const $ = cheerio.load(html);
+  $('a[href]').each((_, a) => {
+    const href = String($(a).attr('href') || '').trim();
+    try {
+      const abs = new URL(href, base).toString();
+      if (/https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(abs) && !/\/appointments/i.test(abs)) {
+        out.add(abs.split('#')[0]);
+      }
+    } catch (_) {}
+  });
+  return Array.from(out);
+}
+
+async function expandFromSeeds(seedUrls, limit = 120) {
+  const urls = new Set(seedUrls);
+  for (const u of seedUrls) {
+    const html = await httpGet(u);
+    if (!html) continue;
+    const neighbors = scrapeDentistUrlsFromHtml(html, u);
+    neighbors.forEach(n => urls.add(n));
+    if (urls.size >= limit) break;
+    await sleep(120);
+  }
+  return Array.from(urls).slice(0, limit);
+}
+
+/* ─────────────────────────
+   Best-effort sitemap discovery (only if seeds are empty)
    ───────────────────────── */
 async function getDentistSitemapUrls() {
-  console.log('[MODE] Sitemap discovery (no results pages)');
   const indexes = [
     'https://www.nhs.uk/sitemap.xml',
     'https://www.nhs.uk/sitemaps/sitemapindex.xml'
@@ -218,113 +263,86 @@ async function getDentistSitemapUrls() {
     const xml = await httpGet(idx);
     if (!xml) continue;
     const $ = cheerio.load(xml, { xmlMode: true });
+    // Either <sitemap><loc>...</loc></sitemap> or direct <url><loc>...</loc>
     $('sitemap > loc').each((_, el) => {
       const loc = normText($(el).text());
       if (/dentist/i.test(loc) || /services\/dentists/i.test(loc)) {
         discovered.add(loc);
       }
     });
+    // If index also contains direct URLs
+    $('url > loc').each((_, el) => {
+      const loc = normText($(el).text());
+      if (/https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(loc)) {
+        discovered.add('DIRECT:' + loc);
+      }
+    });
   }
-
-  // If no dentist-specific entries found, fall back to all listed sitemaps;
-  // we'll filter dentist URLs later.
-  if (!discovered.size) {
-    for (const idx of indexes) {
-      const xml = await httpGet(idx);
-      if (!xml) continue;
-      const $ = cheerio.load(xml, { xmlMode: true });
-      $('sitemap > loc').each((_, el) => {
-        const loc = normText($(el).text());
-        if (/sitemap/i.test(loc)) discovered.add(loc);
-      });
-    }
-  }
-
-  const arr = Array.from(discovered);
-  return arr.slice(0, SITEMAP_PAGES_INT);
+  return Array.from(discovered);
 }
 
 async function discoverPracticeDetailUrlsFromSitemaps() {
-  const urls = new Set(SEED_URLS);
-  if (SEED_URLS.length) {
-    console.log(`[SEED] Using ${SEED_URLS.length} PRACTICE_URLS`);
+  const result = new Set();
+  const files = await getDentistSitemapUrls();
+
+  // If index already had direct dentist links
+  for (const f of files) {
+    if (f.startsWith('DIRECT:')) result.add(f.slice(7));
   }
 
-  const sitemapFiles = await getDentistSitemapUrls();
-  if (!sitemapFiles.length) {
-    console.log('[INFO] No dentist sitemaps discovered; using seeds only (if any).');
-    return Array.from(urls).slice(0, SITEMAP_URL_LIMIT_INT);
-  }
-
+  // Then fetch a few sitemap files that look relevant
+  const sitemapFiles = files.filter(f => !f.startsWith('DIRECT:')).slice(0, SITEMAP_PAGES_INT);
   for (const sm of sitemapFiles) {
     const xml = await httpGet(sm);
     if (!xml) continue;
     const $ = cheerio.load(xml, { xmlMode: true });
-
-    // <url><loc>...</loc></url>
     $('url > loc').each((_, el) => {
       const loc = normText($(el).text());
       if (/https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(loc) && !/\/appointments/i.test(loc)) {
-        urls.add(loc.split('#')[0]);
+        result.add(loc.split('#')[0]);
       }
     });
-
-    // fallback regex over raw xml
-    if (urls.size < SITEMAP_URL_LIMIT_INT) {
+    // fallback regex
+    if (result.size < SITEMAP_URL_LIMIT_INT) {
       const m = xml.match(/https:\/\/www\.nhs\.uk\/services\/dentists\/[^\s"'<>]+/gi);
-      if (m) {
-        m.forEach(u => {
-          if (!/\/appointments/i.test(u)) urls.add(u.split('#')[0]);
-        });
-      }
+      if (m) m.forEach(u => { if (!/\/appointments/i.test(u)) result.add(u.split('#')[0]); });
     }
-
-    if (urls.size >= SITEMAP_URL_LIMIT_INT) break;
+    if (result.size >= SITEMAP_URL_LIMIT_INT) break;
     await sleep(100);
   }
 
-  const out = Array.from(urls).slice(0, SITEMAP_URL_LIMIT_INT);
-  console.log(`[DISCOVERY] Dentist detail URLs: ${out.length}`);
-  return out;
+  return Array.from(result).slice(0, SITEMAP_URL_LIMIT_INT);
 }
 
 /* ─────────────────────────
-   3) Appointments page loader
+   Appointments loader
    ───────────────────────── */
 async function loadAppointmentsHtml(detailsUrl) {
   if (!detailsUrl) return null;
   if (/\/appointments(\/|$|\?|#)/i.test(detailsUrl)) {
     return httpGet(detailsUrl);
   }
-
   const detailsHtml = await httpGet(detailsUrl);
   if (!detailsHtml) return null;
   const $ = cheerio.load(detailsHtml);
 
-  // a) by text
   let href;
   const labels = ['appointments','appointments and opening times','appointments & opening times','opening times'];
   $('a').each((_, el) => {
     const t = normText($(el).text()).toLowerCase();
-    if (labels.some(l => t.includes(l))) {
-      href = $(el).attr('href');
-      if (href) return false;
-    }
+    if (labels.some(l => t.includes(l))) { href = $(el).attr('href'); if (href) return false; }
   });
-
-  // b) by href pattern
   if (!href) href = $('a[href*="/appointments"]').first().attr('href');
   if (!href) href = $('a[href*="appointments-and-opening-times"]').first().attr('href');
   if (!href) href = $('a[href*="opening-times"]').first().attr('href');
 
   if (!href) {
-    // c) naive: try `${details}/appointments`
+    // naive try `${details}/appointments`
     try {
       const fallback = new URL('appointments', detailsUrl).toString();
       const html = await httpGet(fallback);
       if (html) return html;
     } catch(_) {}
-    // d) no appointments page; scan details page itself
     return { __inline__: true, html: detailsHtml };
   }
 
@@ -333,13 +351,12 @@ async function loadAppointmentsHtml(detailsUrl) {
 }
 
 /* ─────────────────────────
-   4) Extract & classify
+   Extract & classify
    ───────────────────────── */
 function extractAppointmentsText(html) {
   const $ = cheerio.load(html);
   const candidates = [];
 
-  // sections under headings
   $('h1,h2,h3').each((_, h) => {
     const heading = normText($(h).text()).toLowerCase();
     if (/appointment|opening\s+times/.test(heading)) {
@@ -356,20 +373,15 @@ function extractAppointmentsText(html) {
     }
   });
 
-  // broader wrappers
   const wrappers = ['main','.nhsuk-main-wrapper','#content','#maincontent','.nhsuk-u-reading-width','.nhsuk-width-container'];
   for (const sel of wrappers) {
     const t = normText($(sel).text());
     if (t && t.length > 80) candidates.push(t);
   }
 
-  // inset/notice
   const notices = ['.nhsuk-inset-text','.nhsuk-warning-callout','.nhsuk-notification-banner__content','.nhsuk-panel'];
   for (const sel of notices) {
-    $(sel).each((_, el) => {
-      const t = normText($(el).text());
-      if (t) candidates.push(t);
-    });
+    $(sel).each((_, el) => { const t = normText($(el).text()); if (t) candidates.push(t); });
   }
 
   if (!candidates.length) candidates.push(normText($.root().text()));
@@ -377,21 +389,17 @@ function extractAppointmentsText(html) {
   return candidates[0] || '';
 }
 
-// Your exact patterns (plus near-variants)
 function classifyAcceptance(raw) {
   const t = normText(String(raw||'')).replace(/’/g,"'");
-
   const childOnly =
     (
       /(only\s+accepts?|currently\s+only\s+accepts?|accepting\s+only)\s+(new\s+)?nhs\s+patients/i.test(t) &&
       /children\s+(aged\s+17\s+or\s+under|only|under\s*18)/i.test(t)
     ) ||
     /this dentist currently only accepts? new nhs patients.*children\s+aged\s+17\s+or\s+under/i.test(t);
-
   const accepting =
     /this dentist currently accepts? new nhs patients/i.test(t) ||
     (/(accepts|is accepting|are accepting|currently accepting)\s+(new\s+)?nhs\s+patients/i.test(t) && !childOnly);
-
   const notConfirmed =
     /this dentist has not confirmed if they currently accept new nhs patients/i.test(t) ||
     /has\s+not\s+confirmed\s+if\s+.*accept/i.test(t);
@@ -403,7 +411,7 @@ function classifyAcceptance(raw) {
 }
 
 /* ─────────────────────────
-   5) Email via Postmark
+   Email via Postmark
    ───────────────────────── */
 async function sendEmail(toList, subject, html) {
   if (!toList?.length) return;
@@ -419,41 +427,37 @@ async function sendEmail(toList, subject, html) {
 }
 
 /* ─────────────────────────
-   6) Helper: extract practice postcode from details/appointments HTML
-   ───────────────────────── */
-const UK_POSTCODE_RE = /\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/gi;
-
-function extractPracticePostcode(html) {
-  const text = normText(cheerio.load(html).root().text()).toUpperCase();
-  let best = null;
-  let m;
-  while ((m = UK_POSTCODE_RE.exec(text)) !== null) {
-    const pc = normPc(m[1]);
-    best = pc; // keep last seen; usually address block present
-  }
-  return best;
-}
-
-/* ─────────────────────────
-   7) Scan a single job
+   Core scan for a job
    ───────────────────────── */
 async function scanJob({ postcode, radiusMiles, recipients }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
-  console.log('[MODE] Using NHS sitemaps only (no /service-search/ URLs).');
+  console.log('[MODE] Seed-first with neighbor expansion (no results pages).');
 
-  // Centre coords for radius
   const centre = await coordsForPostcode(postcode);
   if (!centre) {
     console.log('[WARN] No coords for job postcode. Set POSTCODE_COORDS or seed Postcodes collection.');
     return { accepting: [], childOnly: [] };
   }
 
-  // Discover dentist detail pages from sitemaps (plus any seeds)
-  const detailUrls = await discoverPracticeDetailUrlsFromSitemaps();
-  if (!detailUrls.length) {
-    console.log('[INFO] Dentist sitemaps yielded 0 URLs and no seeds provided.');
+  // Assemble seeds
+  let seedUrls = seedsForPostcode(postcode);
+  if (seedUrls.length) {
+    console.log(`[SEED] Using ${seedUrls.length} seed URL(s).`);
+  } else {
+    console.log('[SEED] No seeds provided. Will try sitemap discovery (best-effort).');
+    // Best-effort sitemap discovery if no seeds present
+    const sitemapUrls = await discoverPracticeDetailUrlsFromSitemaps();
+    seedUrls = sitemapUrls.slice(0, 20); // take a small batch
+    console.log(`[SITEMAP] Collected ${seedUrls.length} URL(s) as provisional seeds.`);
+  }
+  if (!seedUrls.length) {
+    console.log('[INFO] Still zero seeds; cannot proceed this run.');
     return { accepting: [], childOnly: [] };
   }
+
+  // Expand neighbors (BFS depth=1) from seeds
+  const detailUrls = await expandFromSeeds(seedUrls, 120);
+  console.log(`[DISCOVERY] Total detail URLs to test after expansion: ${detailUrls.length}`);
 
   const limit = pLimit(CONCURRENCY);
   const dateKey = dayjs().format('YYYY-MM-DD');
@@ -461,36 +465,50 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
   const accepting = [];
   const childOnly = [];
 
-  await Promise.all(detailUrls.map((detailsUrl, idx) => limit(async () => {
-    // de-dup per practice URL per day
+  // Helper: distance filter by extracting a postcode from details or appointments
+  const UK_POSTCODE_RE = /\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/gi;
+  const extractPc = (html) => {
+    const text = normText(cheerio.load(html).root().text()).toUpperCase();
+    let best = null, m;
+    while ((m = UK_POSTCODE_RE.exec(text)) !== null) best = normPc(m[1]);
+    return best;
+  };
+
+  await Promise.all(detailUrls.map((detailsUrl) => limit(async () => {
     const exists = await EmailLog.findOne({ practiceUrl: detailsUrl, dateKey }).lean();
     if (exists) return;
 
-    // Load details first (for postcode + potential direct appointments link)
-    const detailsHtml = await httpGet(detailsUrl);
+    let detailsHtml = await httpGet(detailsUrl);
     if (!detailsHtml) return;
 
-    // Extract the practice postcode and filter by radius
-    const practicePc = extractPracticePostcode(detailsHtml);
+    // Distance filter
+    let practicePc = extractPc(detailsHtml);
+    if (!practicePc) {
+      // try appointments immediately; sometimes address block is there
+      const res = await loadAppointmentsHtml(detailsUrl);
+      const apptHtml = typeof res === 'string' ? res : (res && res.__inline__ && res.html) ? res.html : '';
+      if (!apptHtml) return;
+      practicePc = extractPc(apptHtml);
+      detailsHtml = apptHtml; // reuse for classification if needed
+    }
     if (!practicePc) return;
 
     const pcoords = await coordsForPostcode(practicePc);
     if (!pcoords) return;
 
     const miles = haversineMiles(centre.lat, centre.lon, pcoords.lat, pcoords.lon);
-    if (!(miles <= radiusMiles)) return;
+    if (miles > radiusMiles) return;
 
-    // Load Appointments page (or inline details if none)
+    // Ensure we have the appointments HTML
     let apptHtml;
-    if (/\/appointments(\/|$|\?|#)/i.test(detailsUrl)) {
+    if (/\/appointments(\/|$|\?|#)/i.test(detailsUrl) && detailsHtml) {
       apptHtml = detailsHtml;
     } else {
       const apptRes = await loadAppointmentsHtml(detailsUrl);
       apptHtml = typeof apptRes === 'string' ? apptRes : (apptRes && apptRes.__inline__ && apptRes.html) ? apptRes.html : '';
+      if (!apptHtml) return;
     }
-    if (!apptHtml) return;
 
-    // Extract + classify
     const section = extractAppointmentsText(apptHtml);
     const verdict = classifyAcceptance(section);
 
@@ -505,23 +523,16 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
     }
   })));
 
-  // 2) Email Watch recipients for THIS postcode
   if (recipients?.length && (accepting.length || childOnly.length)) {
     const lines = [];
-    if (accepting.length) {
-      lines.push(`<b>Accepting (adults/all)</b> — ${accepting.length}<br>`);
-      accepting
-        .sort((a,b) => (a.distanceMiles ?? 999) - (b.distanceMiles ?? 999))
-        .forEach((p, idx) => lines.push(`${idx+1}. ${p.postcode} — ${p.distanceMiles?.toFixed?.(1) ?? '?'} mi — <a href="${p.url}">${p.url}</a><br>`));
+    const render = (arr, label) => {
+      lines.push(`<b>${label}</b> — ${arr.length}<br>`);
+      arr.sort((a,b)=> (a.distanceMiles ?? 999) - (b.distanceMiles ?? 999))
+         .forEach((p, i) => lines.push(`${i+1}. ${p.postcode} — ${p.distanceMiles?.toFixed?.(1) ?? '?'} mi — <a href="${p.url}">${p.url}</a><br>`));
       lines.push('<br>');
-    }
-    if (childOnly.length) {
-      lines.push(`<b>Children-only</b> — ${childOnly.length}<br>`);
-      childOnly
-        .sort((a,b) => (a.distanceMiles ?? 999) - (b.distanceMiles ?? 999))
-        .forEach((p, idx) => lines.push(`${idx+1}. ${p.postcode} — ${p.distanceMiles?.toFixed?.(1) ?? '?'} mi — <a href="${p.url}">${p.url}</a><br>`));
-      lines.push('<br>');
-    }
+    };
+    if (accepting.length) render(accepting, 'Accepting (adults/all)');
+    if (childOnly.length) render(childOnly, 'Children-only');
 
     const subject = `DentistRadar: ${postcode} (${radiusMiles} mi) — ${accepting.length} accepting${INCLUDE_CHILD ? `, ${childOnly.length} child-only` : ''}`;
     const body = `
@@ -562,8 +573,7 @@ export async function runScan(opts = {}) {
       accepting: res.accepting.length,
       childOnly: res.childOnly.length
     });
-    // short politeness delay
-    await sleep(400);
+    await sleep(300);
   }
 
   console.log('[DONE]', summaries);
