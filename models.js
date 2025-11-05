@@ -18,6 +18,11 @@ const PracticeSchema = new mongoose.Schema(
   { collection: 'Practices' }
 );
 
+// helpful index (fast de-dupe/lookups)
+PracticeSchema.index({ detailsUrl: 1 }, { sparse: true });
+PracticeSchema.index({ nhsUrl: 1 }, { sparse: true });
+PracticeSchema.index({ url: 1 }, { sparse: true });
+
 // Email log (dedupe + trace)
 const EmailLogSchema = new mongoose.Schema(
   {
