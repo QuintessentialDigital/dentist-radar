@@ -41,25 +41,6 @@ await connectMongo(FIXED_URI);
 console.log("✅ MongoDB connected →", FIXED_URI.replace(/:[^@]+@/, ":***@"));
 
 /* ---------------------------
-   Local model (Watch) — only if not already present
-   (Users & EmailLog come from ./models.js to avoid overwrite)
---------------------------- */
-const watchSchema = new mongoose.Schema(
-  {
-    email:   { type: String, index: true },
-    postcode:{ type: String, index: true },
-    radius:  Number
-  },
-  { timestamps: true, versionKey: false, collection: "Watch" }
-);
-watchSchema.index({ email: 1, postcode: 1 }, { unique: true });
-
-function getModel(name, schema) {
-  return mongoose.models[name] || mongoose.model(name, schema);
-}
-const Watch = getModel("Watch", watchSchema);
-
-/* ---------------------------
    Helpers (email + validation)
 --------------------------- */
 async function sendEmail(to, subject, text, type = "other", meta = {}) {
