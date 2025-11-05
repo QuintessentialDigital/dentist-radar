@@ -1,9 +1,27 @@
 /**
- * DentistRadar — scanner.js (v2.6)
- * - Watch-driven jobs (postcode+radius from Watch)
- * - Haversine distance; on-the-fly geocoding via Postcodes collection OR postcodes.io
- * - Flexible practice URL (detailsUrl | nhsUrl | url)
- * - Appointments-page parsing; Postmark-only email
+ * DentistRadar — scanner.js (v2.9)
+ * -------------------------------------------------------------------------
+ * - Jobs from Watch (unique postcodes; radius from Watch.radius).
+ * - Haversine distance using Postcodes.lat/lon; POSTCODE_COORDS env map
+ *   overrides DB lookups to avoid "No coords" and enable instant trials.
+ * - Accepts any practice URL field (detailsUrl / nhsUrl / url) via unified p._url.
+ * - If geo-filter yields 0 practices, scans a sample batch (SCAN_SAMPLE_LIMIT).
+ * - Recipients: Users first; if none, fall back to Watch emails for postcode.
+ * - Robust Appointments discovery + focused text extraction + broad matcher.
+ * - Postmark email only.
+ *
+ * ENV (required):
+ *   MONGO_URI
+ *   POSTMARK_SERVER_TOKEN
+ *   EMAIL_FROM   e.g., "DentistRadar <alerts@yourdomain.com>"
+ *
+ * ENV (optional):
+ *   POSTMARK_MESSAGE_STREAM="outbound"
+ *   INCLUDE_CHILD_ONLY="false"
+ *   MAX_CONCURRENCY="5"
+ *   SCAN_SAMPLE_LIMIT="40"       // used if no coords or 0 practices in radius
+ *   DEBUG_APPTS="1"              // logs first 400 chars for unmatched pages
+ *   POSTCODE_COORDS="RG41 4UW:51.411,-0.864;RG40 1XX:51.403,-0.840"
  */
 
 import axios from 'axios';
@@ -26,7 +44,9 @@ const {
   POSTMARK_MESSAGE_STREAM = 'outbound',
   INCLUDE_CHILD_ONLY = 'false',
   MAX_CONCURRENCY = '5',
-  SCAN_SAMPLE_LIMIT = '60' // bump fallback sample
+  SCAN_SAMPLE_LIMIT = '40',
+  DEBUG_APPTS = '0',
+  POSTCODE_COORDS = ''
 } = process.env;
 
 if (!MONGO_URI) throw new Error('MONGO_URI is required');
@@ -37,7 +57,8 @@ const INCLUDE_CHILD =
   globalThis.__INCLUDE_CHILD_ONLY_OVERRIDE__ ??
   (String(INCLUDE_CHILD_ONLY).toLowerCase() === 'true');
 const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 5);
-const SAMPLE_LIMIT = Math.max(1, Number(SCAN_SAMPLE_LIMIT) || 60);
+const SAMPLE_LIMIT = Math.max(1, Number(SCAN_SAMPLE_LIMIT) || 40);
+const DEBUG = String(DEBUG_APPTS) === '1';
 
 /* =========================
    Axios retry
@@ -73,7 +94,27 @@ const sanitizeEmail = (s) => {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x) ? x : '';
 };
 
-// Haversine (miles)
+// Parse env POSTCODE_COORDS = "PC1:lat,lon;PC2:lat,lon"
+function parsePostcodeCoordsEnv(raw) {
+  const map = new Map();
+  String(raw || '')
+    .split(';')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .forEach(pair => {
+      const [pcRaw, coords] = pair.split(':').map(s => (s || '').trim());
+      if (!pcRaw || !coords) return;
+      const [latStr, lonStr] = coords.split(',').map(s => (s || '').trim());
+      const lat = Number(latStr), lon = Number(lonStr);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        map.set(normalizePostcode(pcRaw), { lat, lon });
+      }
+    });
+  return map;
+}
+const POSTCODE_COORDS_MAP = parsePostcodeCoordsEnv(POSTCODE_COORDS);
+
+// Haversine distance (miles)
 function haversineMiles(lat1, lon1, lat2, lon2) {
   const toRad = (d) => (d * Math.PI) / 180;
   const R = 3958.7613;
@@ -85,42 +126,16 @@ function haversineMiles(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-/* =========================
-   Geocoding
-   ========================= */
-async function getCoordsFromDb(pcNorm) {
-  const doc = await Postcode.findOne({ postcode: pcNorm }).select('lat lon').lean();
-  if (!doc) return null;
-  return { lat: doc.lat, lon: doc.lon };
-}
-
-async function geocodeViaPostcodesIo(pcNorm) {
-  try {
-    const url = `https://api.postcodes.io/postcodes/${encodeURIComponent(pcNorm)}`;
-    const { data, status } = await axios.get(url, { timeout: 8000, validateStatus: s => s >= 200 && s < 500 });
-    if (status !== 200 || !data?.result) return null;
-    const { latitude, longitude } = data.result;
-    if (typeof latitude === 'number' && typeof longitude === 'number') {
-      // cache it for next time (best-effort)
-      try {
-        await Postcode.updateOne(
-          { postcode: pcNorm },
-          { $set: { lat: latitude, lon: longitude } },
-          { upsert: true }
-        );
-      } catch {}
-      return { lat: latitude, lon: longitude };
-    }
-  } catch (e) {
-    console.log('[geocode] postcodes.io fail:', e?.message || e);
-  }
-  return null;
-}
-
+// Get lat/lon for a normalized postcode from ENV map (first) then DB
 async function getCoordsForPostcode(pcRaw) {
   const pc = normalizePostcode(pcRaw);
   if (!pc) return null;
-  return (await getCoordsFromDb(pc)) || (await geocodeViaPostcodesIo(pc));
+
+  if (POSTCODE_COORDS_MAP.has(pc)) return POSTCODE_COORDS_MAP.get(pc);
+
+  const doc = await Postcode.findOne({ postcode: pc }).select('lat lon').lean();
+  if (!doc) return null;
+  return { lat: doc.lat, lon: doc.lon };
 }
 
 /* =========================
@@ -128,19 +143,25 @@ async function getCoordsForPostcode(pcRaw) {
    ========================= */
 function classifyAcceptance(rawHtmlOrText) {
   const text = normalizeText(rawHtmlOrText);
-
-  const accepting =
-    /(accepts|is accepting|currently accepting|are accepting)\s+new\s+nhs\s+patients/i.test(text) &&
-    !/only\s+accepts?\s+(new\s+nhs\s+patients\s+)?(if\s+they\s+are\s+)?children/i.test(text);
+  const t = text.replace(/’/g, "'").replace(/–|—/g, '-');
 
   const childOnly =
-    /(only\s+accepts?|currently\s+only\s+accepts?)\s+.*\s+children\s+(aged\s+17\s+or\s+under)?/i.test(text) &&
-    /nhs\s+patients/i.test(text);
+    (
+      /(only\s+accepts?|currently\s+only\s+accepts?|accepting\s+only)\s+(new\s+)?nhs\s+patients/i.test(t) &&
+      /children\s+(aged\s+17\s+or\s+under|only|under\s*18)/i.test(t)
+    ) ||
+    /children\s+(only|under\s*18)\s+accepted/i.test(t);
 
-  const notConfirmed = /has\s+not\s+confirmed\s+if\s+.*accept/i.test(text);
+  const accepting =
+    /(accepts|is accepting|are accepting|currently accepting)\s+(new\s+)?nhs\s+patients/i.test(t) &&
+    !childOnly;
 
-  if (childOnly) return { status: 'CHILD_ONLY', matched: 'child-only' };
-  if (accepting) return { status: 'ACCEPTING', matched: 'accepting' };
+  const notConfirmed =
+    /has\s+not\s+confirmed\s+if\s+.*accept/i.test(t) ||
+    /not\s+confirmed\s+(whether|if)\s+.*accept/i.test(t);
+
+  if (childOnly)    return { status: 'CHILD_ONLY', matched: 'child-only' };
+  if (accepting)    return { status: 'ACCEPTING', matched: 'accepting' };
   if (notConfirmed) return { status: 'NOT_CONFIRMED', matched: 'not-confirmed' };
   return { status: 'NOT_CONFIRMED', matched: 'unknown' };
 }
@@ -170,35 +191,120 @@ async function httpGet(url) {
   }
 }
 
-function resolvePracticeUrl(p) {
-  return p?.detailsUrl || p?.nhsUrl || p?.url || '';
-}
-
+/**
+ * Returns either:
+ *  - string (appointments page HTML), or
+ *  - { __inline__: true, html: detailsHtml } when no dedicated appointments link is found.
+ */
 async function loadAppointmentsHtml(detailsUrl) {
   if (!detailsUrl) return null;
+
+  // If already an appointments URL
+  if (/\/appointments(\/|$|\?|#)/i.test(detailsUrl)) {
+    return httpGet(detailsUrl);
+  }
 
   const detailsHtml = await httpGet(detailsUrl);
   if (!detailsHtml) return null;
 
   const $ = cheerio.load(detailsHtml);
 
-  // Prefer link by visible text
-  let href = $('a')
-    .filter((_, el) => normalizeText($(el).text()).toLowerCase().includes('appointment'))
-    .first()
-    .attr('href');
+  // Prefer candidates by visible text first
+  const textCandidates = [
+    'appointments',
+    'appointments and opening times',
+    'appointments & opening times',
+    'opening times',
+  ];
 
-  // Fallback by URL hint
+  let href;
+  $('a').each((_, el) => {
+    const t = normalizeText($(el).text()).toLowerCase();
+    if (textCandidates.some(c => t.includes(c))) {
+      href = $(el).attr('href');
+      if (href) return false; // break
+    }
+  });
+
+  // Fallback by URL patterns
   if (!href) href = $('a[href*="/appointments"]').first().attr('href');
-  if (!href) return null;
+  if (!href) href = $('a[href*="appointments-and-opening-times"]').first().attr('href');
+  if (!href) href = $('a[href*="opening-times"]').first().attr('href');
+
+  if (!href) {
+    // No dedicated appointments link found; try to match on the details page itself
+    return { __inline__: true, html: detailsHtml };
+  }
 
   const appointmentsUrl = new URL(href, detailsUrl).toString();
   await sleep(200 + Math.floor(Math.random() * 200));
   return httpGet(appointmentsUrl);
 }
 
+/**
+ * Extracts the likely Appointments/Opening Times text content from a page.
+ */
+function extractAppointmentsText(html) {
+  const $ = cheerio.load(html);
+  const candidates = [];
+
+  // Sections headed by h1/h2/h3 that mention appointments/opening times
+  $('h1,h2,h3').each((_, h) => {
+    const heading = normalizeText($(h).text()).toLowerCase();
+    if (/appointment|opening\s+times/.test(heading)) {
+      const section = [];
+      let cur = $(h).next();
+      let hops = 0;
+      while (cur.length && hops < 20) {
+        const tag = (cur[0].tagName || '').toLowerCase();
+        if (/^h[1-6]$/.test(tag)) break; // stop at next heading
+        if (['p', 'div', 'li', 'ul', 'ol'].includes(tag)) {
+          section.push(normalizeText(cur.text()));
+        }
+        cur = cur.next();
+        hops++;
+      }
+      const joined = section.join(' ').trim();
+      if (joined) candidates.push(joined);
+    }
+  });
+
+  // Common NHS content wrappers
+  const knownSelectors = [
+    'main',
+    '.nhsuk-main-wrapper',
+    '#content',
+    '#maincontent',
+    '[data-testid="content"]',
+    '.nhsuk-u-reading-width',
+    '.nhsuk-width-container',
+  ];
+  for (const sel of knownSelectors) {
+    const t = normalizeText($(sel).text());
+    if (t && t.length > 80) candidates.push(t);
+  }
+
+  // Inset/notice content areas
+  const noticeSelectors = [
+    '.nhsuk-inset-text',
+    '.nhsuk-warning-callout',
+    '.nhsuk-notification-banner__content',
+    '.nhsuk-panel',
+  ];
+  for (const sel of noticeSelectors) {
+    $(sel).each((_, el) => {
+      const t = normalizeText($(el).text());
+      if (t) candidates.push(t);
+    });
+  }
+
+  if (!candidates.length) candidates.push(normalizeText($.root().text()));
+  candidates.sort((a, b) => b.length - a.length);
+  return candidates[0] || '';
+}
+
 /* =========================
-   Audience targeting (Users)
+   Audience targeting (Users → Watch fallback)
    ========================= */
 async function getRecipientsForPostcode(jobPostcode, opts = {}) {
   if (Array.isArray(opts.overrideRecipients) && opts.overrideRecipients.length) {
@@ -207,6 +313,7 @@ async function getRecipientsForPostcode(jobPostcode, opts = {}) {
 
   const pc = normalizePostcode(jobPostcode);
 
+  // Primary: Users
   const users = await User.find({
     active: true,
     receiveAlerts: true,
@@ -215,12 +322,20 @@ async function getRecipientsForPostcode(jobPostcode, opts = {}) {
       { 'areas.postcode': pc },
       // global subscribers (no targeting specified)
       { $and: [{ postcodes: { $exists: false } }, { areas: { $exists: false } }] },
-      { $and: [{ postcodes: { $in: [null, [], undefined] } }, { areas: { $in: [null, [], undefined] } }] },
+      { $and: [{ postcodes: { $in: [null, [], undefined] } }, { areas: { $in:[null, [], undefined] } }] },
     ],
   }).select('email').lean();
 
-  const emails = users.map(u => sanitizeEmail(u.email)).filter(Boolean);
-  return [...new Set(emails)].slice(0, 5000);
+  let emails = users.map(u => sanitizeEmail(u.email)).filter(Boolean);
+
+  // Fallback: Watch emails for this postcode (unique)
+  if (!emails.length) {
+    const watchers = await Watch.find({ postcode: pc }).select('email').lean();
+    const watchEmails = watchers.map(w => sanitizeEmail(w.email)).filter(Boolean);
+    emails = [...new Set(watchEmails)];
+  }
+
+  return emails.slice(0, 5000);
 }
 
 /* =========================
@@ -241,20 +356,19 @@ async function buildJobsFromWatch(filterPostcode) {
 }
 
 /* =========================
-   Scan one job (with Haversine + robust fallback)
+   Scan one job (Haversine + robust URL handling + fallback)
    ========================= */
 async function scanPostcodeJob({ postcode, radiusMiles }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
-  // Get center coords for job postcode (DB or postcodes.io)
   const jobCoords = await getCoordsForPostcode(postcode);
 
-  // Base query: we’ll compute/filter distance ourselves; select multiple URL fields
+  // Pull candidates that have any usable URL field
   let practicesBase = await Practice.find({
     $or: [
       { detailsUrl: { $exists: true, $ne: '' } },
-      { nhsUrl: { $exists: true, $ne: '' } },
-      { url: { $exists: true, $ne: '' } }
+      { nhsUrl:     { $exists: true, $ne: '' } },
+      { url:        { $exists: true, $ne: '' } },
     ]
   }).select('_id name postcode detailsUrl nhsUrl url lat lon distanceMiles').lean();
 
@@ -263,8 +377,14 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
     return { accepting: [], childOnly: [] };
   }
 
-  // Compute distances if we have jobCoords
+  // unify the URL for each practice
+  for (const p of practicesBase) {
+    p._url = p.detailsUrl || p.nhsUrl || p.url || '';
+  }
+
+  // Distance filtering (if we have coords), otherwise fallback to sample
   if (jobCoords) {
+    // Compute distance (prefer practice lat/lon; else postcode lookup; else legacy distanceMiles)
     for (const p of practicesBase) {
       let plat = p.lat, plon = p.lon;
 
@@ -286,38 +406,28 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
       .filter(p => p._computedDistance <= radiusMiles)
       .sort((a, b) => (a._computedDistance ?? 999) - (b._computedDistance ?? 999));
 
+    // Hard fallback: radius empty → sample batch
     if (!practicesBase.length) {
-      console.log('[DEBUG] No practices within radius after Haversine filter.');
+      console.log('[INFO] Radius filter returned 0 — sampling', SAMPLE_LIMIT, 'practices as fallback.');
+      practicesBase = await Practice.find({
+        $or: [
+          { detailsUrl: { $exists: true, $ne: '' } },
+          { nhsUrl:     { $exists: true, $ne: '' } },
+          { url:        { $exists: true, $ne: '' } },
+        ]
+      }).select('_id name postcode detailsUrl nhsUrl url').limit(SAMPLE_LIMIT).lean();
+
+      for (const p of practicesBase) p._url = p.detailsUrl || p.nhsUrl || p.url || '';
     }
   } else {
-    console.log('[WARN] No coords for job postcode', postcode, '— cannot distance-filter.');
+    console.log('[WARN] No coords for job postcode', postcode, '— using sampling fallback.');
+    practicesBase = practicesBase.slice(0, SAMPLE_LIMIT); // reuse the set we already loaded
   }
 
-  // If empty after distance, fallback sample to prove parsing/email end-to-end
   if (!practicesBase.length) {
-    const sample = await Practice.find({
-      $or: [
-        { detailsUrl: { $exists: true, $ne: '' } },
-        { nhsUrl: { $exists: true, $ne: '' } },
-        { url: { $exists: true, $ne: '' } }
-      ]
-    }).select('_id name postcode detailsUrl nhsUrl url').limit(SAMPLE_LIMIT).lean();
-
-    if (!sample.length) {
-      console.log('No practices found (even after fallback).');
-      return { accepting: [], childOnly: [] };
-    }
-
-    console.log(`[DEBUG] Using sampling fallback (${sample.length} practices).`);
-    practicesBase = sample;
+    console.log('No practices found (even after fallback).');
+    return { accepting: [], childOnly: [] };
   }
-
-  // Small debug snapshot to verify fields
-  console.log('[DEBUG] First 2 practices:', practicesBase.slice(0, 2).map(x => ({
-    id: x._id, name: x.name, postcode: x.postcode,
-    url: resolvePracticeUrl(x),
-    dist: (x._computedDistance ?? x.distanceMiles)
-  })));
 
   const limit = pLimit(CONCURRENCY);
   const dateKey = dayjs().format('YYYY-MM-DD');
@@ -328,40 +438,49 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
   await Promise.all(
     practicesBase.map((p) =>
       limit(async () => {
-        const url = resolvePracticeUrl(p);
-        if (!url) return;
-
         // Per-day de-dup per practice
         const already = await EmailLog.findOne({ practiceId: p._id, dateKey }).lean();
         if (already) return;
 
-        const apptHtml = await loadAppointmentsHtml(url);
-        if (!apptHtml) return;
+        const apptRes = await loadAppointmentsHtml(p._url);
+        if (!apptRes) return;
 
-        const verdict = classifyAcceptance(apptHtml);
+        let pageHtml;
+        if (typeof apptRes === 'string') {
+          pageHtml = apptRes;
+        } else if (apptRes && apptRes.__inline__ && apptRes.html) {
+          pageHtml = apptRes.html;
+        } else {
+          return;
+        }
+
+        const sectionText = extractAppointmentsText(pageHtml);
+        const verdict = classifyAcceptance(sectionText);
 
         if (verdict.status === 'ACCEPTING') {
           accepting.push({
             id: p._id.toString(),
             name: p.name,
             postcode: p.postcode,
-            url,
+            url: p._url,
             distanceMiles: p._computedDistance ?? p.distanceMiles,
           });
           await EmailLog.create({
-            practiceId: p._id, practiceUrl: url, status: 'ACCEPTING', dateKey,
+            practiceId: p._id, practiceUrl: p._url, status: 'ACCEPTING', dateKey,
           });
         } else if (verdict.status === 'CHILD_ONLY' && INCLUDE_CHILD) {
           childOnly.push({
             id: p._id.toString(),
             name: p.name,
             postcode: p.postcode,
-            url,
+            url: p._url,
             distanceMiles: p._computedDistance ?? p.distanceMiles,
           });
           await EmailLog.create({
-            practiceId: p._id, practiceUrl: url, status: 'CHILD_ONLY', dateKey,
+            practiceId: p._id, practiceUrl: p._url, status: 'CHILD_ONLY', dateKey,
           });
+        } else if (DEBUG) {
+          console.log('[DEBUG NO-MATCH]', p._url, '→', sectionText.slice(0, 400));
         }
       })
     )
@@ -376,7 +495,7 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
 async function sendEmailForJob(job, found, opts = {}) {
   const recipients = await getRecipientsForPostcode(job.postcode, opts);
   if (!recipients.length) {
-    console.log('No recipients; skipping email.');
+    console.log('No recipients (Users/Watch); skipping email.');
     return;
   }
 
@@ -455,11 +574,14 @@ async function sendEmailForJob(job, found, opts = {}) {
 }
 
 function escapeHtml(s) {
-  return String(s || '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+  return String(s || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
 }
 
 /* =========================
-   Runner
+   Exported Runner (Watch-driven)
    ========================= */
 export async function runScan(opts = {}) {
   const includeChildOnlyOverride =
@@ -500,6 +622,7 @@ export async function runScan(opts = {}) {
 
 export default { runScan };
 
+// Self-run for CLI
 if (import.meta.url === `file://${process.argv[1]}`) {
   runScan()
     .then(async () => { await disconnectMongo(); process.exit(0); })
