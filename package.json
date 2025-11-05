@@ -1,16 +1,15 @@
 {
   "name": "dentistradar",
-  "version": "2.0.3",
+  "version": "2.0.4",
   "description": "DentistRadar NHS Scanner Service",
   "type": "module",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "scan": "node scanner.js",
-    "postinstall": "npx playwright install --with-deps chromium"
+    "postinstall": "npx playwright install chromium"
   },
   "dependencies": {
-    "@playwright/test": "^1.48.2",
     "axios": "^1.7.8",
     "axios-retry": "^3.9.1",
     "cheerio": "^1.0.0",
@@ -22,7 +21,8 @@
     "p-limit": "^5.0.0",
     "p-queue": "^7.4.1",
     "p-retry": "^6.0.0",
-    "stripe": "^15.11.0"
+    "stripe": "^15.11.0",
+    "playwright": "^1.48.2"
   },
   "engines": {
     "node": "20.x"
