@@ -1,11 +1,21 @@
 /**
- * DentistRadar — scanner.js (v2.4, Postmark-only, Watch-driven)
- * -------------------------------------------------------------
- * - Builds scan jobs from Watch collection (unique postcodes).
- * - For each job: finds Practices in radius, reads ONLY Appointments page,
- *   classifies ACCEPTING / CHILD_ONLY / NOT_CONFIRMED.
- * - Emails real users from Users (active+receiveAlerts; targeted or global).
- * - Postmark HTTP API only (no SMTP).
+ * DentistRadar — scanner.js (v2.5, Postmark-only, Watch-driven + Haversine)
+ * -------------------------------------------------------------------------
+ * - Builds jobs from Watch (unique postcodes, radius from Watch.radius).
+ * - Computes distances dynamically using Haversine from Postcodes.lat/lon.
+ * - Visits ONLY the "Appointments" tab; classifies ACCEPTING / CHILD_ONLY.
+ * - Emails real users from Users (active + receiveAlerts; targeted or global).
+ *
+ * ENV (required):
+ *   MONGO_URI
+ *   POSTMARK_SERVER_TOKEN
+ *   EMAIL_FROM   e.g., "DentistRadar <alerts@yourdomain.com>"
+ *
+ * ENV (optional):
+ *   POSTMARK_MESSAGE_STREAM="outbound"
+ *   INCLUDE_CHILD_ONLY="false"
+ *   MAX_CONCURRENCY="5"
+ *   SCAN_SAMPLE_LIMIT="40"     // used when job or practices cannot be geo-filtered
  */
 
 import axios from 'axios';
@@ -15,7 +25,7 @@ import dayjs from 'dayjs';
 import axiosRetry from 'axios-retry';
 import {
   connectMongo, disconnectMongo,
-  Practice, EmailLog, User, Watch
+  Practice, EmailLog, User, Watch, Postcode
 } from './models.js';
 
 /* =========================
@@ -28,6 +38,7 @@ const {
   POSTMARK_MESSAGE_STREAM = 'outbound',
   INCLUDE_CHILD_ONLY = 'false',
   MAX_CONCURRENCY = '5',
+  SCAN_SAMPLE_LIMIT = '40'
 } = process.env;
 
 if (!MONGO_URI) throw new Error('MONGO_URI is required');
@@ -38,6 +49,7 @@ const INCLUDE_CHILD =
   globalThis.__INCLUDE_CHILD_ONLY_OVERRIDE__ ??
   (String(INCLUDE_CHILD_ONLY).toLowerCase() === 'true');
 const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 5);
+const SAMPLE_LIMIT = Math.max(1, Number(SCAN_SAMPLE_LIMIT) || 40);
 
 /* =========================
    Axios retry
@@ -73,31 +85,46 @@ const sanitizeEmail = (s) => {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x) ? x : '';
 };
 
+// Haversine distance (miles)
+function haversineMiles(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const R = 3958.7613;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+// Get lat/lon for a normalized postcode from Postcodes collection
+async function getCoordsForPostcode(pcRaw) {
+  const pc = normalizePostcode(pcRaw);
+  if (!pc) return null;
+  const doc = await Postcode.findOne({ postcode: pc }).select('lat lon').lean();
+  if (!doc) return null;
+  return { lat: doc.lat, lon: doc.lon };
+}
+
 /* =========================
    Acceptance parsing
    ========================= */
 function classifyAcceptance(rawHtmlOrText) {
   const text = normalizeText(rawHtmlOrText);
 
-  const acceptingAdults =
-    /currently accepts new nhs patients for routine dental care/i.test(text) &&
-    /(adults|adults aged 18|adults entitled|children aged 17 or under)/i.test(text) &&
-    !/only accepts.*children/i.test(text);
+  const accepting =
+    /(accepts|is accepting|currently accepting|are accepting)\s+new\s+nhs\s+patients/i.test(text) &&
+    !/only\s+accepts?\s+(new\s+nhs\s+patients\s+)?(if\s+they\s+are\s+)?children/i.test(text);
 
-  const childOnlyExact =
-    /currently only accepts new nhs patients for routine dental care.*children aged 17 or under/i.test(text);
-
-  const genericAccepting =
-    /(currently )?accepts new nhs patients( for routine dental care)?/i.test(text) &&
-    !/only accepts.*children/i.test(text);
+  const childOnly =
+    /(only\s+accepts?|currently\s+only\s+accepts?)\s+.*\s+children\s+(aged\s+17\s+or\s+under)?/i.test(text) &&
+    /nhs\s+patients/i.test(text);
 
   const notConfirmed =
-    /has not confirmed if .* accept(s)? new nhs patients/i.test(text);
+    /has\s+not\s+confirmed\s+if\s+.*accept/i.test(text);
 
-  if (childOnlyExact || (/only accepts.*children/i.test(text) && /new nhs patients/i.test(text))) {
-    return { status: 'CHILD_ONLY', matched: 'child-only' };
-  }
-  if (acceptingAdults || genericAccepting) return { status: 'ACCEPTING', matched: 'accepting' };
+  if (childOnly) return { status: 'CHILD_ONLY', matched: 'child-only' };
+  if (accepting) return { status: 'ACCEPTING', matched: 'accepting' };
   if (notConfirmed) return { status: 'NOT_CONFIRMED', matched: 'not-confirmed' };
   return { status: 'NOT_CONFIRMED', matched: 'unknown' };
 }
@@ -113,7 +140,8 @@ async function httpGet(url) {
         'User-Agent': ua,
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-GB,en;q=0.9',
-        'Cache-Control': 'no-cache', 'Pragma': 'no-cache',
+        'Cache-Control': 'no-cache',
+        'Pragma': 'no-cache',
       },
       timeout: 15000,
       validateStatus: (s) => s >= 200 && s < 400,
@@ -128,15 +156,17 @@ async function httpGet(url) {
 
 async function loadAppointmentsHtml(detailsUrl) {
   if (!detailsUrl) return null;
+
   const detailsHtml = await httpGet(detailsUrl);
   if (!detailsHtml) return null;
 
   const $ = cheerio.load(detailsHtml);
 
   // Prefer link by visible text
-  let href = $('a').filter((_, el) =>
-    normalizeText($(el).text()).toLowerCase().includes('appointment')
-  ).first().attr('href');
+  let href = $('a')
+    .filter((_, el) => normalizeText($(el).text()).toLowerCase().includes('appointment'))
+    .first()
+    .attr('href');
 
   // Fallback by URL hint
   if (!href) href = $('a[href*="/appointments"]').first().attr('href');
@@ -163,7 +193,7 @@ async function getRecipientsForPostcode(jobPostcode, opts = {}) {
     $or: [
       { postcodes: pc },
       { 'areas.postcode': pc },
-      // global subscribers (no targeting fields present)
+      // global subscribers (no targeting specified)
       { $and: [{ postcodes: { $exists: false } }, { areas: { $exists: false } }] },
       { $and: [{ postcodes: { $in: [null, [], undefined] } }, { areas: { $in: [null, [], undefined] } }] },
     ],
@@ -174,12 +204,10 @@ async function getRecipientsForPostcode(jobPostcode, opts = {}) {
 }
 
 /* =========================
-   Job builder (Watch → jobs)
+   Jobs (from Watch)
    ========================= */
 async function buildJobsFromWatch(filterPostcode) {
   const match = filterPostcode ? { postcode: normalizePostcode(filterPostcode) } : {};
-
-  // Group by postcode to get unique jobs; take first radius seen
   const watches = await Watch.aggregate([
     { $match: match },
     { $group: { _id: '$postcode', radiusMiles: { $first: '$radius' } } },
@@ -193,17 +221,51 @@ async function buildJobsFromWatch(filterPostcode) {
 }
 
 /* =========================
-   Core scan per job
+   Scan one job (with Haversine filter)
    ========================= */
 async function scanPostcodeJob({ postcode, radiusMiles }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
-  const practices = await Practice.find({
-    distanceMiles: { $lte: radiusMiles },
-    detailsUrl: { $exists: true, $ne: '' },
-  }).select('_id name postcode detailsUrl distanceMiles').lean();
+  // Get center coords for job postcode
+  const jobCoords = await getCoordsForPostcode(postcode);
 
-  if (!practices.length) {
+  let practicesBase = [];
+  if (jobCoords) {
+    // Pull candidates with detailsUrl
+    practicesBase = await Practice.find({
+      detailsUrl: { $exists: true, $ne: '' },
+    }).select('_id name postcode detailsUrl lat lon distanceMiles').lean();
+
+    // Compute distance (prefer practice lat/lon; else use practice postcode lookup; else legacy distanceMiles)
+    for (const p of practicesBase) {
+      let plat = p.lat, plon = p.lon;
+
+      if ((plat == null || plon == null) && p.postcode) {
+        const pc = await getCoordsForPostcode(p.postcode);
+        if (pc) { plat = pc.lat; plon = pc.lon; }
+      }
+
+      if (plat != null && plon != null) {
+        p._computedDistance = haversineMiles(jobCoords.lat, jobCoords.lon, plat, plon);
+      } else if (typeof p.distanceMiles === 'number') {
+        p._computedDistance = p.distanceMiles;
+      } else {
+        p._computedDistance = Infinity;
+      }
+    }
+
+    // Filter to radius & sort
+    practicesBase = practicesBase
+      .filter(p => p._computedDistance <= radiusMiles)
+      .sort((a, b) => (a._computedDistance ?? 999) - (b._computedDistance ?? 999));
+  } else {
+    console.log('[WARN] No coords for job postcode', postcode, '— using sampling fallback.');
+    practicesBase = await Practice.find({
+      detailsUrl: { $exists: true, $ne: '' },
+    }).select('_id name postcode detailsUrl').limit(SAMPLE_LIMIT).lean();
+  }
+
+  if (!practicesBase.length) {
     console.log('No practices found in radius.');
     return { accepting: [], childOnly: [] };
   }
@@ -214,34 +276,44 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
   const accepting = [];
   const childOnly = [];
 
-  await Promise.all(practices.map(p => limit(async () => {
-    // De-dup per day per practice (no jobId since Watch-derived)
-    const already = await EmailLog.findOne({ practiceId: p._id, dateKey }).lean();
-    if (already) return;
+  await Promise.all(
+    practicesBase.map((p) =>
+      limit(async () => {
+        // Per-day de-dup per practice
+        const already = await EmailLog.findOne({ practiceId: p._id, dateKey }).lean();
+        if (already) return;
 
-    const apptHtml = await loadAppointmentsHtml(p.detailsUrl);
-    if (!apptHtml) return;
+        const apptHtml = await loadAppointmentsHtml(p.detailsUrl);
+        if (!apptHtml) return;
 
-    const verdict = classifyAcceptance(apptHtml);
+        const verdict = classifyAcceptance(apptHtml);
 
-    if (verdict.status === 'ACCEPTING') {
-      accepting.push({
-        id: p._id.toString(),
-        name: p.name, postcode: p.postcode, url: p.detailsUrl, distanceMiles: p.distanceMiles,
-      });
-      await EmailLog.create({
-        practiceId: p._id, practiceUrl: p.detailsUrl, status: 'ACCEPTING', dateKey,
-      });
-    } else if (verdict.status === 'CHILD_ONLY' && INCLUDE_CHILD) {
-      childOnly.push({
-        id: p._id.toString(),
-        name: p.name, postcode: p.postcode, url: p.detailsUrl, distanceMiles: p.distanceMiles,
-      });
-      await EmailLog.create({
-        practiceId: p._id, practiceUrl: p.detailsUrl, status: 'CHILD_ONLY', dateKey,
-      });
-    }
-  })));
+        if (verdict.status === 'ACCEPTING') {
+          accepting.push({
+            id: p._id.toString(),
+            name: p.name,
+            postcode: p.postcode,
+            url: p.detailsUrl,
+            distanceMiles: p._computedDistance ?? p.distanceMiles,
+          });
+          await EmailLog.create({
+            practiceId: p._id, practiceUrl: p.detailsUrl, status: 'ACCEPTING', dateKey,
+          });
+        } else if (verdict.status === 'CHILD_ONLY' && INCLUDE_CHILD) {
+          childOnly.push({
+            id: p._id.toString(),
+            name: p.name,
+            postcode: p.postcode,
+            url: p.detailsUrl,
+            distanceMiles: p._computedDistance ?? p.distanceMiles,
+          });
+          await EmailLog.create({
+            practiceId: p._id, practiceUrl: p.detailsUrl, status: 'CHILD_ONLY', dateKey,
+          });
+        }
+      })
+    )
+  );
 
   return { accepting, childOnly };
 }
@@ -264,18 +336,32 @@ async function sendEmailForJob(job, found, opts = {}) {
   }
 
   const lines = [];
+
   if (hasAccepting) {
     lines.push(`✅ <b>Accepting (adults/all)</b> — ${found.accepting.length}`);
-    found.accepting.sort((a,b)=>(a.distanceMiles||999)-(b.distanceMiles||999)).forEach((p,i)=>{
-      lines.push(`${i+1}. ${escapeHtml(p.name)} — ${p.postcode} — ${p.distanceMiles?.toFixed?.(1) ?? '?'} mi<br/><a href="${p.url}">${p.url}</a>`);
-    });
+    found.accepting
+      .sort((a, b) => ((a.distanceMiles ?? 999) - (b.distanceMiles ?? 999)))
+      .forEach((p, i) => {
+        const miles = p.distanceMiles;
+        lines.push(
+          `${i + 1}. ${escapeHtml(p.name)} — ${p.postcode} — ${miles != null && miles.toFixed ? miles.toFixed(1) : '?'} mi<br/>` +
+          `<a href="${p.url}">${p.url}</a>`
+        );
+      });
     lines.push('<br/>');
   }
+
   if (hasChildOnly) {
     lines.push(`🟨 <b>Children-only</b> — ${found.childOnly.length}`);
-    found.childOnly.sort((a,b)=>(a.distanceMiles||999)-(b.distanceMiles||999)).forEach((p,i)=>{
-      lines.push(`${i+1}. ${escapeHtml(p.name)} — ${p.postcode} — ${p.distanceMiles?.toFixed?.(1) ?? '?'} mi<br/><a href="${p.url}">${p.url}</a>`);
-    });
+    found.childOnly
+      .sort((a, b) => ((a.distanceMiles ?? 999) - (b.distanceMiles ?? 999)))
+      .forEach((p, i) => {
+        const miles = p.distanceMiles;
+        lines.push(
+          `${i + 1}. ${escapeHtml(p.name)} — ${p.postcode} — ${miles != null && miles.toFixed ? miles.toFixed(1) : '?'} mi<br/>` +
+          `<a href="${p.url}">${p.url}</a>`
+        );
+      });
     lines.push('<br/>');
   }
 
@@ -317,7 +403,10 @@ async function sendEmailForJob(job, found, opts = {}) {
 }
 
 function escapeHtml(s) {
-  return String(s || '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+  return String(s || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
 }
 
 /* =========================
