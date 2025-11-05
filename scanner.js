@@ -303,6 +303,40 @@ function extractAppointmentsText(html) {
   ];
   for (const sel of noticeSelectors) {
     $(sel).each((_, el) => {
+      const t = normalizeText($(el).text()); // ✅ fixed: removed extra parenthesis
+      if (t) candidates.push(t);
+    });
+  }
+
+  if (!candidates.length) candidates.push(normalizeText($.root().text()));
+  candidates.sort((a, b) => b.length - a.length);
+  return candidates[0] || '';
+}
+
+  // Common NHS content wrappers
+  const knownSelectors = [
+    'main',
+    '.nhsuk-main-wrapper',
+    '#content',
+    '#maincontent',
+    '[data-testid="content"]',
+    '.nhsuk-u-reading-width',
+    '.nhsuk-width-container',
+  ];
+  for (const sel of knownSelectors) {
+    const t = normalizeText($(sel).text());
+    if (t && t.length > 80) candidates.push(t);
+  }
+
+  // Inset/notice content areas
+  const noticeSelectors = [
+    '.nhsuk-inset-text',
+    '.nhsuk-warning-callout',
+    '.nhsuk-notification-banner__content',
+    '.nhsuk-panel',
+  ];
+  for (const sel of noticeSelectors) {
+    $(sel).each((_, el) => {
       const t = normalizeText($(el).text()));
       if (t) candidates.push(t);
     });
