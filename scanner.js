@@ -1,9 +1,11 @@
 /**
- * DentistRadar — scanner.js (v2.5, Postmark-only, Watch-driven + Haversine)
+ * DentistRadar — scanner.js (v2.6)
  * -------------------------------------------------------------------------
- * - Builds jobs from Watch (unique postcodes, radius from Watch.radius).
- * - Computes distances dynamically using Haversine from Postcodes.lat/lon.
- * - Visits ONLY the "Appointments" tab; classifies ACCEPTING / CHILD_ONLY.
+ * - Jobs from Watch (unique postcodes; radius from Watch.radius).
+ * - Haversine distance using Postcodes.lat/lon (falls back to sampling).
+ * - Visits ONLY the "Appointments" content; robust link discovery.
+ * - Extracts appointments/opening-times section text before matching.
+ * - Matches broader NHS phrasings (accepting / children-only / not-confirmed).
  * - Emails real users from Users (active + receiveAlerts; targeted or global).
  *
  * ENV (required):
@@ -15,7 +17,8 @@
  *   POSTMARK_MESSAGE_STREAM="outbound"
  *   INCLUDE_CHILD_ONLY="false"
  *   MAX_CONCURRENCY="5"
- *   SCAN_SAMPLE_LIMIT="40"     // used when job or practices cannot be geo-filtered
+ *   SCAN_SAMPLE_LIMIT="40"     // used when job/practices can’t be geo-filtered
+ *   DEBUG_APPTS="1"            // logs first 400 chars of unmatched section text
  */
 
 import axios from 'axios';
@@ -38,7 +41,8 @@ const {
   POSTMARK_MESSAGE_STREAM = 'outbound',
   INCLUDE_CHILD_ONLY = 'false',
   MAX_CONCURRENCY = '5',
-  SCAN_SAMPLE_LIMIT = '40'
+  SCAN_SAMPLE_LIMIT = '40',
+  DEBUG_APPTS = '0'
 } = process.env;
 
 if (!MONGO_URI) throw new Error('MONGO_URI is required');
@@ -50,6 +54,7 @@ const INCLUDE_CHILD =
   (String(INCLUDE_CHILD_ONLY).toLowerCase() === 'true');
 const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 5);
 const SAMPLE_LIMIT = Math.max(1, Number(SCAN_SAMPLE_LIMIT) || 40);
+const DEBUG = String(DEBUG_APPTS) === '1';
 
 /* =========================
    Axios retry
@@ -111,20 +116,27 @@ async function getCoordsForPostcode(pcRaw) {
    ========================= */
 function classifyAcceptance(rawHtmlOrText) {
   const text = normalizeText(rawHtmlOrText);
+  const t = text.replace(/’/g, "'").replace(/–|—/g, '-');
 
-  const accepting =
-    /(accepts|is accepting|currently accepting|are accepting)\s+new\s+nhs\s+patients/i.test(text) &&
-    !/only\s+accepts?\s+(new\s+nhs\s+patients\s+)?(if\s+they\s+are\s+)?children/i.test(text);
-
+  // CHILD ONLY: various phrasings
   const childOnly =
-    /(only\s+accepts?|currently\s+only\s+accepts?)\s+.*\s+children\s+(aged\s+17\s+or\s+under)?/i.test(text) &&
-    /nhs\s+patients/i.test(text);
+    (
+      /(only\s+accepts?|currently\s+only\s+accepts?|accepting\s+only)\s+(new\s+)?nhs\s+patients/i.test(t) &&
+      /children\s+(aged\s+17\s+or\s+under|only|under\s*18)/i.test(t)
+    ) ||
+    /children\s+(only|under\s*18)\s+accepted/i.test(t);
+
+  // ACCEPTING adults/all: liberal variants
+  const accepting =
+    /(accepts|is accepting|are accepting|currently accepting)\s+(new\s+)?nhs\s+patients/i.test(t) &&
+    !childOnly;
 
   const notConfirmed =
-    /has\s+not\s+confirmed\s+if\s+.*accept/i.test(text);
+    /has\s+not\s+confirmed\s+if\s+.*accept/i.test(t) ||
+    /not\s+confirmed\s+(whether|if)\s+.*accept/i.test(t);
 
-  if (childOnly) return { status: 'CHILD_ONLY', matched: 'child-only' };
-  if (accepting) return { status: 'ACCEPTING', matched: 'accepting' };
+  if (childOnly)    return { status: 'CHILD_ONLY', matched: 'child-only' };
+  if (accepting)    return { status: 'ACCEPTING', matched: 'accepting' };
   if (notConfirmed) return { status: 'NOT_CONFIRMED', matched: 'not-confirmed' };
   return { status: 'NOT_CONFIRMED', matched: 'unknown' };
 }
@@ -154,27 +166,117 @@ async function httpGet(url) {
   }
 }
 
+/**
+ * Returns either:
+ *  - string (appointments page HTML), or
+ *  - { __inline__: true, html: detailsHtml } when no dedicated appointments link is found.
+ */
 async function loadAppointmentsHtml(detailsUrl) {
   if (!detailsUrl) return null;
+
+  // If already an appointments URL
+  if (/\/appointments(\/|$|\?|#)/i.test(detailsUrl)) {
+    return httpGet(detailsUrl);
+  }
 
   const detailsHtml = await httpGet(detailsUrl);
   if (!detailsHtml) return null;
 
   const $ = cheerio.load(detailsHtml);
 
-  // Prefer link by visible text
-  let href = $('a')
-    .filter((_, el) => normalizeText($(el).text()).toLowerCase().includes('appointment'))
-    .first()
-    .attr('href');
+  // Prefer candidates by visible text first
+  const textCandidates = [
+    'appointments',
+    'appointments and opening times',
+    'appointments & opening times',
+    'opening times',
+  ];
 
-  // Fallback by URL hint
+  let href;
+  $('a').each((_, el) => {
+    const t = normalizeText($(el).text()).toLowerCase();
+    if (textCandidates.some(c => t.includes(c))) {
+      href = $(el).attr('href');
+      if (href) return false; // break
+    }
+  });
+
+  // Fallback by URL patterns
   if (!href) href = $('a[href*="/appointments"]').first().attr('href');
-  if (!href) return null;
+  if (!href) href = $('a[href*="appointments-and-opening-times"]').first().attr('href');
+  if (!href) href = $('a[href*="opening-times"]').first().attr('href');
+
+  if (!href) {
+    // No dedicated appointments link found; try to match on the details page itself
+    return { __inline__: true, html: detailsHtml };
+  }
 
   const appointmentsUrl = new URL(href, detailsUrl).toString();
   await sleep(200 + Math.floor(Math.random() * 200));
   return httpGet(appointmentsUrl);
+}
+
+/**
+ * Extracts the likely Appointments/Opening Times text content from a page.
+ * Focuses on sections headed by "Appointments" and common NHS wrappers.
+ */
+function extractAppointmentsText(html) {
+  const $ = cheerio.load(html);
+  const candidates = [];
+
+  // Sections headed by h1/h2/h3 that mention appointments/opening times
+  $('h1,h2,h3').each((_, h) => {
+    const heading = normalizeText($(h).text()).toLowerCase();
+    if (/appointment|opening\s+times/.test(heading)) {
+      const section = [];
+      let cur = $(h).next();
+      let hops = 0;
+      while (cur.length && hops < 20) {
+        const tag = (cur[0].tagName || '').toLowerCase();
+        if (/^h[1-6]$/.test(tag)) break; // stop at next heading
+        if (['p', 'div', 'li', 'ul', 'ol'].includes(tag)) {
+          section.push(normalizeText(cur.text()));
+        }
+        cur = cur.next();
+        hops++;
+      }
+      const joined = section.join(' ').trim();
+      if (joined) candidates.push(joined);
+    }
+  });
+
+  // Common NHS content wrappers
+  const knownSelectors = [
+    'main',
+    '.nhsuk-main-wrapper',
+    '#content',
+    '#maincontent',
+    '[data-testid="content"]',
+    '.nhsuk-u-reading-width',
+    '.nhsuk-width-container',
+  ];
+  for (const sel of knownSelectors) {
+    const t = normalizeText($(sel).text());
+    if (t && t.length > 80) candidates.push(t);
+  }
+
+  // Inset/notice content areas
+  const noticeSelectors = [
+    '.nhsuk-inset-text',
+    '.nhsuk-warning-callout',
+    '.nhsuk-notification-banner__content',
+    '.nhsuk-panel',
+  ];
+  for (const sel of noticeSelectors) {
+    $(sel).each((_, el) => {
+      const t = normalizeText($(el).text());
+      if (t) candidates.push(t);
+    });
+  }
+
+  if (!candidates.length) candidates.push(normalizeText($.root().text()));
+  candidates.sort((a, b) => b.length - a.length);
+  return candidates[0] || '';
 }
 
 /* =========================
@@ -221,7 +323,7 @@ async function buildJobsFromWatch(filterPostcode) {
 }
 
 /* =========================
-   Scan one job (with Haversine filter)
+   Scan one job (Haversine)
    ========================= */
 async function scanPostcodeJob({ postcode, radiusMiles }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
@@ -236,7 +338,7 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
       detailsUrl: { $exists: true, $ne: '' },
     }).select('_id name postcode detailsUrl lat lon distanceMiles').lean();
 
-    // Compute distance (prefer practice lat/lon; else use practice postcode lookup; else legacy distanceMiles)
+    // Compute distance (prefer practice lat/lon; else postcode lookup; else legacy distanceMiles)
     for (const p of practicesBase) {
       let plat = p.lat, plon = p.lon;
 
@@ -283,10 +385,21 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
         const already = await EmailLog.findOne({ practiceId: p._id, dateKey }).lean();
         if (already) return;
 
-        const apptHtml = await loadAppointmentsHtml(p.detailsUrl);
-        if (!apptHtml) return;
+        const apptRes = await loadAppointmentsHtml(p.detailsUrl);
+        if (!apptRes) return;
 
-        const verdict = classifyAcceptance(apptHtml);
+        let pageHtml;
+        if (typeof apptRes === 'string') {
+          pageHtml = apptRes;
+        } else if (apptRes && apptRes.__inline__ && apptRes.html) {
+          // No explicit appointments link; use the details page content
+          pageHtml = apptRes.html;
+        } else {
+          return;
+        }
+
+        const sectionText = extractAppointmentsText(pageHtml);
+        const verdict = classifyAcceptance(sectionText);
 
         if (verdict.status === 'ACCEPTING') {
           accepting.push({
@@ -310,6 +423,9 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
           await EmailLog.create({
             practiceId: p._id, practiceUrl: p.detailsUrl, status: 'CHILD_ONLY', dateKey,
           });
+        } else if (DEBUG) {
+          // Log a short snippet to tune matchers if needed
+          console.log('[DEBUG NO-MATCH]', p.detailsUrl, '→', sectionText.slice(0, 400));
         }
       })
     )
