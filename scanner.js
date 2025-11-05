@@ -1,5 +1,5 @@
 /**
- * DentistRadar — scanner.js (Playwright discovery, axios parsing) — v3.2
+ * DentistRadar — scanner.js (Playwright discovery, axios parsing) — v3.3
  * - Discovers NHS dentist detail URLs from postcode+radius using a real browser (Playwright).
  * - Loads each practice's Appointments page and classifies acceptance using your canonical messages.
  * - Emails watchers via Postmark. De-duplicates per practice URL per day in EmailLog.
@@ -17,15 +17,10 @@
  *   INCLUDE_CHILD_ONLY="false"
  *   DEBUG_APPTS="0|1"
  *   POSTCODE_COORDS="RG41 4UW:51.411,-0.864;SW1A 1AA:51.501,-0.142"
- *   HEADLESS="true"      // Playwright headless mode
- *   PW_SLOWMO="0"        // e.g. "250" for debug
- *
- * package.json (ensure):
- *   "dependencies": {
- *     "@playwright/test": "^1.48.2", "axios": "^1.7.8", "axios-retry": "^3.9.1",
- *     "cheerio": "^1.0.0", "dayjs": "^1.11.13", "mongoose": "^8.7.0", "p-limit": "^5.0.0"
- *   },
- *   "scripts": { "postinstall": "npx playwright install --with-deps chromium" }
+ *   HEADLESS="true"                // Playwright headless mode
+ *   PW_SLOWMO="0"                  // e.g. "250" for local debug
+ *   PLAYWRIGHT_BROWSERS_PATH=0     // (Render) keep browsers in node_modules
+ *   PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1
  */
 
 import axios from "axios";
@@ -34,7 +29,8 @@ import pLimit from "p-limit";
 import dayjs from "dayjs";
 import axiosRetry from "axios-retry";
 import mongoose from "mongoose";
-import { chromium } from "@playwright";
+import { chromium } from "playwright";
+import { execSync } from "node:child_process";
 
 /* ─────────────────────────
    ENV
@@ -102,6 +98,27 @@ async function connectMongo(uri) {
   if (connectingPromise) return connectingPromise;
   connectingPromise = mongoose.connect(uri, { maxPoolSize: 10 }).finally(() => { connectingPromise = null; });
   return connectingPromise;
+}
+
+/* ─────────────────────────
+   Playwright self-healing installer
+   ───────────────────────── */
+async function ensureChromiumInstalled() {
+  try {
+    // Try a quick launch (cheap) to confirm presence
+    const probe = await chromium.launch({ headless: true });
+    await probe.close();
+  } catch (e) {
+    const msg = String(e?.message || e || "");
+    if (/Executable doesn't exist|Looks like Playwright/i.test(msg)) {
+      console.log("[PW] Chromium not found. Installing into node_modules …");
+      // With PLAYWRIGHT_BROWSERS_PATH=0 this puts browser in node_modules (no root)
+      execSync("npx playwright install chromium", { stdio: "inherit" });
+      return;
+    }
+    // Any other error bubbles up
+    throw e;
+  }
 }
 
 /* ─────────────────────────
@@ -211,7 +228,7 @@ function buildResultsUrls(pc, radiusMiles) {
   urls.add(`https://www.nhs.uk/service-search/find-a-dentist/results?postcode=${enc}&distance=${r}`);
   urls.add(`https://www.nhs.uk/service-search/find-a-dentist/results?postcode=${enc}&distance=${r}&results=24`);
 
-  // Path-style family (what you highlighted)
+  // Path-style family (e.g., /results/RG41%204UW?distance=25)
   urls.add(`https://www.nhs.uk/service-search/find-a-dentist/results/${enc}?distance=${r}`);
   urls.add(`https://www.nhs.uk/service-search/find-a-dentist/results/${enc}?distance=${r}&results=24`);
 
@@ -246,7 +263,8 @@ async function collectDetailLinksOnPage(page) {
 }
 
 async function discoverDetailUrlsWithPlaywright(postcode, radiusMiles) {
-  const urls = new Set();
+  await ensureChromiumInstalled(); // self-heal if Chromium missing
+
   const browser = await chromium.launch({
     headless: String(HEADLESS).toLowerCase() !== "false",
     slowMo: Math.max(0, Number(PW_SLOWMO) || 0)
@@ -258,6 +276,7 @@ async function discoverDetailUrlsWithPlaywright(postcode, radiusMiles) {
   });
   const page = await context.newPage();
 
+  const urls = new Set();
   try {
     const candidates = buildResultsUrls(postcode, radiusMiles);
     for (const u of candidates) {
