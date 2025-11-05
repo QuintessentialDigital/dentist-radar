@@ -1,8 +1,9 @@
 /**
- * DentistRadar — scanner.js (v2.6)
+ * DentistRadar — scanner.js (v2.7)
  * -------------------------------------------------------------------------
  * - Jobs from Watch (unique postcodes; radius from Watch.radius).
- * - Haversine distance using Postcodes.lat/lon (falls back to sampling).
+ * - Haversine distance using Postcodes.lat/lon; **POSTCODE_COORDS** env map
+ *   overrides DB lookups to avoid "No coords" and enable instant trials.
  * - Visits ONLY the "Appointments" content; robust link discovery.
  * - Extracts appointments/opening-times section text before matching.
  * - Matches broader NHS phrasings (accepting / children-only / not-confirmed).
@@ -19,6 +20,8 @@
  *   MAX_CONCURRENCY="5"
  *   SCAN_SAMPLE_LIMIT="40"     // used when job/practices can’t be geo-filtered
  *   DEBUG_APPTS="1"            // logs first 400 chars of unmatched section text
+ *   POSTCODE_COORDS="RG41 4UW:51.411,-0.864;RG40 1XX:51.403,-0.840"
+ *     - format: "POSTCODE:lat,lon;POSTCODE:lat,lon;..."
  */
 
 import axios from 'axios';
@@ -42,7 +45,8 @@ const {
   INCLUDE_CHILD_ONLY = 'false',
   MAX_CONCURRENCY = '5',
   SCAN_SAMPLE_LIMIT = '40',
-  DEBUG_APPTS = '0'
+  DEBUG_APPTS = '0',
+  POSTCODE_COORDS = ''
 } = process.env;
 
 if (!MONGO_URI) throw new Error('MONGO_URI is required');
@@ -90,6 +94,26 @@ const sanitizeEmail = (s) => {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x) ? x : '';
 };
 
+// Parse env POSTCODE_COORDS = "PC1:lat,lon;PC2:lat,lon"
+function parsePostcodeCoordsEnv(raw) {
+  const map = new Map();
+  String(raw || '')
+    .split(';')
+    .map(s => s.trim())
+    .filter(Boolean)
+    .forEach(pair => {
+      const [pcRaw, coords] = pair.split(':').map(s => (s || '').trim());
+      if (!pcRaw || !coords) return;
+      const [latStr, lonStr] = coords.split(',').map(s => (s || '').trim());
+      const lat = Number(latStr), lon = Number(lonStr);
+      if (Number.isFinite(lat) && Number.isFinite(lon)) {
+        map.set(normalizePostcode(pcRaw), { lat, lon });
+      }
+    });
+  return map;
+}
+const POSTCODE_COORDS_MAP = parsePostcodeCoordsEnv(POSTCODE_COORDS);
+
 // Haversine distance (miles)
 function haversineMiles(lat1, lon1, lat2, lon2) {
   const toRad = (d) => (d * Math.PI) / 180;
@@ -102,10 +126,15 @@ function haversineMiles(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
-// Get lat/lon for a normalized postcode from Postcodes collection
+// Get lat/lon for a normalized postcode from ENV map (first) then DB
 async function getCoordsForPostcode(pcRaw) {
   const pc = normalizePostcode(pcRaw);
   if (!pc) return null;
+
+  // 1) ENV override (fast path, fixes "No coords" immediately)
+  if (POSTCODE_COORDS_MAP.has(pc)) return POSTCODE_COORDS_MAP.get(pc);
+
+  // 2) DB lookup (Postcodes collection)
   const doc = await Postcode.findOne({ postcode: pc }).select('lat lon').lean();
   if (!doc) return null;
   return { lat: doc.lat, lon: doc.lon };
@@ -328,7 +357,7 @@ async function buildJobsFromWatch(filterPostcode) {
 async function scanPostcodeJob({ postcode, radiusMiles }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
-  // Get center coords for job postcode
+  // Get center coords for job postcode (ENV map → DB)
   const jobCoords = await getCoordsForPostcode(postcode);
 
   let practicesBase = [];
@@ -424,7 +453,6 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
             practiceId: p._id, practiceUrl: p.detailsUrl, status: 'CHILD_ONLY', dateKey,
           });
         } else if (DEBUG) {
-          // Log a short snippet to tune matchers if needed
           console.log('[DEBUG NO-MATCH]', p.detailsUrl, '→', sectionText.slice(0, 400));
         }
       })
