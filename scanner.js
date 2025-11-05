@@ -1,11 +1,11 @@
 /**
- * DentistRadar — scanner.js (v4.2)
- * - Geolocation-enabled Playwright discovery (path-style + interactive form)
- * - Network-sniff + DOM scrape of detail links
- * - Appointments-page acceptance parsing (adult vs children-only)
- * - Postmark alerts with per-day de-dupe (EmailLog)
- *
- * Requires: MONGO_URI, POSTMARK_SERVER_TOKEN, EMAIL_FROM
+ * DentistRadar — scanner.js (v4.3)
+ * - Stable Playwright discovery (no premature close; guarded loops)
+ * - Geolocation granted + UA/headers
+ * - Tries both results URL shapes, then interactive search
+ * - Network-sniff + DOM scrape of dentist detail links
+ * - Appointments parsing -> ACCEPTING / CHILD_ONLY
+ * - Postmark email + per-day de-dupe
  */
 
 import axios from "axios";
@@ -16,9 +16,9 @@ import dayjs from "dayjs";
 import { chromium } from "playwright";
 import { execSync } from "node:child_process";
 
-/* ──────────────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────────────
    ENV
-   ─────────────────────────────────────────────────────────────────── */
+   ────────────────────────────────────────────────────────────────── */
 const {
   MONGO_URI,
   POSTMARK_SERVER_TOKEN,
@@ -28,9 +28,9 @@ const {
   INCLUDE_CHILD_ONLY = "false",
   HEADLESS = "true",
   PW_SLOWMO = "0",
-  DEFAULT_GEO_LAT = "51.5074", // London default
+  DEFAULT_GEO_LAT = "51.5074",
   DEFAULT_GEO_LON = "-0.1278",
-  POSTCODE_COORDS = "" // e.g. "RG41 4UW:51.4107,-0.8345;SW1A 1AA:51.501,-0.1419"
+  POSTCODE_COORDS = ""
 } = process.env;
 
 if (!MONGO_URI) throw new Error("MONGO_URI is required");
@@ -39,11 +39,13 @@ if (!EMAIL_FROM) throw new Error("EMAIL_FROM is required");
 
 const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 6);
 const INCLUDE_CHILD = String(INCLUDE_CHILD_ONLY).toLowerCase() === "true";
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
 
-/* ──────────────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────────────
    Mongo models (guarded)
-   ─────────────────────────────────────────────────────────────────── */
-function getModel(name, schema) {
+   ────────────────────────────────────────────────────────────────── */
+function model(name, schema) {
   return mongoose.models[name] || mongoose.model(name, schema);
 }
 
@@ -54,18 +56,13 @@ const WatchSchema = new mongoose.Schema(
 WatchSchema.index({ email: 1, postcode: 1 }, { unique: true });
 
 const EmailLogSchema = new mongoose.Schema(
-  {
-    practiceUrl: String,
-    dateKey: String, // YYYY-MM-DD
-    status: { type: String, enum: ["ACCEPTING", "CHILD_ONLY"] },
-    sentAt: { type: Date, default: Date.now }
-  },
+  { practiceUrl: String, dateKey: String, status: String, sentAt: { type: Date, default: Date.now } },
   { collection: "EmailLog", versionKey: false }
 );
 EmailLogSchema.index({ practiceUrl: 1, dateKey: 1 }, { unique: true });
 
-const Watch = getModel("Watch", WatchSchema);
-const EmailLog = getModel("EmailLog", EmailLogSchema);
+const Watch = model("Watch", WatchSchema);
+const EmailLog = model("EmailLog", EmailLogSchema);
 
 async function connectMongo(uri) {
   if (mongoose.connection.readyState === 1) return;
@@ -73,18 +70,10 @@ async function connectMongo(uri) {
   console.log("✅ MongoDB connected");
 }
 
-/* ──────────────────────────────────────────────────────────────────────
-   Utilities
-   ─────────────────────────────────────────────────────────────────── */
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
-
-const normText = (s) =>
-  String(s || "")
-    .replace(/\s+/g, " ")
-    .replace(/[\u200B-\u200D\uFEFF]/g, "")
-    .trim();
-
+/* ────────────────────────────────────────────────────────────────────
+   Utils
+   ────────────────────────────────────────────────────────────────── */
+const normText = (s) => String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
 const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
 const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -110,17 +99,6 @@ const ENV_COORDS = parseCoordMap(POSTCODE_COORDS);
 async function resolveCoordsForPostcode(postcode) {
   const pc = normPc(postcode);
   if (ENV_COORDS.has(pc)) return ENV_COORDS.get(pc);
-
-  // If you maintain a Postcodes collection, uncomment to use it:
-  // try {
-  //   const Postcodes = mongoose.models.Postcodes || mongoose.model(
-  //     "Postcodes",
-  //     new mongoose.Schema({ postcode: String, lat: Number, lon: Number }, { collection: "Postcodes" })
-  //   );
-  //   const doc = await Postcodes.findOne({ postcode: pc }).lean();
-  //   if (doc) return { lat: doc.lat, lon: doc.lon };
-  // } catch {}
-
   return { lat: Number(DEFAULT_GEO_LAT), lon: Number(DEFAULT_GEO_LON) };
 }
 
@@ -136,16 +114,15 @@ async function httpGet(url) {
   }
 }
 
-/* ──────────────────────────────────────────────────────────────────────
-   Playwright — self-heal + context
-   ─────────────────────────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────
+   Playwright bootstrap
+   ────────────────────────────────────────────────────────────────── */
 async function ensureChromiumInstalled() {
   try {
     const probe = await chromium.launch({ headless: true });
     await probe.close();
   } catch (e) {
-    const msg = String(e?.message || "");
-    if (/Executable doesn't exist|Looks like Playwright/i.test(msg)) {
+    if (/Executable doesn't exist|Looks like Playwright/i.test(String(e?.message || ""))) {
       console.log("[PW] Installing Chromium …");
       execSync("npx playwright install chromium", { stdio: "inherit" });
       return;
@@ -158,12 +135,7 @@ async function newGeoContext(geo) {
   const browser = await chromium.launch({
     headless: String(HEADLESS).toLowerCase() !== "false",
     slowMo: Number(PW_SLOWMO) || 0,
-    args: [
-      "--no-sandbox",
-      "--disable-gpu",
-      "--disable-dev-shm-usage",
-      "--disable-blink-features=AutomationControlled"
-    ]
+    args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled"]
   });
 
   const context = await browser.newContext({
@@ -184,7 +156,6 @@ async function newGeoContext(geo) {
 
   const page = await context.newPage();
   await page.addInitScript(() => {
-    // Basic stealth
     Object.defineProperty(navigator, "webdriver", { get: () => false });
     Object.defineProperty(navigator, "platform", { get: () => "Win32" });
     Object.defineProperty(navigator, "language", { get: () => "en-GB" });
@@ -195,9 +166,9 @@ async function newGeoContext(geo) {
   return { browser, context, page };
 }
 
-/* ──────────────────────────────────────────────────────────────────────
-   NHS discovery (path → interactive; network sniff + DOM)
-   ─────────────────────────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────
+   Discovery helpers (safe listeners, guarded loops)
+   ────────────────────────────────────────────────────────────────── */
 async function acceptCookiesIfShown(page) {
   const sels = [
     "#nhsuk-cookie-banner__link_accept",
@@ -216,17 +187,18 @@ async function acceptCookiesIfShown(page) {
   }
 }
 
-function addFromText(all, text) {
+function addFromText(set, text) {
   if (!text) return;
   const re = /https:\/\/www\.nhs\.uk\/services\/dentists\/[^\s"'<)]+/gi;
   let m;
   while ((m = re.exec(text)) !== null) {
     const url = m[0].split("#")[0];
-    if (!/\/appointments(\b|\/|\?|#)/i.test(url)) all.add(url);
+    if (!/\/appointments(\b|\/|\?|#)/i.test(url)) set.add(url);
   }
 }
 
 async function collectDetailLinksFromDom(page) {
+  if (page.isClosed()) return [];
   return await page.evaluate(() => {
     const out = new Set();
     document.querySelectorAll("a[href]").forEach((a) => {
@@ -242,199 +214,181 @@ async function collectDetailLinksFromDom(page) {
   });
 }
 
-async function tryPathResults(page, postcode, radius) {
-  const enc = encodeURIComponent(postcode);
-  const r = Math.max(1, Math.min(30, Math.round(radius)));
-  const bases = [
-    `https://www.nhs.uk/service-search/find-a-dentist/results/${enc}?distance=${r}`,
-    `https://www.nhs.uk/service-search/find-a-dentist/results/${enc}?distance=${r}&results=24`
-  ];
-  const urls = new Set();
-
-  for (const base of bases) {
-    for (let p = 1; p <= 4; p++) {
-      const url = p === 1 ? base : `${base}&page=${p}`;
-
-      const handler = page.on("response", async (resp) => {
-        try {
-          const ctype = (resp.headers()["content-type"] || "").toLowerCase();
-          if (!/json|html|text/.test(ctype)) return;
-          const body = await resp.text().catch(() => "");
-          addFromText(urls, body);
-        } catch {}
-      });
-
-      try {
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
-        await acceptCookiesIfShown(page);
-        await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-        await page.waitForTimeout(900);
-        const domLinks = await collectDetailLinksFromDom(page);
-        domLinks.forEach((u) => urls.add(u));
-        if (urls.size) {
-          page.off("response", handler);
-          return Array.from(urls);
-        }
-      } catch {}
-      page.off("response", handler);
-    }
-  }
-  return Array.from(urls);
-}
-
-async function findSearchInput(page) {
-  const probes = [
-    () => page.getByRole("textbox", { name: /postcode|location|town|city/i }),
-    () => page.getByLabel(/postcode|location|town|city/i),
-    () => page.getByPlaceholder(/postcode|location|town|city/i),
-    () => page.locator('input[name="search"]'),
-    () => page.locator('input#location'),
-    () => page.locator('input#postcode'),
-    () => page.locator('input[type="search"]'),
-    () => page.locator('input[type="text"]')
-  ];
-  for (const fn of probes) {
-    const loc = fn();
+function addResponseSniffer(page, bucketSet) {
+  const listener = async (resp) => {
     try {
-      if ((await loc.count()) > 0) return loc.first();
-    } catch {}
-  }
-  return null;
-}
-
-async function setRadiusIfPossible(page, radius) {
-  const r = Math.max(1, Math.min(30, Math.round(radius)));
-  const sels = [
-    () => page.getByRole("combobox", { name: /distance/i }),
-    () => page.locator('select[name="distance"]'),
-    () => page.locator('select#distance')
-  ];
-  for (const fn of sels) {
-    const sel = fn();
-    if ((await sel.count()) > 0) {
-      await sel.selectOption({ value: String(r) }).catch(async () => {
-        await sel.selectOption({ label: new RegExp(`\\b${r}\\b`) }).catch(() => {});
-      });
-      await page.waitForTimeout(100);
-      return true;
-    }
-  }
-  return false;
-}
-
-async function clickSubmit(page, input) {
-  const sels = [
-    () => page.getByRole("button", { name: /search/i }),
-    () => page.locator('button[type="submit"]'),
-    () => page.locator('input[type="submit"]')
-  ];
-  for (const fn of sels) {
-    const b = fn();
-    if ((await b.count()) > 0) {
-      await b.first().click().catch(() => {});
-      return;
-    }
-  }
-  await input.press("Enter").catch(() => {});
-}
-
-async function performInteractiveSearch(page, postcode, radius) {
-  const urls = new Set();
-
-  const handler = page.on("response", async (resp) => {
-    try {
-      const ctype = (resp.headers()["content-type"] || "").toLowerCase();
-      if (!/json|html|text/.test(ctype)) return;
+      const ct = (resp.headers()["content-type"] || "").toLowerCase();
+      if (!/json|html|text/.test(ct)) return;
       const body = await resp.text().catch(() => "");
-      addFromText(urls, body);
+      addFromText(bucketSet, body);
     } catch {}
-  });
-
-  await page.goto("https://www.nhs.uk/service-search/find-a-dentist", {
-    waitUntil: "domcontentloaded",
-    timeout: 20000
-  });
-
-  await acceptCookiesIfShown(page);
-
-  const input = await findSearchInput(page);
-  if (!input) {
-    page.off("response", handler);
-    return [];
-  }
-  await input.fill("");
-  await input.type(postcode, { delay: 25 }).catch(() => {});
-  await page.waitForTimeout(150);
-
-  await setRadiusIfPossible(page, radius);
-  await clickSubmit(page, input);
-
-  await page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => {});
-  await page.waitForTimeout(900);
-
-  const domLinks = await collectDetailLinksFromDom(page);
-  domLinks.forEach((u) => urls.add(u));
-
-  // enforce distance path if still empty
-  if (urls.size === 0) {
-    const enc = encodeURIComponent(postcode);
-    const r = Math.max(1, Math.min(30, Math.round(radius)));
-    const enforce = `https://www.nhs.uk/service-search/find-a-dentist/results/${enc}?distance=${r}`;
-    try {
-      await page.goto(enforce, { waitUntil: "domcontentloaded", timeout: 20000 });
-      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-      await page.waitForTimeout(700);
-      const more = await collectDetailLinksFromDom(page);
-      more.forEach((u) => urls.add(u));
-    } catch {}
-  }
-
-  page.off("response", handler);
-  return Array.from(urls);
+  };
+  page.on("response", listener);
+  return listener;
+}
+function removeResponseSniffer(page, listener) {
+  try { page.off("response", listener); } catch {}
 }
 
+async function gotoSafely(page, url) {
+  if (page.isClosed()) return false;
+  try {
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
+    await acceptCookiesIfShown(page);
+    await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+    await page.waitForTimeout(700);
+    return true;
+  } catch (e) {
+    console.log("[DISCOVERY WARN]", url, "→", e.message.split("\n")[0]);
+    return false;
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Discovery: results URLs (both shapes) → interactive fallback
+   ────────────────────────────────────────────────────────────────── */
 async function discoverDetailUrlsWithPlaywright(postcode, radiusMiles) {
   await ensureChromiumInstalled();
-
   const geo = await resolveCoordsForPostcode(postcode);
   const { browser, context, page } = await newGeoContext(geo);
 
-  const urls = new Set();
+  const all = new Set();
   try {
-    // 1) Path-style (fast)
-    const quick = await tryPathResults(page, postcode, radiusMiles);
-    quick.forEach((u) => urls.add(u));
+    const enc = encodeURIComponent(postcode);
+    const r = Math.max(1, Math.min(30, Math.round(radiusMiles)));
 
-    // 2) Interactive fallback (with network sniff)
-    if (urls.size === 0) {
-      const viaForm = await performInteractiveSearch(page, postcode, radiusMiles);
-      viaForm.forEach((u) => urls.add(u));
+    const urlShapes = [
+      // shape A: explicit postcode param
+      (pageNum) =>
+        `https://www.nhs.uk/service-search/find-a-dentist/results?postcode=${enc}&distance=${r}${
+          pageNum > 1 ? `&results=24&page=${pageNum}` : "&results=24"
+        }`,
+      // shape B: postcode in path
+      (pageNum) =>
+        `https://www.nhs.uk/service-search/find-a-dentist/results/${enc}?distance=${r}${
+          pageNum > 1 ? `&results=24&page=${pageNum}` : "&results=24"
+        }`
+    ];
 
-      // 3) Paginate with Next (also sniff)
-      for (let i = 0; i < 8; i++) {
+    // 1) Try both shapes with pagination (sequential; guarded)
+    for (const shape of urlShapes) {
+      if (page.isClosed()) break;
+      for (let p = 1; p <= 6; p++) {
+        if (page.isClosed()) break;
+        const url = shape(p);
+        const listener = addResponseSniffer(page, all);
+        const ok = await gotoSafely(page, url);
+        if (!ok) {
+          removeResponseSniffer(page, listener);
+          if (page.isClosed()) break;
+          continue;
+        }
+        const domLinks = await collectDetailLinksFromDom(page);
+        domLinks.forEach((u) => all.add(u));
+        removeResponseSniffer(page, listener);
+
+        if (all.size && p >= 2) break; // we have links, stop early
+      }
+      if (all.size) break; // next shape not needed
+    }
+
+    // 2) Interactive fallback if still empty
+    if (!all.size && !page.isClosed()) {
+      // open search landing
+      const listener = addResponseSniffer(page, all);
+      const ok = await gotoSafely(page, "https://www.nhs.uk/service-search/find-a-dentist");
+      if (ok && !page.isClosed()) {
+        // find input (multiple strategies)
+        const probes = [
+          () => page.getByRole("textbox", { name: /postcode|location|town|city/i }),
+          () => page.getByLabel(/postcode|location|town|city/i),
+          () => page.getByPlaceholder(/postcode|location|town|city/i),
+          () => page.locator('input[name="search"]'),
+          () => page.locator('input#location'),
+          () => page.locator('input#postcode'),
+          () => page.locator('input[type="search"]'),
+          () => page.locator('input[type="text"]')
+        ];
+        let input = null;
+        for (const fn of probes) {
+          if (page.isClosed()) break;
+          const loc = fn();
+          try {
+            if ((await loc.count()) > 0) {
+              input = loc.first();
+              break;
+            }
+          } catch {}
+        }
+
+        if (input && !page.isClosed()) {
+          await input.fill("");
+          await input.type(postcode, { delay: 25 }).catch(() => {});
+          await page.waitForTimeout(150);
+          // try set radius
+          const sels = [
+            () => page.getByRole("combobox", { name: /distance/i }),
+            () => page.locator('select[name="distance"]'),
+            () => page.locator('select#distance')
+          ];
+          for (const fn of sels) {
+            const sel = fn();
+            if ((await sel.count()) > 0) {
+              await sel.selectOption({ value: String(r) }).catch(async () => {
+                await sel.selectOption({ label: new RegExp(`\\b${r}\\b`) }).catch(() => {});
+              });
+              await page.waitForTimeout(80);
+              break;
+            }
+          }
+          // submit
+          const tries = [
+            () => page.getByRole("button", { name: /search/i }),
+            () => page.locator('button[type="submit"]'),
+            () => page.locator('input[type="submit"]')
+          ];
+          let clicked = false;
+          for (const fn of tries) {
+            const b = fn();
+            if ((await b.count()) > 0) {
+              await b.first().click().catch(() => {});
+              clicked = true;
+              break;
+            }
+          }
+          if (!clicked) await input.press("Enter").catch(() => {});
+
+          // wait + harvest
+          if (!page.isClosed()) {
+            await page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => {});
+            await page.waitForTimeout(800);
+            const domLinks2 = await collectDetailLinksFromDom(page);
+            domLinks2.forEach((u) => all.add(u));
+          }
+        }
+      }
+      removeResponseSniffer(page, listener);
+    }
+
+    // 3) “Next” pagination from interactive results (only if we got some)
+    if (all.size && !page.isClosed()) {
+      for (let i = 0; i < 6; i++) {
+        if (page.isClosed()) break;
         const next = page.locator('a[rel="next"], a[aria-label="Next"], a:has-text("Next")').first();
         if ((await next.count()) === 0) break;
 
-        const prevSize = urls.size;
-        const handler = page.on("response", async (resp) => {
-          try {
-            const ctype = (resp.headers()["content-type"] || "").toLowerCase();
-            if (!/json|html|text/.test(ctype)) return;
-            const body = await resp.text().catch(() => "");
-            addFromText(urls, body);
-          } catch {}
-        });
-
+        const before = all.size;
+        const listener = addResponseSniffer(page, all);
         await next.click({ timeout: 5000 }).catch(() => {});
         await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
         await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
-        await page.waitForTimeout(700);
+        await page.waitForTimeout(600);
 
-        const domLinks = await collectDetailLinksFromDom(page);
-        domLinks.forEach((u) => urls.add(u));
+        const dom = await collectDetailLinksFromDom(page);
+        dom.forEach((u) => all.add(u));
+        removeResponseSniffer(page, listener);
 
-        page.off("response", handler);
-        if (urls.size === prevSize) break; // no progress
+        if (all.size === before) break; // no new links
       }
     }
   } catch (e) {
@@ -444,13 +398,13 @@ async function discoverDetailUrlsWithPlaywright(postcode, radiusMiles) {
     await browser.close().catch(() => {});
   }
 
-  console.log(`[DISCOVERY] Playwright collected ${urls.size} detail URL(s).`);
-  return Array.from(urls);
+  console.log(`[DISCOVERY] Playwright collected ${all.size} detail URL(s).`);
+  return Array.from(all);
 }
 
-/* ──────────────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────────────
    Appointments → acceptance
-   ─────────────────────────────────────────────────────────────────── */
+   ────────────────────────────────────────────────────────────────── */
 async function loadAppointmentsHtml(detailUrl) {
   const html = await httpGet(detailUrl);
   if (!html) return null;
@@ -463,8 +417,7 @@ async function loadAppointmentsHtml(detailUrl) {
     $('a[href*="appointments-and-opening-times"]').attr("href") ||
     $('a[href*="opening-times"]').attr("href");
 
-  if (!href) return html; // use detail page if no explicit appointments link
-
+  if (!href) return html;
   const apptUrl = new URL(href, detailUrl).toString();
   return (await httpGet(apptUrl)) || html;
 }
@@ -520,9 +473,9 @@ function classifyAcceptance(text) {
   return "NONE";
 }
 
-/* ──────────────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────────────
    Email via Postmark
-   ─────────────────────────────────────────────────────────────────── */
+   ────────────────────────────────────────────────────────────────── */
 async function sendEmail(toList, subject, html) {
   if (!toList?.length) return;
   try {
@@ -537,9 +490,9 @@ async function sendEmail(toList, subject, html) {
   }
 }
 
-/* ──────────────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────────────
    Scan one job
-   ─────────────────────────────────────────────────────────────────── */
+   ────────────────────────────────────────────────────────────────── */
 async function scanJob({ postcode, radiusMiles, recipients }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) — NHS discovery ---`);
 
@@ -547,7 +500,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
   if (!detailUrls.length) {
     console.log("[INFO] No practice detail URLs discovered for this postcode this run.");
     return { accepting: [], childOnly: [] };
-  }
+    }
 
   const limit = pLimit(CONCURRENCY);
   const accepting = [];
@@ -577,17 +530,17 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
 
   if ((accepting.length || childOnly.length) && recipients?.length) {
     const render = (arr, label) =>
-      arr.length
-        ? `<b>${label}:</b><br>${arr.map((u) => `<a href="${u}">${u}</a>`).join("<br>")}<br><br>`
-        : "";
-    const subject = `DentistRadar — ${postcode} (${radiusMiles} mi): ${accepting.length} accepting${INCLUDE_CHILD ? `, ${childOnly.length} child-only` : ""}`;
+      arr.length ? `<b>${label}:</b><br>${arr.map((u) => `<a href="${u}">${u}</a>`).join("<br>")}<br><br>` : "";
+    const subject = `DentistRadar — ${postcode} (${radiusMiles} mi): ${accepting.length} accepting${
+      INCLUDE_CHILD ? `, ${childOnly.length} child-only` : ""
+    }`;
     const body = `<div style="font-family:system-ui;-webkit-font-smoothing:antialiased">
       <h3 style="margin:0 0 8px">DentistRadar — ${postcode} (${radiusMiles} mi)</h3>
       <div style="color:#666;margin:0 0 10px">${dayjs().format("YYYY-MM-DD HH:mm")}</div>
       ${render(accepting, "Accepting (adults/all)")}
       ${INCLUDE_CHILD ? render(childOnly, "Children-only") : ""}
       <hr style="border:0;border-top:1px solid #eee;margin:12px 0">
-      <div style="font-size:12px;color:#777">We check the NHS <b>Appointments</b> page text. Always call the practice to confirm before travelling.</div>
+      <div style="font-size:12px;color:#777">We read the NHS <b>Appointments</b> page text. Please call the practice to confirm before travelling.</div>
     </div>`;
     await sendEmail(recipients, subject, body);
   } else {
@@ -597,9 +550,9 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
   return { accepting, childOnly };
 }
 
-/* ──────────────────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────────────────
    Runner (exported)
-   ─────────────────────────────────────────────────────────────────── */
+   ────────────────────────────────────────────────────────────────── */
 async function buildJobs(filterPostcode) {
   const match = filterPostcode ? { postcode: normPc(filterPostcode) } : {};
   const rows = await Watch.aggregate([
@@ -640,8 +593,10 @@ export async function runScan(opts = {}) {
 export default { runScan };
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  runScan().then(() => process.exit(0)).catch((e) => {
-    console.error(e);
-    process.exit(1);
-  });
+  runScan()
+    .then(() => process.exit(0))
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
 }
