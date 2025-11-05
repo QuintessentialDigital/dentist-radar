@@ -34,7 +34,7 @@ import pLimit from "p-limit";
 import dayjs from "dayjs";
 import axiosRetry from "axios-retry";
 import mongoose from "mongoose";
-import { chromium } from "@playwright/test";
+import { chromium } from "@playwright";
 
 /* ─────────────────────────
    ENV
