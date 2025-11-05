@@ -1,13 +1,13 @@
 /**
- * DentistRadar — scanner.js (v2.7)
+ * DentistRadar — scanner.js (v2.8)
  * -------------------------------------------------------------------------
  * - Jobs from Watch (unique postcodes; radius from Watch.radius).
- * - Haversine distance using Postcodes.lat/lon; **POSTCODE_COORDS** env map
+ * - Haversine distance using Postcodes.lat/lon; POSTCODE_COORDS env map
  *   overrides DB lookups to avoid "No coords" and enable instant trials.
- * - Visits ONLY the "Appointments" content; robust link discovery.
- * - Extracts appointments/opening-times section text before matching.
- * - Matches broader NHS phrasings (accepting / children-only / not-confirmed).
- * - Emails real users from Users (active + receiveAlerts; targeted or global).
+ * - If geo-filter finds 0 practices, auto-fallback to scan a sample batch.
+ * - Recipients: Users first; if none, fall back to Watch emails for postcode.
+ * - Robust Appointments discovery + focused text extraction + broad matcher.
+ * - Postmark email only.
  *
  * ENV (required):
  *   MONGO_URI
@@ -18,10 +18,9 @@
  *   POSTMARK_MESSAGE_STREAM="outbound"
  *   INCLUDE_CHILD_ONLY="false"
  *   MAX_CONCURRENCY="5"
- *   SCAN_SAMPLE_LIMIT="40"     // used when job/practices can’t be geo-filtered
- *   DEBUG_APPTS="1"            // logs first 400 chars of unmatched section text
+ *   SCAN_SAMPLE_LIMIT="40"       // used if no coords or 0 practices in radius
+ *   DEBUG_APPTS="1"              // logs first 400 chars for unmatched pages
  *   POSTCODE_COORDS="RG41 4UW:51.411,-0.864;RG40 1XX:51.403,-0.840"
- *     - format: "POSTCODE:lat,lon;POSTCODE:lat,lon;..."
  */
 
 import axios from 'axios';
@@ -131,10 +130,8 @@ async function getCoordsForPostcode(pcRaw) {
   const pc = normalizePostcode(pcRaw);
   if (!pc) return null;
 
-  // 1) ENV override (fast path, fixes "No coords" immediately)
   if (POSTCODE_COORDS_MAP.has(pc)) return POSTCODE_COORDS_MAP.get(pc);
 
-  // 2) DB lookup (Postcodes collection)
   const doc = await Postcode.findOne({ postcode: pc }).select('lat lon').lean();
   if (!doc) return null;
   return { lat: doc.lat, lon: doc.lon };
@@ -147,7 +144,6 @@ function classifyAcceptance(rawHtmlOrText) {
   const text = normalizeText(rawHtmlOrText);
   const t = text.replace(/’/g, "'").replace(/–|—/g, '-');
 
-  // CHILD ONLY: various phrasings
   const childOnly =
     (
       /(only\s+accepts?|currently\s+only\s+accepts?|accepting\s+only)\s+(new\s+)?nhs\s+patients/i.test(t) &&
@@ -155,7 +151,6 @@ function classifyAcceptance(rawHtmlOrText) {
     ) ||
     /children\s+(only|under\s*18)\s+accepted/i.test(t);
 
-  // ACCEPTING adults/all: liberal variants
   const accepting =
     /(accepts|is accepting|are accepting|currently accepting)\s+(new\s+)?nhs\s+patients/i.test(t) &&
     !childOnly;
@@ -247,7 +242,6 @@ async function loadAppointmentsHtml(detailsUrl) {
 
 /**
  * Extracts the likely Appointments/Opening Times text content from a page.
- * Focuses on sections headed by "Appointments" and common NHS wrappers.
  */
 function extractAppointmentsText(html) {
   const $ = cheerio.load(html);
@@ -309,7 +303,7 @@ function extractAppointmentsText(html) {
 }
 
 /* =========================
-   Audience targeting (Users)
+   Audience targeting (Users → Watch fallback)
    ========================= */
 async function getRecipientsForPostcode(jobPostcode, opts = {}) {
   if (Array.isArray(opts.overrideRecipients) && opts.overrideRecipients.length) {
@@ -318,6 +312,7 @@ async function getRecipientsForPostcode(jobPostcode, opts = {}) {
 
   const pc = normalizePostcode(jobPostcode);
 
+  // Primary: Users
   const users = await User.find({
     active: true,
     receiveAlerts: true,
@@ -330,8 +325,16 @@ async function getRecipientsForPostcode(jobPostcode, opts = {}) {
     ],
   }).select('email').lean();
 
-  const emails = users.map(u => sanitizeEmail(u.email)).filter(Boolean);
-  return [...new Set(emails)].slice(0, 5000);
+  let emails = users.map(u => sanitizeEmail(u.email)).filter(Boolean);
+
+  // Fallback: Watch emails for this postcode (unique)
+  if (!emails.length) {
+    const watchers = await Watch.find({ postcode: pc }).select('email').lean();
+    const watchEmails = watchers.map(w => sanitizeEmail(w.email)).filter(Boolean);
+    emails = [...new Set(watchEmails)];
+  }
+
+  return emails.slice(0, 5000);
 }
 
 /* =========================
@@ -352,17 +355,15 @@ async function buildJobsFromWatch(filterPostcode) {
 }
 
 /* =========================
-   Scan one job (Haversine)
+   Scan one job (Haversine + fallback)
    ========================= */
 async function scanPostcodeJob({ postcode, radiusMiles }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
-  // Get center coords for job postcode (ENV map → DB)
   const jobCoords = await getCoordsForPostcode(postcode);
 
   let practicesBase = [];
   if (jobCoords) {
-    // Pull candidates with detailsUrl
     practicesBase = await Practice.find({
       detailsUrl: { $exists: true, $ne: '' },
     }).select('_id name postcode detailsUrl lat lon distanceMiles').lean();
@@ -385,10 +386,17 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
       }
     }
 
-    // Filter to radius & sort
     practicesBase = practicesBase
       .filter(p => p._computedDistance <= radiusMiles)
       .sort((a, b) => (a._computedDistance ?? 999) - (b._computedDistance ?? 999));
+
+    // **Hard fallback**: if filtering produced zero, scan a sample batch anyway
+    if (!practicesBase.length) {
+      console.log('[INFO] Radius filter returned 0 — sampling', SAMPLE_LIMIT, 'practices as fallback.');
+      practicesBase = await Practice.find({
+        detailsUrl: { $exists: true, $ne: '' },
+      }).select('_id name postcode detailsUrl').limit(SAMPLE_LIMIT).lean();
+    }
   } else {
     console.log('[WARN] No coords for job postcode', postcode, '— using sampling fallback.');
     practicesBase = await Practice.find({
@@ -397,7 +405,7 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
   }
 
   if (!practicesBase.length) {
-    console.log('No practices found in radius.');
+    console.log('No practices found (even after fallback).');
     return { accepting: [], childOnly: [] };
   }
 
@@ -421,7 +429,6 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
         if (typeof apptRes === 'string') {
           pageHtml = apptRes;
         } else if (apptRes && apptRes.__inline__ && apptRes.html) {
-          // No explicit appointments link; use the details page content
           pageHtml = apptRes.html;
         } else {
           return;
@@ -468,7 +475,7 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
 async function sendEmailForJob(job, found, opts = {}) {
   const recipients = await getRecipientsForPostcode(job.postcode, opts);
   if (!recipients.length) {
-    console.log('No recipients; skipping email.');
+    console.log('No recipients (Users/Watch); skipping email.');
     return;
   }
 
@@ -556,12 +563,6 @@ function escapeHtml(s) {
 /* =========================
    Exported Runner (Watch-driven)
    ========================= */
-/**
- * @param {Object} [opts]
- * @param {string} [opts.postcode]              - Only scan this postcode.
- * @param {boolean} [opts.includeChildOnly]     - Override INCLUDE_CHILD_ONLY.
- * @param {string[]} [opts.overrideRecipients]  - Override recipients for testing.
- */
 export async function runScan(opts = {}) {
   const includeChildOnlyOverride =
     typeof opts.includeChildOnly === 'boolean' ? opts.includeChildOnly : null;
@@ -599,7 +600,6 @@ export async function runScan(opts = {}) {
   return { jobs: jobs.length, summaries };
 }
 
-// Default export
 export default { runScan };
 
 // Self-run for CLI
