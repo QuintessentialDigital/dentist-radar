@@ -1,13 +1,12 @@
 /**
- * DentistRadar — scanner.js (v2.8)
+ * DentistRadar — scanner.js (v3.0)
  * -------------------------------------------------------------------------
- * - Jobs from Watch (unique postcodes; radius from Watch.radius).
- * - Haversine distance using Postcodes.lat/lon; POSTCODE_COORDS env map
- *   overrides DB lookups to avoid "No coords" and enable instant trials.
- * - If geo-filter finds 0 practices, auto-fallback to scan a sample batch.
- * - Recipients: Users first; if none, fall back to Watch emails for postcode.
+ * - Primary: scan Practices from Mongo (any of detailsUrl / nhsUrl / url).
+ * - If none found for a job: **live discover** practices from NHS search
+ *   for the job's postcode + radius, then crawl those URLs.
  * - Robust Appointments discovery + focused text extraction + broad matcher.
- * - Accepts any legacy practice URL field (detailsUrl / nhsUrl / url).
+ * - Haversine radius (ENV map POSTCODE_COORDS or Postcodes collection).
+ * - Recipients: Users first; if none, fall back to Watch emails for postcode.
  * - Postmark email only.
  *
  * ENV (required):
@@ -19,8 +18,8 @@
  *   POSTMARK_MESSAGE_STREAM="outbound"
  *   INCLUDE_CHILD_ONLY="false"
  *   MAX_CONCURRENCY="5"
- *   SCAN_SAMPLE_LIMIT="40"       // used if no coords or 0 practices in radius
- *   DEBUG_APPTS="1"              // logs first 400 chars for unmatched pages
+ *   SCAN_SAMPLE_LIMIT="40"  // sample size when using generic fallbacks
+ *   DEBUG_APPTS="1"         // logs first 400 chars for unmatched pages
  *   POSTCODE_COORDS="RG41 4UW:51.411,-0.864;RG40 1XX:51.403,-0.840"
  */
 
@@ -304,6 +303,55 @@ function extractAppointmentsText(html) {
 }
 
 /* =========================
+   NHS discovery fallback
+   ========================= */
+/**
+ * Discover practice details URLs from NHS search results for a postcode+radius.
+ * We look for links like: https://www.nhs.uk/services/dentists/<slug>/<id>
+ *
+ * NOTE: This is a best-effort scraper. If NHS markup shifts, tweak selectors.
+ */
+async function discoverPracticesFromNHS(postcode, radiusMiles) {
+  const pc = normalizePostcode(postcode);
+  const q = encodeURIComponent(pc);
+  // Known result pattern; distance is advisory (NHS site may paginate)
+  const url = `https://www.nhs.uk/service-search/find-a-dentist/results/${q}?distance=${encodeURIComponent(radiusMiles)}&latitude=&longitude=`;
+
+  const html = await httpGet(url);
+  if (!html) return [];
+
+  const $ = cheerio.load(html);
+  const urls = new Set();
+
+  // Result cards: find anchors to /services/dentists/...
+  $('a[href*="/services/dentists/"]').each((_, a) => {
+    const href = $(a).attr('href') || '';
+    try {
+      const abs = new URL(href, 'https://www.nhs.uk').toString();
+      // Ignore appointment subpages here; we want the details page
+      if (/https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(abs) && !/\/appointments/i.test(abs)) {
+        urls.add(abs);
+      }
+    } catch (_) {}
+  });
+
+  // Fallback: any service links on the page
+  if (urls.size === 0) {
+    $('a').each((_, a) => {
+      const href = $(a).attr('href') || '';
+      try {
+        const abs = new URL(href, 'https://www.nhs.uk').toString();
+        if (/https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(abs)) {
+          urls.add(abs);
+        }
+      } catch (_) {}
+    });
+  }
+
+  return Array.from(urls).slice(0, SAMPLE_LIMIT);
+}
+
+/* =========================
    Audience targeting (Users → Watch fallback)
    ========================= */
 async function getRecipientsForPostcode(jobPostcode, opts = {}) {
@@ -356,14 +404,14 @@ async function buildJobsFromWatch(filterPostcode) {
 }
 
 /* =========================
-   Scan one job (Haversine + fallback; unified URL)
+   Scan one job (DB first; NHS fallback)
    ========================= */
 async function scanPostcodeJob({ postcode, radiusMiles }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
   const jobCoords = await getCoordsForPostcode(postcode);
 
-  // Pull candidates that have any usable URL field
+  // 1) Try DB practices with ANY url field
   let practicesBase = await Practice.find({
     $or: [
       { detailsUrl: { $exists: true, $ne: '' } },
@@ -372,18 +420,11 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
     ]
   }).select('_id name postcode detailsUrl nhsUrl url lat lon distanceMiles').lean();
 
-  if (!practicesBase.length) {
-    console.log('[DEBUG] Practices with any URL field = 0. Check ingestion.');
-    return { accepting: [], childOnly: [] };
-  }
+  // Unify URL
+  for (const p of practicesBase) p._url = p.detailsUrl || p.nhsUrl || p.url || '';
 
-  // unify the URL for each practice
-  for (const p of practicesBase) {
-    p._url = p.detailsUrl || p.nhsUrl || p.url || '';
-  }
-
-  if (jobCoords) {
-    // Compute distance (prefer practice lat/lon; else postcode lookup; else legacy distanceMiles)
+  // 2) Filter by radius if we have coords
+  if (jobCoords && practicesBase.length) {
     for (const p of practicesBase) {
       let plat = p.lat, plon = p.lon;
 
@@ -401,35 +442,27 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
       }
     }
 
-    // Filter to radius & sort
     practicesBase = practicesBase
       .filter(p => p._computedDistance <= radiusMiles)
       .sort((a, b) => (a._computedDistance ?? 999) - (b._computedDistance ?? 999));
+  }
 
-    // Hard fallback if radius filter yields zero
-    if (!practicesBase.length) {
-      console.log('[INFO] Radius filter returned 0 — sampling', SAMPLE_LIMIT, 'practices as fallback.');
-      practicesBase = await Practice.find({
-        $or: [
-          { detailsUrl: { $exists: true, $ne: '' } },
-          { nhsUrl:     { $exists: true, $ne: '' } },
-          { url:        { $exists: true, $ne: '' } },
-        ]
-      }).select('_id name postcode detailsUrl nhsUrl url').limit(SAMPLE_LIMIT).lean();
-
-      for (const p of practicesBase) p._url = p.detailsUrl || p.nhsUrl || p.url || '';
+  // 3) If NOTHING usable from DB, **discover from NHS** for this job
+  if (!practicesBase.length) {
+    console.log('[INFO] No DB practices with URL in radius — discovering from NHS...');
+    const liveUrls = await discoverPracticesFromNHS(postcode, radiusMiles);
+    if (!liveUrls.length) {
+      console.log('[WARN] NHS discovery returned 0 URLs.');
+      return { accepting: [], childOnly: [] };
     }
-  } else {
-    console.log('[WARN] No coords for job postcode', postcode, '— using sampling fallback.');
-    practicesBase = await Practice.find({
-      $or: [
-        { detailsUrl: { $exists: true, $ne: '' } },
-        { nhsUrl:     { $exists: true, $ne: '' } },
-        { url:        { $exists: true, $ne: '' } },
-      ]
-    }).select('_id name postcode detailsUrl nhsUrl url').limit(SAMPLE_LIMIT).lean();
-
-    for (const p of practicesBase) p._url = p.detailsUrl || p.nhsUrl || p.url || '';
+    // Convert to minimal practice objects for scanning
+    practicesBase = liveUrls.slice(0, SAMPLE_LIMIT).map((u, i) => ({
+      _id: { toString: () => `live-${i}` }, // temp id for logging/dedupe scope
+      name: '', // (we’ll parse name later if needed)
+      postcode: '',
+      _url: u,
+      _computedDistance: undefined
+    }));
   }
 
   if (!practicesBase.length) {
@@ -444,22 +477,32 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
   const childOnly = [];
 
   await Promise.all(
-    practicesBase.map((p) =>
+    practicesBase.map((p, idx) =>
       limit(async () => {
-        // Per-day de-dup per practice
-        const already = await EmailLog.findOne({ practiceId: p._id, dateKey }).lean();
+        // For live IDs, dedupe by URL+date
+        const dedupe = p._id?.toString?.().startsWith('live-')
+          ? { practiceUrl: p._url, dateKey }
+          : { practiceId: p._id, dateKey };
+
+        const already = await EmailLog.findOne(dedupe).lean();
         if (already) return;
 
         const apptRes = await loadAppointmentsHtml(p._url);
         if (!apptRes) return;
 
-        let pageHtml;
-        if (typeof apptRes === 'string') {
-          pageHtml = apptRes;
-        } else if (apptRes && apptRes.__inline__ && apptRes.html) {
-          pageHtml = apptRes.html;
-        } else {
-          return;
+        const pageHtml = (typeof apptRes === 'string')
+          ? apptRes
+          : (apptRes && apptRes.__inline__ && apptRes.html) ? apptRes.html : null;
+        if (!pageHtml) return;
+
+        // Try to capture a readable name if missing
+        let name = p.name;
+        if (!name) {
+          try {
+            const $d = cheerio.load(pageHtml);
+            const h = normalizeText($d('h1').first().text());
+            if (h) name = h;
+          } catch (_) {}
         }
 
         const sectionText = extractAppointmentsText(pageHtml);
@@ -467,25 +510,29 @@ async function scanPostcodeJob({ postcode, radiusMiles }) {
 
         if (verdict.status === 'ACCEPTING') {
           accepting.push({
-            id: p._id.toString(),
-            name: p.name,
-            postcode: p.postcode,
+            id: p._id?.toString?.() || `live-${idx}`,
+            name: name || 'Dental practice',
+            postcode: p.postcode || '',
             url: p._url,
-            distanceMiles: p._computedDistance ?? p.distanceMiles,
+            distanceMiles: p._computedDistance,
           });
           await EmailLog.create({
-            practiceId: p._id, practiceUrl: p._url, status: 'ACCEPTING', dateKey,
+            ...(dedupe.practiceUrl ? { practiceUrl: p._url } : { practiceId: p._id }),
+            status: 'ACCEPTING',
+            dateKey,
           });
         } else if (verdict.status === 'CHILD_ONLY' && INCLUDE_CHILD) {
           childOnly.push({
-            id: p._id.toString(),
-            name: p.name,
-            postcode: p.postcode,
+            id: p._id?.toString?.() || `live-${idx}`,
+            name: name || 'Dental practice',
+            postcode: p.postcode || '',
             url: p._url,
-            distanceMiles: p._computedDistance ?? p.distanceMiles,
+            distanceMiles: p._computedDistance,
           });
           await EmailLog.create({
-            practiceId: p._id, practiceUrl: p._url, status: 'CHILD_ONLY', dateKey,
+            ...(dedupe.practiceUrl ? { practiceUrl: p._url } : { practiceId: p._id }),
+            status: 'CHILD_ONLY',
+            dateKey,
           });
         } else if (DEBUG) {
           console.log('[DEBUG NO-MATCH]', p._url, '→', sectionText.slice(0, 400));
@@ -519,11 +566,10 @@ async function sendEmailForJob(job, found, opts = {}) {
   if (hasAccepting) {
     lines.push(`✅ <b>Accepting (adults/all)</b> — ${found.accepting.length}`);
     found.accepting
-      .sort((a, b) => ((a.distanceMiles ?? 999) - (b.distanceMiles ?? 999)))
       .forEach((p, i) => {
         const miles = p.distanceMiles;
         lines.push(
-          `${i + 1}. ${escapeHtml(p.name)} — ${p.postcode} — ${miles != null && miles.toFixed ? miles.toFixed(1) : '?'} mi<br/>` +
+          `${i + 1}. ${escapeHtml(p.name)} — ${p.postcode || ''} — ${miles != null && miles.toFixed ? miles.toFixed(1) : '?'} mi<br/>` +
           `<a href="${p.url}">${p.url}</a>`
         );
       });
@@ -533,11 +579,10 @@ async function sendEmailForJob(job, found, opts = {}) {
   if (hasChildOnly) {
     lines.push(`🟨 <b>Children-only</b> — ${found.childOnly.length}`);
     found.childOnly
-      .sort((a, b) => ((a.distanceMiles ?? 999) - (b.distanceMiles ?? 999)))
       .forEach((p, i) => {
         const miles = p.distanceMiles;
         lines.push(
-          `${i + 1}. ${escapeHtml(p.name)} — ${p.postcode} — ${miles != null && miles.toFixed ? miles.toFixed(1) : '?'} mi<br/>` +
+          `${i + 1}. ${escapeHtml(p.name)} — ${p.postcode || ''} — ${miles != null && miles.toFixed ? miles.toFixed(1) : '?'} mi<br/>` +
           `<a href="${p.url}">${p.url}</a>`
         );
       });
