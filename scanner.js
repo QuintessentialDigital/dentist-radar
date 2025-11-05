@@ -1,5 +1,9 @@
 /**
- * DentistRadar — scanner.js (Playwright hardened discovery + debug) — v3.8
+ * DentistRadar — scanner.js (Playwright network-sniff discovery) — v3.9
+ * - Uses path-style and interactive search.
+ * - Grabs dentist detail URLs from both DOM and XHR/JSON responses.
+ * - Loads Appointments page and classifies acceptance.
+ * - Sends Postmark emails; per-day dedupe via EmailLog.
  */
 
 import axios from "axios";
@@ -9,8 +13,6 @@ import pLimit from "p-limit";
 import dayjs from "dayjs";
 import { chromium } from "playwright";
 import { execSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 
 /* ── ENV ─────────────────────────────────────────────────────────────── */
 const {
@@ -78,30 +80,22 @@ async function ensureChromiumInstalled() {
 const normText = (s) => String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
 const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
 const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
 
 async function httpGet(url) {
   try {
     const res = await axios.get(url, {
       timeout: 15000,
-      headers: {
-        "User-Agent": randomUA(),
-        "Accept-Language": "en-GB,en;q=0.9"
-      }
+      headers: { "User-Agent": UA, "Accept-Language": "en-GB,en;q=0.9" }
     });
     return res.data;
   } catch {
     return null;
   }
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const UA_BASES = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15"
-];
-function randomUA() { return UA_BASES[Math.floor(Math.random() * UA_BASES.length)]; }
 
-/* ── NHS discovery (hardened) ────────────────────────────────────────── */
+/* ── NHS discovery (network-sniff + DOM) ─────────────────────────────── */
 async function acceptCookiesIfShown(page) {
   const sels = [
     '#nhsuk-cookie-banner__link_accept',
@@ -120,7 +114,7 @@ async function acceptCookiesIfShown(page) {
   }
 }
 
-async function collectDetailLinksOnPage(page) {
+async function collectDetailLinksFromDom(page) {
   return await page.evaluate(() => {
     const out = new Set();
     document.querySelectorAll("a[href]").forEach((a) => {
@@ -136,6 +130,16 @@ async function collectDetailLinksOnPage(page) {
   });
 }
 
+function addFromText(all, text) {
+  if (!text) return;
+  const re = /https:\/\/www\.nhs\.uk\/services\/dentists\/[^\s"'<)]+/gi;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const url = m[0].split("#")[0];
+    if (!/\/appointments(\b|\/|\?|#)/i.test(url)) all.add(url);
+  }
+}
+
 async function tryPathResults(page, postcode, radius) {
   const enc = encodeURIComponent(postcode);
   const r = Math.max(1, Math.min(30, Math.round(radius)));
@@ -143,22 +147,41 @@ async function tryPathResults(page, postcode, radius) {
     `https://www.nhs.uk/service-search/find-a-dentist/results/${enc}?distance=${r}`,
     `https://www.nhs.uk/service-search/find-a-dentist/results/${enc}?distance=${r}&results=24`
   ];
+  const urls = new Set();
+
   for (const base of bases) {
     for (let p = 1; p <= 4; p++) {
       const url = p === 1 ? base : `${base}&page=${p}`;
+
+      // network sniffer for this navigation
+      const handler = page.on("response", async (resp) => {
+        try {
+          const ctype = (resp.headers()["content-type"] || "").toLowerCase();
+          if (!/json|html|text/.test(ctype)) return;
+          const body = await resp.text().catch(() => "");
+          addFromText(urls, body);
+        } catch {}
+      });
+
       try {
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 });
         await acceptCookiesIfShown(page);
-        // anti-bot: allow hydration + scroll
-        await page.waitForTimeout(1200);
-        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await page.waitForTimeout(500);
-        const links = await collectDetailLinksOnPage(page);
-        if (links.length) return links;
-      } catch {}
+        await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+        await page.waitForTimeout(900);
+        // DOM fallback
+        const domLinks = await collectDetailLinksFromDom(page);
+        domLinks.forEach((u) => urls.add(u));
+        if (urls.size) {
+          page.off("response", handler);
+          return Array.from(urls);
+        }
+      } catch {
+        // ignore and continue
+      }
+      page.off("response", handler);
     }
   }
-  return [];
+  return Array.from(urls);
 }
 
 async function findSearchInput(page) {
@@ -175,11 +198,7 @@ async function findSearchInput(page) {
   for (const fn of probes) {
     const loc = fn();
     try {
-      if ((await loc.count()) > 0) {
-        const el = loc.first();
-        await el.scrollIntoViewIfNeeded().catch(() => {});
-        return el;
-      }
+      if ((await loc.count()) > 0) return loc.first();
     } catch {}
   }
   return null;
@@ -218,65 +237,58 @@ async function clickSubmit(page, input) {
   await input.press("Enter").catch(() => {});
 }
 
-function stealthContextOptions() {
-  const [w, h] = [1366 + Math.floor(Math.random()*40), 900 + Math.floor(Math.random()*40)];
-  return {
-    userAgent: randomUA(),
-    locale: "en-GB",
-    viewport: { width: w, height: h },
-    timezoneId: "Europe/London",
-  };
-}
-
-async function applyStealth(page) {
-  // Hide webdriver and add some navigator props
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, "webdriver", { get: () => false });
-    Object.defineProperty(navigator, "platform", { get: () => "Win32" });
-    Object.defineProperty(navigator, "language", { get: () => "en-GB" });
-    Object.defineProperty(navigator, "languages", { get: () => ["en-GB", "en"] });
-    // Simple plugins spoof
-    Object.defineProperty(navigator, "plugins", { get: () => [1,2,3] });
-  });
-}
-
-async function dumpDebug(page, label = "page") {
-  if (!DEBUG_DISC) return;
-  try {
-    const html = await page.content();
-    const fileBase = `/tmp/nhs_${Date.now()}_${label}`;
-    fs.writeFileSync(`${fileBase}.html`, html.slice(0, 100000), "utf8");
-    await page.screenshot({ path: `${fileBase}.png`, fullPage: true }).catch(() => {});
-    console.log(`[DEBUG] Saved HTML+PNG to ${fileBase}.{html,png}`);
-  } catch (e) {
-    console.log("[DEBUG] dump failed:", e.message);
-  }
-}
-
 async function performInteractiveSearch(page, postcode, radius) {
-  await page.goto("https://www.nhs.uk/service-search/find-a-dentist", { waitUntil: "domcontentloaded", timeout: 20000 });
+  const urls = new Set();
+
+  // Attach network sniffer before navigating
+  const handler = page.on("response", async (resp) => {
+    try {
+      const ctype = (resp.headers()["content-type"] || "").toLowerCase();
+      if (!/json|html|text/.test(ctype)) return;
+      const body = await resp.text().catch(() => "");
+      addFromText(urls, body);
+    } catch {}
+  });
+
+  await page.goto("https://www.nhs.uk/service-search/find-a-dentist", {
+    waitUntil: "domcontentloaded",
+    timeout: 20000
+  });
+
   await acceptCookiesIfShown(page);
-  await dumpDebug(page, "search_landing");
 
   const input = await findSearchInput(page);
-  if (!input) throw new Error("search_input_not_found");
-
-  await input.fill("");
-  await input.type(postcode, { delay: 25 });
-  await page.waitForTimeout(180);
+  if (input) {
+    await input.fill("");
+    await input.type(postcode, { delay: 25 }).catch(() => {});
+  }
 
   await setRadiusIfPossible(page, radius);
-  await clickSubmit(page, input);
+  await clickSubmit(page, input || page.locator("body"));
 
-  await Promise.race([
-    page.waitForSelector('a[href*="/services/dentists/"]', { timeout: 20000 }),
-    page.waitForSelector(".nhsuk-results, .nhsuk-width-container, main", { timeout: 20000 })
-  ]).catch(() => {});
+  await page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => {});
   await page.waitForTimeout(1000);
-  await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-  await page.waitForTimeout(400);
 
-  await dumpDebug(page, "results_first");
+  // DOM fallback
+  const domLinks = await collectDetailLinksFromDom(page);
+  domLinks.forEach((u) => urls.add(u));
+
+  // Try to enforce distance via path-style results if we still have none
+  if (urls.size === 0) {
+    const enc = encodeURIComponent(postcode);
+    const r = Math.max(1, Math.min(30, Math.round(radius)));
+    const enforce = `https://www.nhs.uk/service-search/find-a-dentist/results/${enc}?distance=${r}`;
+    try {
+      await page.goto(enforce, { waitUntil: "domcontentloaded", timeout: 20000 });
+      await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+      await page.waitForTimeout(900);
+      const moreDom = await collectDetailLinksFromDom(page);
+      moreDom.forEach((u) => urls.add(u));
+    } catch {}
+  }
+
+  page.off("response", handler);
+  return Array.from(urls);
 }
 
 async function discoverDetailUrlsWithPlaywright(postcode, radiusMiles) {
@@ -285,52 +297,63 @@ async function discoverDetailUrlsWithPlaywright(postcode, radiusMiles) {
   const browser = await chromium.launch({
     headless: String(HEADLESS).toLowerCase() !== "false",
     slowMo: Number(PW_SLOWMO) || 0,
-    args: [
-      "--disable-blink-features=AutomationControlled",
-      "--no-sandbox",
-      "--disable-gpu",
-      "--disable-dev-shm-usage"
-    ]
+    args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"]
   });
-  const context = await browser.newContext(stealthContextOptions());
+  const context = await browser.newContext({
+    userAgent: UA,
+    locale: "en-GB",
+    viewport: { width: 1366, height: 900 },
+    timezoneId: "Europe/London"
+  });
   const page = await context.newPage();
-  await applyStealth(page);
 
   const urls = new Set();
   try {
-    // FAST PATH: path-style URLs
+    // 1) Fast path
     const quick = await tryPathResults(page, postcode, radiusMiles);
     quick.forEach((u) => urls.add(u));
 
-    // FALLBACK: interactive search
+    // 2) Interactive fallback
     if (urls.size === 0) {
-      await performInteractiveSearch(page, postcode, radiusMiles);
-      let links = await collectDetailLinksOnPage(page);
-      links.forEach((u) => urls.add(u));
+      const interactive = await performInteractiveSearch(page, postcode, radiusMiles);
+      interactive.forEach((u) => urls.add(u));
 
-      // Paginate via visible "Next"
+      // "Next" pagination if present
       for (let i = 0; i < 8; i++) {
         const next = page.locator('a[rel="next"], a[aria-label="Next"], a:has-text("Next")').first();
         if ((await next.count()) === 0) break;
         const prev = urls.size;
+
+        // sniff during next page too
+        const handler = page.on("response", async (resp) => {
+          try {
+            const ctype = (resp.headers()["content-type"] || "").toLowerCase();
+            if (!/json|html|text/.test(ctype)) return;
+            const body = await resp.text().catch(() => "");
+            addFromText(urls, body);
+          } catch {}
+        });
+
         await next.click({ timeout: 5000 }).catch(() => {});
         await page.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => {});
-        await page.waitForTimeout(900);
-        links = await collectDetailLinksOnPage(page);
-        links.forEach((u) => urls.add(u));
+        await page.waitForLoadState("networkidle", { timeout: 10000 }).catch(() => {});
+        await page.waitForTimeout(800);
+        const dom = await collectDetailLinksFromDom(page);
+        dom.forEach((u) => urls.add(u));
+
+        page.off("response", handler);
         if (urls.size === prev) break;
       }
-      await dumpDebug(page, "results_last");
     }
   } catch (e) {
     console.log("[DISCOVERY ERROR]", e?.message || e);
-    await dumpDebug(page, "error_state");
   } finally {
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
   }
 
   console.log(`[DISCOVERY] Playwright collected ${urls.size} detail URL(s).`);
+  if (DEBUG_DISC) console.log("[DISCOVERY] Sample URLs:", Array.from(urls).slice(0, 5));
   return Array.from(urls);
 }
 
