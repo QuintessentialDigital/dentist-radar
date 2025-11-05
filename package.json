@@ -7,7 +7,6 @@
   "scripts": {
     "start": "node -e \"console.log('Node:',process.version,'File?',!!global.File)\" && node server.js",
     "scan": "node scanner.js",
-    "postinstall": "npx playwright install --with-deps chromium"
   },
   "dependencies": {
     "axios": "^1.7.0",
