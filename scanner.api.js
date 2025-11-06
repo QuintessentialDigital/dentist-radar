@@ -1,12 +1,12 @@
 /**
- * DentistRadar — scanner.api.js (NHS API + Appointments acceptance) — v5.0
+ * DentistRadar — scanner.api.js (v5.1)
  * Discovery:
  *   - postcode -> lat/lon (postcodes.io)
- *   - NHS API (env-configurable) -> array of practices with {url, name, lat, lon}
+ *   - NHS API (configurable endpoint) -> practice detail URLs
  * Detection:
- *   - fetch practice detail page; hop to /appointments; parse text; classify
+ *   - fetch practice detail; hop to /appointments; parse text; classify
  * Alerts:
- *   - Postmark email; per-day dedupe via EmailLog
+ *   - Postmark email; per-day de-dupe via EmailLog
  *
  * Exports: runScan(opts?) — same signature your server.js expects
  */
@@ -17,18 +17,22 @@ import mongoose from "mongoose";
 import pLimit from "p-limit";
 import dayjs from "dayjs";
 
-/* ── ENV ────────────────────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────
+   ENV
+   ────────────────────────────────────────────────────────────────── */
 const {
   MONGO_URI,
   EMAIL_FROM,
   POSTMARK_SERVER_TOKEN,
   POSTMARK_MESSAGE_STREAM = "outbound",
 
-  NHS_API_ENDPOINT,                // e.g. https://api.nhs.uk/... (must accept lat/lon/radius query)
-  NHS_API_KEY,
+  // NHS API configuration (you set these in Render)
+  NHS_API_ENDPOINT,                     // e.g. https://api.nhs.uk/service-search/search?api-version=2&type=dentist
+  NHS_API_KEY,                          // your subscription key (Primary)
   NHS_API_KEY_HEADER = "subscription-key",
-  NHS_API_RADIUS_UNIT = "miles",   // miles | km
+  NHS_API_RADIUS_UNIT = "miles",        // miles | km
 
+  // Scanner behaviour
   MAX_CONCURRENCY = "6",
   INCLUDE_CHILD_ONLY = "false"
 } = process.env;
@@ -36,18 +40,21 @@ const {
 if (!MONGO_URI) throw new Error("MONGO_URI is required");
 if (!EMAIL_FROM) throw new Error("EMAIL_FROM is required");
 if (!POSTMARK_SERVER_TOKEN) throw new Error("POSTMARK_SERVER_TOKEN is required");
-if (!NHS_API_ENDPOINT) throw new Error("NHS_API_ENDPOINT is required");
 if (!NHS_API_KEY) throw new Error("NHS_API_KEY is required");
+// NHS_API_ENDPOINT can be missing — we auto-fallback to known endpoints
 
 const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 6);
 const INCLUDE_CHILD = String(INCLUDE_CHILD_ONLY).toLowerCase() === "true";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36";
 
-/* ── Mongo models (guarded) ─────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────
+   Mongo models (guarded)
+   ────────────────────────────────────────────────────────────────── */
 function model(name, schema) {
   return mongoose.models[name] || mongoose.model(name, schema);
 }
+
 const WatchSchema = new mongoose.Schema(
   { email: String, postcode: String, radius: Number },
   { collection: "Watch", timestamps: true, versionKey: false }
@@ -69,9 +76,12 @@ async function connectMongo(uri) {
   console.log("✅ MongoDB connected");
 }
 
-/* ── Utils ──────────────────────────────────────────────────────────── */
-const normText = (s) => String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
-const normPc   = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
+/* ────────────────────────────────────────────────────────────────────
+   Utils
+   ────────────────────────────────────────────────────────────────── */
+const normText = (s) =>
+  String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
 const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -87,7 +97,9 @@ async function httpGet(url) {
   }
 }
 
-/* ── Postcode → lat/lon ─────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────
+   Postcode → lat/lon (postcodes.io)
+   ────────────────────────────────────────────────────────────────── */
 async function geocodePostcode(postcode) {
   const url = `https://api.postcodes.io/postcodes/${encodeURIComponent(postcode)}`;
   const { data } = await axios.get(url, { timeout: 10000 });
@@ -95,27 +107,30 @@ async function geocodePostcode(postcode) {
   return { lat: data.result.latitude, lon: data.result.longitude };
 }
 
-/* ── NHS API: flexible field extraction ─────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────
+   NHS API mapping helpers
+   ────────────────────────────────────────────────────────────────── */
 function pluck(obj, paths) {
   for (const p of paths) {
-    const v = p.split(".").reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), obj);
+    const v = p.split(".").reduce(
+      (acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined),
+      obj
+    );
     if (v !== undefined && v !== null) return v;
   }
   return undefined;
 }
 
-// find public detail URL, name, and coords in a wide variety of payloads
+// Map generic NHS API records to { url, name, lat, lon }
 function mapPractice(rec) {
-  // Common place for URL across NHS payloads
   const url =
     pluck(rec, ["url", "Url", "URI", "Uri", "link", "Link", "website", "Website", "publicWebsite", "PublicWebsite"]) ||
     pluck(rec, ["_links.self.href", "_links.website.href"]) ||
     pluck(rec, ["organisationUrl", "serviceUrl"]);
 
-  // name/label
-  const name = pluck(rec, ["name", "Name", "organisationName", "OrganisationName", "title", "Title"]);
+  const name =
+    pluck(rec, ["name", "Name", "organisationName", "OrganisationName", "title", "Title"]) || "";
 
-  // coordinates
   const lat =
     pluck(rec, ["lat", "latitude", "Latitude", "location.lat", "location.latitude", "geo.lat", "geo.latitude"]) ??
     pluck(rec, ["position.lat", "position.latitude", "coordinates.lat"]);
@@ -126,52 +141,89 @@ function mapPractice(rec) {
   return { url, name, lat: Number(lat), lon: Number(lon) };
 }
 
-async function fetchPracticesFromNhsApi(lat, lon, radiusMiles) {
-  // Convert radius if API expects km
-  const radius = Number(radiusMiles) || 10;
-  const r = NHS_API_RADIUS_UNIT.toLowerCase() === "km" ? radius * 1.60934 : radius;
-
-  // We assume the NHS endpoint supports lat/lon/radius as query params.
-  // Example shape: GET {endpoint}?lat=..&lon=..&radius=..&type=dentist
-  const endpoint = new URL(NHS_API_ENDPOINT);
-  const qs = endpoint.searchParams;
-  // Only set if not already in the configured endpoint
-  if (!qs.has("lat"))    qs.set("lat", String(lat));
-  if (!qs.has("lon"))    qs.set("lon", String(lon));
-  if (!qs.has("radius")) qs.set("radius", String(r));
-  if (!qs.has("type"))   qs.set("type", "dentist");
-
-  const url = endpoint.toString();
+/* ────────────────────────────────────────────────────────────────────
+   NHS API client (resilient; auto-fallback endpoints)
+   ────────────────────────────────────────────────────────────────── */
+function buildHeaders() {
   const headers = {
     "User-Agent": UA,
     "Accept": "application/json",
-    "Accept-Language": "en-GB,en;q=0.9",
+    "Accept-Language": "en-GB,en;q=0.9"
   };
-  headers[NHS_API_KEY_HEADER] = NHS_API_KEY;
-
-  const res = await axios.get(url, { headers, timeout: 15000 }).catch((e) => {
-    const msg = e?.response?.data || e?.message;
-    throw new Error("nhs_api_error: " + JSON.stringify(msg).slice(0, 300));
-  });
-
-  const payload = res.data;
-  // Normalise to array
-  const items = Array.isArray(payload) ? payload :
-                Array.isArray(payload?.items) ? payload.items :
-                Array.isArray(payload?.results) ? payload.results :
-                Array.isArray(payload?.value) ? payload.value :
-                Array.isArray(payload?.organisations) ? payload.organisations :
-                [];
-
-  const mapped = items.map(mapPractice)
-    .filter(p => p.url && isFinite(p.lat) && isFinite(p.lon));
-
-  // Ensure we point to the public detail page (some APIs return homepages)
-  // If it's already on nhs.uk/services/dentists, keep as-is. Otherwise accept the URL (some NHS APIs return the public detail URL outright).
-  return mapped.map(p => ({ ...p, url: p.url.split("#")[0] }));
+  headers[NHS_API_KEY_HEADER || "subscription-key"] = NHS_API_KEY;
+  return headers;
 }
 
-/* ── Appointments fetch + acceptance classification ─────────────────── */
+function appendGeo(url, { lat, lon, radius }) {
+  const u = new URL(url);
+  if (!u.searchParams.has("lat")) u.searchParams.set("lat", String(lat));
+  if (!u.searchParams.has("lon")) u.searchParams.set("lon", String(lon));
+  if (!u.searchParams.has("radius")) u.searchParams.set("radius", String(radius));
+  if (!u.searchParams.has("type")) u.searchParams.set("type", "dentist");
+  return u.toString();
+}
+
+async function fetchPracticesFromNhsApi(lat, lon, radiusMiles) {
+  const radius = Number(radiusMiles) || 10;
+  const r = NHS_API_RADIUS_UNIT.toLowerCase() === "km" ? radius * 1.60934 : radius;
+
+  const headers = buildHeaders();
+
+  const candidates = [
+    // Your configured endpoint (if provided)
+    ...(NHS_API_ENDPOINT ? [appendGeo(NHS_API_ENDPOINT, { lat, lon, radius: r })] : []),
+    // Known common endpoints (v2)
+    appendGeo("https://api.nhs.uk/service-search/search?api-version=2&type=dentist", { lat, lon, radius: r }),
+    appendGeo("https://api.nhs.uk/service-search/organisations?api-version=2&type=dentist", { lat, lon, radius: r })
+  ];
+
+  let payload = null;
+  let lastErr = null;
+
+  for (const url of candidates) {
+    try {
+      const res = await axios.get(url, { headers, timeout: 15000 });
+      payload = res.data;
+      break;
+    } catch (e) {
+      lastErr = e;
+      const code = e?.response?.status;
+      // Fail fast on auth errors
+      if (code === 401 || code === 403) {
+        const msg = e?.response?.data || e.message || "unauthorized";
+        throw new Error("nhs_api_auth_error: " + (typeof msg === "string" ? msg : JSON.stringify(msg).slice(0, 300)));
+      }
+      // Try next candidate otherwise (404/400/etc.)
+    }
+  }
+
+  if (!payload) {
+    const msg = lastErr?.response?.data || lastErr?.message || "unknown";
+    throw new Error("nhs_api_error: " + (typeof msg === "string" ? msg : JSON.stringify(msg).slice(0, 300)));
+  }
+
+  const items =
+    Array.isArray(payload) ? payload :
+    Array.isArray(payload?.items) ? payload.items :
+    Array.isArray(payload?.results) ? payload.results :
+    Array.isArray(payload?.value) ? payload.value :
+    Array.isArray(payload?.organisations) ? payload.organisations :
+    [];
+
+  const mapped = items
+    .map(mapPractice)
+    .filter((p) => p.url && isFinite(p.lat) && isFinite(p.lon))
+    .map((p) => ({ ...p, url: String(p.url).split("#")[0] }));
+
+  // Prefer public NHS dentist detail URLs if present; otherwise keep whatever URL we have
+  const urls = mapped.map((m) => m.url);
+  const dedup = Array.from(new Set(urls));
+  return dedup;
+}
+
+/* ────────────────────────────────────────────────────────────────────
+   Appointments → acceptance
+   ────────────────────────────────────────────────────────────────── */
 async function loadAppointmentsHtml(detailUrl) {
   const html = await httpGet(detailUrl);
   if (!html) return null;
@@ -184,7 +236,7 @@ async function loadAppointmentsHtml(detailUrl) {
     $('a[href*="appointments-and-opening-times"]').attr("href") ||
     $('a[href*="opening-times"]').attr("href");
 
-  if (!href) return html; // fall back to main detail page
+  if (!href) return html; // fall back to detail page if no explicit link
   const apptUrl = new URL(href, detailUrl).toString();
   return (await httpGet(apptUrl)) || html;
 }
@@ -197,26 +249,35 @@ function extractAppointmentsText(html) {
     const heading = normText($(h).text()).toLowerCase();
     if (/appointment|opening\s+times/.test(heading)) {
       const section = [];
-      let cur = $(h).next(), hops = 0;
+      let cur = $(h).next(),
+        hops = 0;
       while (cur.length && hops < 20) {
         const tag = (cur[0].tagName || "").toLowerCase();
         if (/^h[1-6]$/.test(tag)) break;
-        if (["p","div","li","ul","ol"].includes(tag)) section.push(normText(cur.text()));
-        cur = cur.next(); hops++;
+        if (["p", "div", "li", "ul", "ol"].includes(tag)) section.push(normText(cur.text()));
+        cur = cur.next();
+        hops++;
       }
       const joined = section.join(" ").trim();
       if (joined) buckets.push(joined);
     }
   });
 
-  const wrappers = ["main", ".nhsuk-main-wrapper", "#content", "#maincontent", ".nhsuk-width-container", ".nhsuk-u-reading-width"];
+  const wrappers = [
+    "main",
+    ".nhsuk-main-wrapper",
+    "#content",
+    "#maincontent",
+    ".nhsuk-width-container",
+    ".nhsuk-u-reading-width"
+  ];
   for (const sel of wrappers) {
     const t = normText($(sel).text());
     if (t && t.length > 120) buckets.push(t);
   }
 
   if (!buckets.length) buckets.push(normText($.root().text()));
-  buckets.sort((a,b)=> b.length - a.length);
+  buckets.sort((a, b) => b.length - a.length);
   return buckets[0] || "";
 }
 
@@ -238,7 +299,9 @@ function classifyAcceptance(text) {
   return "NONE";
 }
 
-/* ── Email (Postmark) ──────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────
+   Email via Postmark
+   ────────────────────────────────────────────────────────────────── */
 async function sendEmail(toList, subject, html) {
   if (!toList?.length) return;
   try {
@@ -253,33 +316,27 @@ async function sendEmail(toList, subject, html) {
   }
 }
 
-/* ── Discovery via NHS API ─────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────
+   One job
+   ────────────────────────────────────────────────────────────────── */
 async function discoverDetailUrlsViaNhsApi(postcode, radiusMiles) {
-  // 1) Geocode
   const { lat, lon } = await geocodePostcode(postcode);
-
-  // 2) NHS API
-  const practices = await fetchPracticesFromNhsApi(lat, lon, radiusMiles);
-
-  // 3) Normalize to public detail URLs (prefer nhs.uk/services/dentists if present)
-  const urls = [];
-  for (const p of practices) {
-    // If the API returns a non-NHS website, we still attempt it (many link back to NHS pages internally).
-    if (typeof p.url === "string" && p.url.startsWith("http")) {
-      urls.push(p.url);
-    }
-  }
-  // De-dupe
-  return Array.from(new Set(urls));
+  const urls = await fetchPracticesFromNhsApi(lat, lon, radiusMiles);
+  return urls;
 }
 
-/* ── One job ───────────────────────────────────────────────────────── */
 async function scanJob({ postcode, radiusMiles, recipients }) {
   console.log(`\n--- Scan (NHS API): ${postcode} (${radiusMiles} miles) ---`);
 
-  const detailUrls = await discoverDetailUrlsViaNhsApi(postcode, radiusMiles);
-  console.log(`[DISCOVERY] NHS API returned ${detailUrls.length} candidate URL(s).`);
+  let detailUrls = [];
+  try {
+    detailUrls = await discoverDetailUrlsViaNhsApi(postcode, radiusMiles);
+  } catch (e) {
+    console.error("❌ NHS discovery error:", e.message || e);
+    return { accepting: [], childOnly: [] };
+  }
 
+  console.log(`[DISCOVERY] NHS API returned ${detailUrls.length} candidate URL(s).`);
   if (!detailUrls.length) return { accepting: [], childOnly: [] };
 
   const limit = pLimit(CONCURRENCY);
@@ -287,28 +344,39 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
   const childOnly = [];
   const dateKey = dayjs().format("YYYY-MM-DD");
 
-  await Promise.all(detailUrls.map((url) => limit(async () => {
-    const already = await EmailLog.findOne({ practiceUrl: url, dateKey }).lean();
-    if (already) return;
+  await Promise.all(
+    detailUrls.map((url) =>
+      limit(async () => {
+        try {
+          const already = await EmailLog.findOne({ practiceUrl: url, dateKey }).lean();
+          if (already) return;
 
-    const apptHtml = await loadAppointmentsHtml(url);
-    if (!apptHtml) return;
+          const apptHtml = await loadAppointmentsHtml(url);
+          if (!apptHtml) return;
 
-    const verdict = classifyAcceptance(extractAppointmentsText(apptHtml));
-    if (verdict === "ACCEPTING") {
-      accepting.push(url);
-      await EmailLog.create({ practiceUrl: url, dateKey, status: "ACCEPTING" });
-    } else if (verdict === "CHILD_ONLY" && INCLUDE_CHILD) {
-      childOnly.push(url);
-      await EmailLog.create({ practiceUrl: url, dateKey, status: "CHILD_ONLY" });
-    }
-  })));
+          const verdict = classifyAcceptance(extractAppointmentsText(apptHtml));
+          if (verdict === "ACCEPTING") {
+            accepting.push(url);
+            await EmailLog.create({ practiceUrl: url, dateKey, status: "ACCEPTING" });
+          } else if (verdict === "CHILD_ONLY" && INCLUDE_CHILD) {
+            childOnly.push(url);
+            await EmailLog.create({ practiceUrl: url, dateKey, status: "CHILD_ONLY" });
+          }
+        } catch (err) {
+          // Keep scanning other URLs
+        }
+      })
+    )
+  );
 
   if ((accepting.length || childOnly.length) && recipients?.length) {
     const render = (arr, label) =>
       arr.length ? `<b>${label}:</b><br>${arr.map((u) => `<a href="${u}">${u}</a>`).join("<br>")}<br><br>` : "";
 
-    const subject = `DentistRadar — ${postcode} (${radiusMiles} mi): ${accepting.length} accepting${INCLUDE_CHILD ? `, ${childOnly.length} child-only` : ""}`;
+    const subject = `DentistRadar — ${postcode} (${radiusMiles} mi): ${accepting.length} accepting${
+      INCLUDE_CHILD ? `, ${childOnly.length} child-only` : ""
+    }`;
+
     const body = `<div style="font-family:system-ui;-webkit-font-smoothing:antialiased">
       <h3 style="margin:0 0 8px">DentistRadar — ${postcode} (${radiusMiles} mi)</h3>
       <div style="color:#666;margin:0 0 10px">${dayjs().format("YYYY-MM-DD HH:mm")}</div>
@@ -317,6 +385,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
       <hr style="border:0;border-top:1px solid #eee;margin:12px 0">
       <div style="font-size:12px;color:#777">We read the NHS <b>Appointments</b> page text. Please call the practice to confirm before travelling.</div>
     </div>`;
+
     await sendEmail(recipients, subject, body);
   } else {
     console.log("No accepting practices found or no recipients.");
@@ -325,7 +394,9 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
   return { accepting, childOnly };
 }
 
-/* ── Runner (export) ───────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────
+   Runner (export)
+   ────────────────────────────────────────────────────────────────── */
 async function buildJobs(filterPostcode) {
   const match = filterPostcode ? { postcode: normPc(filterPostcode) } : {};
   const rows = await Watch.aggregate([
@@ -342,6 +413,7 @@ async function buildJobs(filterPostcode) {
 
 export async function runScan(opts = {}) {
   await connectMongo(MONGO_URI);
+  console.log("🩺 DentistRadar: Using NHS API scanner");
   const jobs = await buildJobs(opts.postcode);
   if (!jobs.length) {
     console.log("[RESULT] No Watch entries.");
@@ -366,5 +438,10 @@ export async function runScan(opts = {}) {
 export default { runScan };
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  runScan().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
+  runScan()
+    .then(() => process.exit(0))
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
 }
