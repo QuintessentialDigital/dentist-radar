@@ -1,8 +1,8 @@
 /**
- * DentistRadar — scanner.api.js (v5.3)
+ * DentistRadar — scanner.api.js (v5.3.1)
  * NHS API discovery + Appointments acceptance parsing
  * - postcode → lat/lon (postcodes.io)
- * - NHS API (auto-discovers endpoint & header)
+ * - NHS API (auto-discovers endpoint & header; key in header AND query)
  * - fetch practice detail → hop to /appointments → classify
  * - Postmark email + per-day dedupe
  */
@@ -22,7 +22,7 @@ const {
   POSTMARK_SERVER_TOKEN,
   POSTMARK_MESSAGE_STREAM = "outbound",
 
-  NHS_API_ENDPOINT,
+  NHS_API_ENDPOINT,                    // optional; we auto-fallback to known endpoints
   NHS_API_KEY,
   NHS_API_KEY_HEADER = "subscription-key",
   NHS_API_RADIUS_UNIT = "miles",
@@ -31,9 +31,7 @@ const {
   INCLUDE_CHILD_ONLY = "false"
 } = process.env;
 
-const MASK = (s) =>
-  s ? `${String(s).slice(0, 4)}…${String(s).slice(-4)}` : "∅";
-
+const MASK = (s) => (s ? `${String(s).slice(0, 4)}…${String(s).slice(-4)}` : "∅");
 console.log("NHS API key loaded:", MASK(NHS_API_KEY));
 console.log("NHS header name:", NHS_API_KEY_HEADER || "subscription-key");
 
@@ -148,8 +146,7 @@ function appendGeo(u, { lat, lon, radius, unit = "miles" }) {
   if (!url.searchParams.has("lon")) url.searchParams.set("lon", String(lon));
   if (!url.searchParams.has("radius")) url.searchParams.set("radius", String(radius));
   if (!url.searchParams.has("type")) url.searchParams.set("type", "dentist");
-  if (!url.searchParams.has("units") && unit.startsWith("km"))
-    url.searchParams.set("units", "km");
+  if (!url.searchParams.has("units") && unit.startsWith("km")) url.searchParams.set("units", "km");
   return url;
 }
 
@@ -179,10 +176,11 @@ async function fetchPracticesFromNhsApi(lat, lon, radiusMiles) {
     for (const headerName of headerNameCandidates) {
       const url = appendGeo(base, { lat, lon, radius: r }).toString();
 
-      // add key also as query param (some APIs require this)
+      // add key as query param too
       const urlObj = new URL(url);
-      if (!urlObj.searchParams.has(headerName))
-        urlObj.searchParams.set(headerName, NHS_API_KEY);
+      if (!urlObj.searchParams.has(headerName)) urlObj.searchParams.set(headerName, NHS_API_KEY);
+      // also ensure at least "subscription-key" exists as a fallback param
+      if (!urlObj.searchParams.has("subscription-key")) urlObj.searchParams.set("subscription-key", NHS_API_KEY);
       const finalUrl = urlObj.toString();
 
       const headers = {
@@ -248,7 +246,7 @@ async function loadAppointmentsHtml(detailUrl) {
     $('a[href*="appointments-and-opening-times"]').attr("href") ||
     $('a[href*="opening-times"]').attr("href");
 
-  if (!href) return html;
+  if (!href) return html; // fall back to detail page if no explicit link
   const apptUrl = new URL(href, detailUrl).toString();
   return (await httpGet(apptUrl)) || html;
 }
@@ -261,6 +259,7 @@ function extractAppointmentsText(html) {
 
 function classifyAcceptance(text) {
   const t = normText(text).toLowerCase();
+
   const childOnly =
     (t.includes("only accepts") || t.includes("currently only accepts") || t.includes("accepting only")) &&
     (t.includes("children") || /under\s*18/.test(t));
@@ -338,7 +337,9 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
             childOnly.push(url);
             await EmailLog.create({ practiceUrl: url, dateKey, status: "CHILD_ONLY" });
           }
-        } catch {}
+        } catch {
+          // continue with next
+        }
       })
     )
   );
@@ -389,8 +390,7 @@ export async function runScan(opts = {}) {
   if (!jobs.length) {
     console.log("[RESULT] No Watch entries.");
     return { jobs: 0, summaries: [] };
-  }
-
+    }
   const summaries = [];
   for (const job of jobs) {
     const res = await scanJob(job);
@@ -409,4 +409,10 @@ export async function runScan(opts = {}) {
 export default { runScan };
 
 if (import.meta.url === `file://${process.argv[1]}`) {
- 
+  runScan()
+    .then(() => process.exit(0))
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
+}
