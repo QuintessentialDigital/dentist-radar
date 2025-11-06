@@ -11,7 +11,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import mongoose from "mongoose";
 
-import { runScan } from "./scanner.api.js";
+import { runScan } from "./scanner.js";
 import { connectMongo, Watch, Practice, EmailLog, User } from "./models.js";
 
 dotenv.config();
