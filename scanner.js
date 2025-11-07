@@ -1,5 +1,5 @@
 /**
- * DentistRadar — scanner.js (v6.6)
+ * DentistRadar — scanner.js (v6.6.1)
  * - HTML discovery with stronger browser headers (local)
  * - Optional UK-edge discovery via DISCOVERY_PROXY_URL (Cloudflare/Vercel)
  * - Appointments acceptance parsing + Postmark email + Mongo EmailLog dedupe
@@ -111,7 +111,7 @@ async function httpGet(url, referer = "https://www.nhs.uk/") {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Build NHS results URLs (broad variants)
+   Build NHS results URLs (single definition)
 ──────────────────────────────────────────────────────────────── */
 function buildResultUrls(postcode, radius) {
   const pcEnc = encodeURIComponent(postcode);
@@ -254,31 +254,6 @@ async function sendEmail(toList, subject, html) {
 /* ────────────────────────────────────────────────────────────────
    Discovery: local → then proxy if needed
 ──────────────────────────────────────────────────────────────── */
-function buildResultUrls(postcode, radius) {
-  const pcEnc = encodeURIComponent(postcode);
-  const base = "https://www.nhs.uk";
-  const urls = [];
-  const pages = 10;
-  const sizes = [24, 48, 96];
-
-  for (let p = 1; p <= pages; p++) {
-    urls.push(`${base}/service-search/find-a-dentist/results/${pcEnc}?distance=${radius}${p > 1 ? `&page=${p}` : ""}`);
-    for (const sz of sizes)
-      urls.push(`${base}/service-search/find-a-dentist/results/${pcEnc}?distance=${radius}${p > 1 ? `&page=${p}` : ""}&results=${sz}`);
-  }
-  for (let p = 1; p <= pages; p++)
-    urls.push(`${base}/service-search/find-a-dentist/results/${pcEnc}&distance=${radius}${p > 1 ? `&page=${p}` : ""}`);
-  for (let p = 1; p <= pages; p++) {
-    urls.push(`${base}/service-search/find-a-dentist/results?postcode=${pcEnc}&distance=${radius}${p > 1 ? `&page=${p}` : ""}`);
-    for (const sz of sizes)
-      urls.push(`${base}/service-search/find-a-dentist/results?postcode=${pcEnc}&distance=${radius}${p > 1 ? `&page=${p}` : ""}&results=${sz}`);
-  }
-  for (let p = 1; p <= pages; p++)
-    urls.push(`${base}/service-search/other-services/Dentists/Location/${pcEnc}?results=24&distance=${radius}${p > 1 ? `&page=${p}` : ""}`);
-
-  return Array.from(new Set(urls));
-}
-
 async function discoverDetailUrlsLocal(postcode, radiusMiles) {
   const urlsToTry = buildResultUrls(postcode, radiusMiles);
   const detailSet = new Set();
