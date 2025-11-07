@@ -1,9 +1,9 @@
 /**
- * DentistRadar — scanner.js (v6.5-lite)
- * HTML-first scanner WITHOUT axios-cookiejar-support/tough-cookie.
- * - Manual cookie handling (consent + Set-Cookie capture)
- * - v1.9-style discovery + acceptance parsing
- * - Postmark email + per-day dedupe in Mongo
+ * DentistRadar — scanner.js (v6.6)
+ * Robust discovery WITHOUT NHS results pages:
+ *  - NHS site search (nhs-meta collection)
+ *  - DuckDuckGo HTML: site:nhs.uk/services/dentists "<OUTWARD>"
+ * Then: follow to /appointments and classify acceptance; email via Postmark; per-day dedupe.
  */
 
 import axios from "axios";
@@ -33,82 +33,6 @@ if (!POSTMARK_SERVER_TOKEN) throw new Error("POSTMARK_SERVER_TOKEN is required")
 const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 6);
 const INCLUDE_CHILD = String(INCLUDE_CHILD_ONLY).toLowerCase() === "true";
 const DEBUG = String(DEBUG_DISCOVERY).toLowerCase() === "true";
-
-/* ────────────────────────────────────────────────────────────────
-   HTTP client (manual cookie handling)
-──────────────────────────────────────────────────────────────── */
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36";
-
-const BASE_HEADERS = {
-  "User-Agent": UA,
-  "Accept-Language": "en-GB,en;q=0.9",
-  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Upgrade-Insecure-Requests": "1",
-  "Cache-Control": "no-cache",
-  Pragma: "no-cache",
-  "Sec-Fetch-Site": "same-origin",
-  "Sec-Fetch-Mode": "navigate",
-  "Sec-Fetch-Dest": "document",
-};
-
-let cookieJarString = "nhsuk-cookie-consent=accepted"; // start with consent
-
-function mergeSetCookie(setCookieHeader) {
-  if (!setCookieHeader) return;
-  const arr = Array.isArray(setCookieHeader) ? setCookieHeader : [setCookieHeader];
-  const pairs = [];
-  for (const sc of arr) {
-    // Take the first "key=value" before ";"
-    const kv = String(sc).split(";")[0];
-    if (!kv) continue;
-    const [k, v] = kv.split("=");
-    if (!k || !v) continue;
-    // Replace existing cookie with same name
-    const name = k.trim();
-    const value = v.trim();
-    const existing = cookieJarString
-      .split(";")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .filter((c) => !c.startsWith(name + "="));
-    cookieJarString = [...existing, `${name}=${value}`].join("; ");
-  }
-}
-
-async function httpGet(url, referer = "https://www.nhs.uk/") {
-  try {
-    const res = await axios.get(url, {
-      timeout: 20000,
-      headers: { ...BASE_HEADERS, Referer: referer, Cookie: cookieJarString },
-      maxRedirects: 5,
-      validateStatus: (s) => s >= 200 && s < 500,
-    });
-    mergeSetCookie(res.headers["set-cookie"]);
-    const body = String(res.data || "");
-    if (res.status >= 400) return null;
-    if (!body || body.length < 200) return null;
-    return body;
-  } catch {
-    return null;
-  }
-}
-
-async function httpPostJson(url, body) {
-  try {
-    const res = await axios.post(url, body, {
-      timeout: 15000,
-      headers: {
-        "X-Postmark-Server-Token": POSTMARK_SERVER_TOKEN,
-        "Content-Type": "application/json",
-      },
-      validateStatus: (s) => s >= 200 && s < 500,
-    });
-    return res;
-  } catch (e) {
-    return { ok: false, error: e?.message };
-  }
-}
 
 /* ────────────────────────────────────────────────────────────────
    Mongo Models
@@ -141,94 +65,137 @@ async function connectMongo(uri) {
 /* ────────────────────────────────────────────────────────────────
    Utils
 ──────────────────────────────────────────────────────────────── */
+const UA =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36";
+
+const BASE_HEADERS = {
+  "User-Agent": UA,
+  "Accept-Language": "en-GB,en;q=0.9",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Upgrade-Insecure-Requests": "1",
+  "Cache-Control": "no-cache",
+  Pragma: "no-cache",
+};
+
 const normText = (s) =>
   String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
 const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
 const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/* ────────────────────────────────────────────────────────────────
-   Seed consent & pick up site cookies
-──────────────────────────────────────────────────────────────── */
-async function seedConsent() {
-  // Priming request to get real cookies from NHS domain
-  await httpGet("https://www.nhs.uk/");
+function outwardCode(pc) {
+  const m = String(pc || "").trim().toUpperCase().match(/^([A-Z]{1,2}\d[A-Z\d]?)/);
+  return m ? m[1] : String(pc || "").trim().split(/\s+/)[0];
+}
+
+async function httpGet(url, extraHeaders = {}) {
+  try {
+    const res = await axios.get(url, {
+      timeout: 20000,
+      headers: { ...BASE_HEADERS, ...extraHeaders },
+      maxRedirects: 5,
+      validateStatus: (s) => s >= 200 && s < 500,
+    });
+    const body = String(res.data || "");
+    if (res.status >= 400) return null;
+    if (!body || body.length < 150) return null;
+    return body;
+  } catch {
+    return null;
+  }
+}
+
+async function postmarkEmail(toList, subject, html) {
+  if (!toList?.length) return;
+  try {
+    await axios.post(
+      "https://api.postmarkapp.com/email",
+      { From: EMAIL_FROM, To: toList.join(","), Subject: subject, HtmlBody: html, MessageStream: POSTMARK_MESSAGE_STREAM },
+      { headers: { "X-Postmark-Server-Token": POSTMARK_SERVER_TOKEN, "Content-Type": "application/json" }, timeout: 12000 }
+    );
+    console.log(`📧 Email sent to ${toList.length} — ${subject}`);
+  } catch (e) {
+    console.log("Postmark error:", e?.response?.data || e.message);
+  }
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Build NHS Results URLs
+   Discovery: NHS site search
+   Example: https://www.nhs.uk/search?collection=nhs-meta&query=dentist%20RG41
 ──────────────────────────────────────────────────────────────── */
-function buildResultUrls(postcode, radius) {
-  const pcEnc = encodeURIComponent(postcode);
-  const base = "https://www.nhs.uk";
+async function discoverViaNhsSearch(pc, radiusMiles) {
+  // radiusMiles is not used directly (site search is keyword based), but we bias by outward code
+  const oc = outwardCode(pc);
+  const q = encodeURIComponent(`dentist ${oc}`);
   const urls = [];
-  const pages = 10;
-  const resultSizes = [24, 48, 96];
-
-  // /results/<PC>?distance=R
-  for (let page = 1; page <= pages; page++) {
-    urls.push(`${base}/service-search/find-a-dentist/results/${pcEnc}?distance=${radius}${page > 1 ? `&page=${page}` : ""}`);
-    for (const size of resultSizes) {
-      urls.push(`${base}/service-search/find-a-dentist/results/${pcEnc}?distance=${radius}${page > 1 ? `&page=${page}` : ""}&results=${size}`);
-    }
+  for (let page = 1; page <= 5; page++) {
+    const u = `https://www.nhs.uk/search?collection=nhs-meta&query=${q}&page=${page}`;
+    urls.push(u);
   }
-
-  // /results/<PC>&distance=R
-  for (let page = 1; page <= pages; page++) {
-    urls.push(`${base}/service-search/find-a-dentist/results/${pcEnc}&distance=${radius}${page > 1 ? `&page=${page}` : ""}`);
-  }
-
-  // querystring variant
-  for (let page = 1; page <= pages; page++) {
-    urls.push(`${base}/service-search/find-a-dentist/results?postcode=${pcEnc}&distance=${radius}${page > 1 ? `&page=${page}` : ""}`);
-    for (const size of resultSizes) {
-      urls.push(`${base}/service-search/find-a-dentist/results?postcode=${pcEnc}&distance=${radius}${page > 1 ? `&page=${page}` : ""}&results=${size}`);
-    }
-  }
-
-  // legacy “other-services”
-  for (let page = 1; page <= pages; page++) {
-    urls.push(`${base}/service-search/other-services/Dentists/Location/${pcEnc}?results=24&distance=${radius}${page > 1 ? `&page=${page}` : ""}`);
-  }
-
-  return Array.from(new Set(urls));
-}
-
-/* ────────────────────────────────────────────────────────────────
-   Extract detail URLs from results HTML
-──────────────────────────────────────────────────────────────── */
-function extractDetailUrlsFromResults(html) {
-  const $ = cheerio.load(html);
   const out = new Set();
+  for (const u of urls) {
+    const html = await httpGet(u, { Referer: "https://www.nhs.uk/" });
+    if (!html) continue;
+    const $ = cheerio.load(html);
+    // typical result anchors
+    $('a[href^="https://www.nhs.uk/services/dentists/"], a[href^="/services/dentists/"]').each((_, a) => {
+      const href = $(a).attr("href") || "";
+      const abs = href.startsWith("http") ? href : `https://www.nhs.uk${href.startsWith("/") ? "" : "/"}${href}`;
+      if (/^https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(abs)) out.add(abs.split("#")[0]);
+    });
 
-  const push = (href) => {
-    if (!href) return;
-    const abs = href.startsWith("http") ? href : `https://www.nhs.uk${href.startsWith("/") ? "" : "/"}${href}`;
-    if (/^https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(abs)) out.add(abs.split("#")[0]);
-  };
+    // also crawl any hidden script blobs for links
+    $('script:not([src])').each((_, s) => {
+      const txt = $(s).html() || "";
+      const rx = /https:\/\/www\.nhs\.uk\/services\/dentists\/[A-Za-z0-9\-/%?_.#=]+/g;
+      const matches = txt.match(rx);
+      if (matches) matches.forEach((m) => out.add(m.split("#")[0]));
+    });
 
-  $('a[href*="/services/dentists/"]').each((_, a) => push($(a).attr("href")));
-
-  $('script[type="application/ld+json"], script:not([src])').each((_, s) => {
-    const txt = $(s).text() || "";
-    const rx = /https:\/\/www\.nhs\.uk\/services\/dentists\/[A-Za-z0-9\-/%?_.#=]+/g;
-    const matches = txt.match(rx);
-    if (matches) matches.forEach((m) => out.add(m.split("#")[0]));
-  });
-
-  const raw = $.root().html() || "";
-  const rx2 = /https:\/\/www\.nhs\.uk\/services\/dentists\/[A-Za-z0-9\-/%?_.#=]+/g;
-  const hits = raw.match(rx2);
-  if (hits) hits.forEach((m) => out.add(m.split("#")[0]));
-
+    if (DEBUG) console.log(`[NHS SEARCH] ${u} → ${out.size} unique links so far`);
+    await sleep(120);
+    if (out.size >= 120) break;
+  }
   return Array.from(out);
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Appointments → Acceptance
+   Discovery: DuckDuckGo HTML
+   Example: https://duckduckgo.com/html/?q=site%3Anhs.uk%2Fservices%2Fdentists%20%22RG41%22
+──────────────────────────────────────────────────────────────── */
+async function discoverViaDuckDuckGo(pc, radiusMiles) {
+  const oc = outwardCode(pc);
+  const q = encodeURIComponent(`site:nhs.uk/services/dentists "${oc}"`);
+  const pages = 5;
+  const out = new Set();
+  for (let p = 0; p < pages; p++) {
+    const u = `https://duckduckgo.com/html/?q=${q}&s=${p * 30}`;
+    const html = await httpGet(u, { Referer: "https://duckduckgo.com/" });
+    if (!html) continue;
+    const $ = cheerio.load(html);
+    // DDG html SERP links usually under .result__a
+    $('a.result__a, a[href^="https://www.nhs.uk/services/dentists/"]').each((_, a) => {
+      const href = ($(a).attr("href") || "").trim();
+      if (!href) return;
+      // DDG sometimes wraps redirect urls; prefer direct nhs links
+      const m = href.match(/https:\/\/www\.nhs\.uk\/services\/dentists\/[A-Za-z0-9\-/%?_.#=]+/);
+      const finalUrl = m ? m[0] : href;
+      if (/^https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(finalUrl)) {
+        out.add(finalUrl.split("#")[0]);
+      }
+    });
+    if (DEBUG) console.log(`[DDG] ${u} → ${out.size} unique links so far`);
+    await sleep(150);
+    if (out.size >= 120) break;
+  }
+  return Array.from(out);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Appointments fetch & acceptance
 ──────────────────────────────────────────────────────────────── */
 async function loadAppointmentsHtml(detailUrl) {
-  const html = await httpGet(detailUrl);
+  const html = await httpGet(detailUrl, { Referer: "https://www.nhs.uk/" });
   if (!html) return null;
 
   const $ = cheerio.load(html);
@@ -239,9 +206,9 @@ async function loadAppointmentsHtml(detailUrl) {
     $('a[href*="appointments-and-opening-times"]').attr("href") ||
     $('a[href*="opening-times"]').attr("href");
 
-  if (!href) return html; // fallback to detail text
+  if (!href) return html; // fall back to detail text
   const apptUrl = new URL(href, detailUrl).toString();
-  const apptHtml = await httpGet(apptUrl, detailUrl);
+  const apptHtml = await httpGet(apptUrl, { Referer: detailUrl });
   return apptHtml || html;
 }
 
@@ -257,7 +224,7 @@ function extractAppointmentsText(html) {
       while (cur.length && hops < 25) {
         const tag = (cur[0].tagName || "").toLowerCase();
         if (/^h[1-6]$/.test(tag)) break;
-        if (["p", "div", "li", "ul", "ol"].includes(tag)) section.push(normText(cur.text()));
+        if (["p","div","li","ul","ol"].includes(tag)) section.push(normText(cur.text()));
         cur = cur.next(); hops++;
       }
       const joined = section.join(" ").trim();
@@ -266,7 +233,7 @@ function extractAppointmentsText(html) {
   });
 
   if (!buckets.length) buckets.push(normText($.root().text()));
-  buckets.sort((a, b) => b.length - a.length);
+  buckets.sort((a,b)=> b.length - a.length);
   return buckets[0] || "";
 }
 
@@ -289,60 +256,34 @@ function classifyAcceptance(text) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Email via Postmark
-──────────────────────────────────────────────────────────────── */
-async function sendEmail(toList, subject, html) {
-  if (!toList?.length) return;
-  try {
-    await httpPostJson("https://api.postmarkapp.com/email", {
-      From: EMAIL_FROM,
-      To: toList.join(","),
-      Subject: subject,
-      HtmlBody: html,
-      MessageStream: POSTMARK_MESSAGE_STREAM,
-    });
-    console.log(`📧 Email sent to ${toList.length} — ${subject}`);
-  } catch (e) {
-    console.log("Postmark error:", e?.response?.data || e.message);
-  }
-}
-
-/* ────────────────────────────────────────────────────────────────
-   Discovery + Scan
+   Scan job
 ──────────────────────────────────────────────────────────────── */
 async function discoverDetailUrls(postcode, radiusMiles) {
-  await seedConsent();
-  const urlsToTry = buildResultUrls(postcode, radiusMiles);
-  const detailSet = new Set();
+  const set = new Set();
 
-  for (const url of urlsToTry) {
-    const html = await httpGet(url);
-    if (!html) continue;
+  // NHS Search first
+  try {
+    const a = await discoverViaNhsSearch(postcode, radiusMiles);
+    a.forEach((u) => set.add(u));
+  } catch {}
 
-    if (DEBUG) {
-      const $ = cheerio.load(html);
-      const title = normText($("title").first().text());
-      console.log(`[PAGE] ${url} — <title>: "${title}" len=${html.length}`);
-    }
-
-    const details = extractDetailUrlsFromResults(html);
-    if (details.length) {
-      console.log(`[PAGE LINKS] ${url} → ${details.length} dentist links`);
-      details.forEach((u) => detailSet.add(u));
-    }
-
-    await sleep(120);
-    if (detailSet.size >= 80) break;
+  // DDG fallback
+  if (set.size < 30) {
+    try {
+      const b = await discoverViaDuckDuckGo(postcode, radiusMiles);
+      b.forEach((u) => set.add(u));
+    } catch {}
   }
 
-  return Array.from(detailSet);
+  // Trim to a sensible cap
+  return Array.from(set).slice(0, 150);
 }
 
 async function scanJob({ postcode, radiusMiles, recipients }) {
-  console.log(`\n--- Scan (HTML): ${postcode} (${radiusMiles} miles) ---`);
+  console.log(`\n--- Scan (HTML/search): ${postcode} (${radiusMiles} miles) ---`);
 
   const detailUrls = await discoverDetailUrls(postcode, radiusMiles);
-  console.log(`[DISCOVERY] NHS public site yielded ${detailUrls.length} detail URL(s).`);
+  console.log(`[DISCOVERY] Found ${detailUrls.length} dentist detail URL(s).`);
 
   if (!detailUrls.length) {
     console.log("[INFO] No practice detail URLs discovered for this query.");
@@ -373,7 +314,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
             await EmailLog.create({ practiceUrl: url, dateKey, status: "CHILD_ONLY" });
           }
         } catch {
-          // continue scanning
+          // keep scanning
         }
       })
     )
@@ -393,7 +334,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
       <hr style="border:0;border-top:1px solid #eee;margin:12px 0">
       <div style="font-size:12px;color:#777">We read the NHS <b>Appointments</b> page text. Please call the practice to confirm before travelling.</div>
     </div>`;
-    await sendEmail(recipients, subject, body);
+    await postmarkEmail(recipients, subject, body);
   } else {
     console.log("No accepting practices found or no recipients.");
   }
@@ -420,7 +361,7 @@ async function buildJobs(filterPostcode) {
 
 export async function runScan(opts = {}) {
   if (mongoose.connection.readyState !== 1) await connectMongo(MONGO_URI);
-  console.log("🦷 DentistRadar: Using HTML (public site) scanner — manual cookies");
+  console.log("🦷 DentistRadar: Using HTML search-based scanner");
   const jobs = await buildJobs(opts.postcode);
   if (!jobs.length) {
     console.log("[RESULT] No Watch entries.");
