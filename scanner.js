@@ -1,9 +1,13 @@
 /**
- * DentistRadar — scanner.js (v6.6.1)
- * - HTML discovery with stronger browser headers (local)
- * - Optional UK-edge discovery via DISCOVERY_PROXY_URL (Cloudflare/Vercel)
- * - Appointments acceptance parsing + Postmark email + Mongo EmailLog dedupe
- * - No extra npm deps
+ * DentistRadar — scanner.js (v7.0, scalable)
+ * Strategy:
+ *  1) Try Mongo cache for (postcode,radius) → list of NHS detail URLs (fresh < 24h)
+ *  2) If cache miss/stale → call UK-edge discovery (DISCOVERY_PROXY_URL) → store in cache
+ *  3) If proxy unavailable → last-resort local discovery with strong headers
+ *  4) For each detail URL → follow to /appointments → classify acceptance
+ *  5) Postmark email (daily dedupe via EmailLog)
+ *
+ * No headless browser. No cookie-jar packages. Render-friendly.
  */
 
 import axios from "axios";
@@ -21,24 +25,28 @@ const {
   POSTMARK_SERVER_TOKEN,
   POSTMARK_MESSAGE_STREAM = "outbound",
 
-  MAX_CONCURRENCY = "6",
+  MAX_CONCURRENCY = "8",         // tune for Render instance CPU
   INCLUDE_CHILD_ONLY = "false",
   DEBUG_DISCOVERY = "false",
 
-  // Optional UK-edge discovery endpoint that returns { urls: [] }
-  DISCOVERY_PROXY_URL = ""
+  // UK-edge discovery endpoint returning JSON: { urls: [ "https://www.nhs.uk/services/dentists/..." ] }
+  DISCOVERY_PROXY_URL = "",
+
+  // Cache freshness window (hours)
+  DISCOVERY_CACHE_HOURS = "24"
 } = process.env;
 
 if (!MONGO_URI) throw new Error("MONGO_URI is required");
 if (!EMAIL_FROM) throw new Error("EMAIL_FROM is required");
 if (!POSTMARK_SERVER_TOKEN) throw new Error("POSTMARK_SERVER_TOKEN is required");
 
-const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 6);
+const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 8);
 const INCLUDE_CHILD = String(INCLUDE_CHILD_ONLY).toLowerCase() === "true";
 const DEBUG = String(DEBUG_DISCOVERY).toLowerCase() === "true";
+const CACHE_HOURS = Math.max(1, Number(DISCOVERY_CACHE_HOURS) || 24);
 
 /* ────────────────────────────────────────────────────────────────
-   Mongo models
+   Mongo models (guarded)
 ──────────────────────────────────────────────────────────────── */
 function model(name, schema) {
   return mongoose.models[name] || mongoose.model(name, schema);
@@ -56,8 +64,24 @@ const EmailLogSchema = new mongoose.Schema(
 );
 EmailLogSchema.index({ practiceUrl: 1, dateKey: 1 }, { unique: true });
 
-const Watch = model("Watch", WatchSchema);
-const EmailLog = model("EmailLog", EmailLogSchema);
+/**
+ * PracticeCache stores discovery results to avoid repeated scraping.
+ * Keyed by normalized postcode + radius. TTL controlled by DISCOVERY_CACHE_HOURS.
+ */
+const PracticeCacheSchema = new mongoose.Schema(
+  {
+    postcode: { type: String, index: true },
+    radius:   { type: Number, index: true },
+    urls:     [String],
+    fetchedAt:{ type: Date, index: true }
+  },
+  { collection: "PracticeCache", versionKey: false, timestamps: false }
+);
+PracticeCacheSchema.index({ postcode: 1, radius: 1 }, { unique: true });
+
+const Watch         = model("Watch", WatchSchema);
+const EmailLog      = model("EmailLog", EmailLogSchema);
+const PracticeCache = model("PracticeCache", PracticeCacheSchema);
 
 async function connectMongo(uri) {
   if (mongoose.connection.readyState === 1) return;
@@ -66,10 +90,17 @@ async function connectMongo(uri) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   HTTP utils (enhanced browser headers + manual cookies)
+   Utils
+──────────────────────────────────────────────────────────────── */
+const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
+const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/* ────────────────────────────────────────────────────────────────
+   HTTP (Render-friendly; strong headers; no extra deps)
 ──────────────────────────────────────────────────────────────── */
 const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
 
 const BASE_HEADERS = {
   "User-Agent": UA,
@@ -81,24 +112,21 @@ const BASE_HEADERS = {
   "Sec-Fetch-Site": "same-origin",
   "Sec-Fetch-Mode": "navigate",
   "Sec-Fetch-Dest": "document",
-  // client hints – many CDNs use these to decide SSR content
-  "sec-ch-ua": '"Chromium";v="120", "Not=A?Brand";v="24"',
+  "sec-ch-ua": '"Chromium";v="121", "Not=A?Brand";v="24"',
   "sec-ch-ua-mobile": "?0",
   "sec-ch-ua-platform": '"Windows"',
-  // consent cookie to bypass banners
+  // consent to reduce banner friction
   "Cookie": "nhsuk-cookie-consent=accepted",
-  // nudge towards UK (some edges look at xff; harmless if ignored)
-  "X-Forwarded-For": "81.2.69.142"  // a public UK IP (BT range)
+  // harmless nudge; some CDNs look at it to country-route
+  "X-Forwarded-For": "81.2.69.142"
 };
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function httpGet(url, referer = "https://www.nhs.uk/") {
   try {
     const res = await axios.get(url, {
-      timeout: 20000,
+      timeout: 18000,
       headers: { ...BASE_HEADERS, Referer: referer },
-      maxRedirects: 5,
+      maxRedirects: 3,
       validateStatus: (s) => s >= 200 && s < 500
     });
     const body = String(res.data || "");
@@ -111,7 +139,7 @@ async function httpGet(url, referer = "https://www.nhs.uk/") {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Build NHS results URLs (single definition)
+   Results URL builder (broad coverage)
 ──────────────────────────────────────────────────────────────── */
 function buildResultUrls(postcode, radius) {
   const pcEnc = encodeURIComponent(postcode);
@@ -143,21 +171,21 @@ function buildResultUrls(postcode, radius) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Extract dentist detail URLs from results HTML
+   Extract dentist detail URLs from a results HTML
 ──────────────────────────────────────────────────────────────── */
 function extractDetailUrlsFromResults(html) {
   const $ = cheerio.load(html);
   const out = new Set();
-
   const push = (href) => {
     if (!href) return;
     const abs = href.startsWith("http") ? href : `https://www.nhs.uk${href.startsWith("/") ? "" : "/"}${href}`;
     if (/^https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(abs)) out.add(abs.split("#")[0]);
   };
 
+  // direct anchors
   $('a[href*="/services/dentists/"]').each((_, a) => push($(a).attr("href")));
 
-  // JSON-LD & hydration scripts
+  // hydration / JSON-LD
   $('script[type="application/ld+json"], script:not([src])').each((_, s) => {
     const txt = $(s).text() || "";
     const rx = /https:\/\/www\.nhs\.uk\/services\/dentists\/[A-Za-z0-9\-/%?_.#=]+/g;
@@ -165,7 +193,7 @@ function extractDetailUrlsFromResults(html) {
     if (matches) matches.forEach((m) => out.add(m.split("#")[0]));
   });
 
-  // raw HTML catch-all
+  // full HTML regex sweep
   const raw = $.root().html() || "";
   const rx2 = /https:\/\/www\.nhs\.uk\/services\/dentists\/[A-Za-z0-9\-/%?_.#=]+/g;
   const hits = raw.match(rx2);
@@ -175,9 +203,90 @@ function extractDetailUrlsFromResults(html) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Appointments → acceptance classify
+   UK-edge discovery (preferred) + local fallback
+──────────────────────────────────────────────────────────────── */
+async function discoverViaProxy(postcode, radiusMiles) {
+  if (!DISCOVERY_PROXY_URL) return [];
+  try {
+    const res = await axios.post(
+      DISCOVERY_PROXY_URL,
+      { postcode, radius: radiusMiles },
+      { timeout: 15000, headers: { "Content-Type": "application/json" } }
+    );
+    const urls = Array.isArray(res.data?.urls) ? res.data.urls : [];
+    return urls.filter(u => /^https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(u));
+  } catch (e) {
+    if (DEBUG) console.log("[DISCOVERY:proxy] fail:", e?.response?.status || e?.message);
+    return [];
+  }
+}
+
+async function discoverLocally(postcode, radiusMiles) {
+  const urlsToTry = buildResultUrls(postcode, radiusMiles);
+  const out = new Set();
+  for (const url of urlsToTry) {
+    const html = await httpGet(url);
+    if (!html) continue;
+
+    if (DEBUG) {
+      const $ = cheerio.load(html);
+      const title = String($("title").first().text() || "").replace(/\s+/g, " ").trim();
+      console.log(`[PAGE] ${url} — <title>: "${title}" len=${html.length}`);
+    }
+
+    const found = extractDetailUrlsFromResults(html);
+    if (found.length) found.forEach((u) => out.add(u));
+    if (out.size >= 120) break;
+    await sleep(100);
+  }
+  return Array.from(out);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Cache-first discovery orchestrator
+──────────────────────────────────────────────────────────────── */
+async function getDetailUrls(postcode, radiusMiles) {
+  const pc = normPc(postcode);
+  const now = Date.now();
+
+  // 1) cache hit if fresh
+  const cached = await PracticeCache.findOne({ postcode: pc, radius: radiusMiles }).lean();
+  if (cached && cached.urls?.length) {
+    const ageHrs = (now - new Date(cached.fetchedAt).getTime()) / 36e5;
+    if (ageHrs <= CACHE_HOURS) {
+      if (DEBUG) console.log(`[DISCOVERY:cache] hit ${cached.urls.length} url(s), age ${ageHrs.toFixed(1)}h`);
+      return cached.urls;
+    }
+  }
+
+  // 2) proxy (UK-edge) preferred
+  let urls = await discoverViaProxy(pc, radiusMiles);
+
+  // 3) local fallback if proxy yielded 0
+  if (!urls.length) {
+    if (DEBUG) console.log("[DISCOVERY] proxy yielded 0 → trying local fallback…");
+    urls = await discoverLocally(pc, radiusMiles);
+  }
+
+  // 4) persist cache (upsert)
+  try {
+    await PracticeCache.updateOne(
+      { postcode: pc, radius: radiusMiles },
+      { $set: { urls, fetchedAt: new Date() } },
+      { upsert: true }
+    );
+  } catch (e) {
+    if (DEBUG) console.log("[DISCOVERY:cache] upsert error:", e?.message);
+  }
+
+  return urls;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Appointments acceptance
 ──────────────────────────────────────────────────────────────── */
 async function loadAppointmentsHtml(detailUrl) {
+  // detail → appointments page if link exists, else use detail text
   const html = await httpGet(detailUrl);
   if (!html) return null;
 
@@ -197,38 +306,42 @@ async function loadAppointmentsHtml(detailUrl) {
 
 function extractAppointmentsText(html) {
   const $ = cheerio.load(html);
-  const buckets = [];
+  const chunks = [];
 
   $("h1,h2,h3").each((_, h) => {
     const heading = String($(h).text() || "").trim().toLowerCase();
     if (/appointment|opening\s+times/.test(heading)) {
-      const section = [];
+      const buf = [];
       let cur = $(h).next(), hops = 0;
       while (cur.length && hops < 25) {
         const tag = (cur[0].tagName || "").toLowerCase();
         if (/^h[1-6]$/.test(tag)) break;
-        if (["p","div","li","ul","ol"].includes(tag)) section.push(String(cur.text() || "").replace(/\s+/g, " ").trim());
+        if (["p","div","li","ul","ol"].includes(tag)) buf.push(String(cur.text() || "").replace(/\s+/g, " ").trim());
         cur = cur.next(); hops++;
       }
-      const joined = section.join(" ").trim();
-      if (joined) buckets.push(joined);
+      const joined = buf.join(" ").trim();
+      if (joined) chunks.push(joined);
     }
   });
 
-  if (!buckets.length) buckets.push(String($.root().text() || "").replace(/\s+/g, " ").trim());
-  buckets.sort((a,b)=> b.length - a.length);
-  return buckets[0] || "";
+  if (!chunks.length) chunks.push(String($.root().text() || "").replace(/\s+/g, " ").trim());
+  chunks.sort((a,b)=> b.length - a.length);
+  return chunks[0] || "";
 }
 
 function classifyAcceptance(text) {
   const t = String(text || "").replace(/\s+/g, " ").replace(/’/g, "'").trim().toLowerCase();
+
   const childOnly =
     (t.includes("only accepts") || t.includes("currently only accepts") || t.includes("accepting only")) &&
     (t.includes("children") || /under\s*18/.test(t) || t.includes("aged 17 or under"));
+
   const accepting =
     t.includes("this dentist currently accepts new nhs patients") ||
     ((t.includes("accepts") || t.includes("are accepting") || t.includes("is accepting") || t.includes("currently accepting")) &&
-     t.includes("nhs patients") && !childOnly);
+     t.includes("nhs patients") &&
+     !childOnly);
+
   if (childOnly) return "CHILD_ONLY";
   if (accepting) return "ACCEPTING";
   return "NONE";
@@ -252,72 +365,13 @@ async function sendEmail(toList, subject, html) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Discovery: local → then proxy if needed
-──────────────────────────────────────────────────────────────── */
-async function discoverDetailUrlsLocal(postcode, radiusMiles) {
-  const urlsToTry = buildResultUrls(postcode, radiusMiles);
-  const detailSet = new Set();
-
-  for (const url of urlsToTry) {
-    const html = await httpGet(url);
-    if (!html) continue;
-
-    if (DEBUG) {
-      const $ = cheerio.load(html);
-      const title = String($("title").first().text() || "").replace(/\s+/g, " ").trim();
-      console.log(`[PAGE] ${url} — <title>: "${title}" len=${html.length}`);
-    }
-
-    const details = extractDetailUrlsFromResults(html);
-    if (details.length) {
-      console.log(`[PAGE LINKS] ${url} → ${details.length} dentist links`);
-      details.forEach((u) => detailSet.add(u));
-    }
-
-    await sleep(120);
-    if (detailSet.size >= 80) break;
-  }
-
-  return Array.from(detailSet);
-}
-
-async function discoverDetailUrlsViaProxy(postcode, radiusMiles) {
-  if (!DISCOVERY_PROXY_URL) return [];
-  try {
-    const res = await axios.post(
-      DISCOVERY_PROXY_URL,
-      { postcode, radius: radiusMiles },
-      { timeout: 15000, headers: { "Content-Type": "application/json" } }
-    );
-    const urls = Array.isArray(res.data?.urls) ? res.data.urls : [];
-    return urls.filter(u => /^https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(u));
-  } catch (e) {
-    console.log("[PROXY] Discovery failed:", e?.response?.status || e?.message);
-    return [];
-  }
-}
-
-async function discoverDetailUrls(postcode, radiusMiles) {
-  // 1) Try locally with strong headers
-  let urls = await discoverDetailUrlsLocal(postcode, radiusMiles);
-  if (urls.length) return urls;
-
-  // 2) Fallback to UK-edge proxy if configured
-  if (DISCOVERY_PROXY_URL) {
-    console.log("[DISCOVERY] Local yielded 0, trying proxy…");
-    urls = await discoverDetailUrlsViaProxy(postcode, radiusMiles);
-  }
-  return urls;
-}
-
-/* ────────────────────────────────────────────────────────────────
    Scan job
 ──────────────────────────────────────────────────────────────── */
 async function scanJob({ postcode, radiusMiles, recipients }) {
-  console.log(`\n--- Scan (HTML): ${postcode} (${radiusMiles} miles) ---`);
+  console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
-  const detailUrls = await discoverDetailUrls(postcode, radiusMiles);
-  console.log(`[DISCOVERY] NHS public site yielded ${detailUrls.length} detail URL(s).`);
+  const detailUrls = await getDetailUrls(postcode, radiusMiles);
+  console.log(`[DISCOVERY] detail URLs = ${detailUrls.length}`);
 
   if (!detailUrls.length) {
     console.log("[INFO] No practice detail URLs discovered for this query.");
@@ -333,6 +387,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
     detailUrls.map((url) =>
       limit(async () => {
         try {
+          // daily dedupe per practice URL to avoid re-email spam
           const already = await EmailLog.findOne({ practiceUrl: url, dateKey }).lean();
           if (already) return;
 
@@ -347,7 +402,9 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
             childOnly.push(url);
             await EmailLog.create({ practiceUrl: url, dateKey, status: "CHILD_ONLY" });
           }
-        } catch {}
+        } catch {
+          // swallow and continue
+        }
       })
     )
   );
@@ -377,9 +434,6 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
 /* ────────────────────────────────────────────────────────────────
    Runner export
 ──────────────────────────────────────────────────────────────── */
-const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
-const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
-
 async function buildJobs(filterPostcode) {
   const match = filterPostcode ? { postcode: normPc(filterPostcode) } : {};
   const rows = await Watch.aggregate([
@@ -396,7 +450,8 @@ async function buildJobs(filterPostcode) {
 
 export async function runScan(opts = {}) {
   if (mongoose.connection.readyState !== 1) await connectMongo(MONGO_URI);
-  console.log("🦷 DentistRadar: HTML scanner (local → proxy fallback)");
+  console.log("🦷 DentistRadar scanner v7.0 (cache + UK-edge discovery)");
+
   const jobs = await buildJobs(opts.postcode);
   if (!jobs.length) {
     console.log("[RESULT] No Watch entries.");
@@ -410,9 +465,9 @@ export async function runScan(opts = {}) {
       postcode: job.postcode,
       radiusMiles: job.radiusMiles,
       accepting: res.accepting.length,
-      childOnly: res.childOnly.length,
+      childOnly: res.childOnly.length
     });
-    await sleep(100);
+    await sleep(80); // gentle spacing between jobs
   }
   console.log("[DONE]", summaries);
   return { jobs: jobs.length, summaries };
@@ -421,7 +476,5 @@ export async function runScan(opts = {}) {
 export default { runScan };
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  runScan()
-    .then(() => process.exit(0))
-    .catch((e) => { console.error(e); process.exit(1); });
+  runScan().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
 }
