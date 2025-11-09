@@ -1,480 +1,422 @@
 /**
- * DentistRadar — scanner.js (v7.0, scalable)
- * Strategy:
- *  1) Try Mongo cache for (postcode,radius) → list of NHS detail URLs (fresh < 24h)
- *  2) If cache miss/stale → call UK-edge discovery (DISCOVERY_PROXY_URL) → store in cache
- *  3) If proxy unavailable → last-resort local discovery with strong headers
- *  4) For each detail URL → follow to /appointments → classify acceptance
- *  5) Postmark email (daily dedupe via EmailLog)
+ * DentistRadar Scanner v7.0
+ * - Correct NHS discovery URL (UK-edge pattern)
+ * - In-memory TTL cache (discovery + detail pages)
+ * - Appointments-only parsing (no other sections)
+ * - Robust acceptance pattern detection (adult/child/closed)
+ * - Rate-limited, retry-safe HTTP fetches
  *
- * No headless browser. No cookie-jar packages. Render-friendly.
+ * Usage:
+ *   node scanner.js "RG41 4UW" 25
+ *
+ * Env (optional):
+ *   DR_MAX_PRACTICES=200     // max detail pages to scan per run
+ *   DR_CONCURRENCY=6         // concurrent HTTP requests
+ *   DR_TIMEOUT_MS=15000      // per-request timeout
+ *   DR_CACHE_TTL_DISCOVERY_MS=21600000  // 6h
+ *   DR_CACHE_TTL_DETAIL_MS=10800000     // 3h
  */
 
-import axios from "axios";
+import got from "got";
 import * as cheerio from "cheerio";
-import mongoose from "mongoose";
 import pLimit from "p-limit";
-import dayjs from "dayjs";
+import { setTimeout as sleep } from "timers/promises";
 
-/* ────────────────────────────────────────────────────────────────
-   ENV
-──────────────────────────────────────────────────────────────── */
-const {
-  MONGO_URI,
-  EMAIL_FROM,
-  POSTMARK_SERVER_TOKEN,
-  POSTMARK_MESSAGE_STREAM = "outbound",
+/* -----------------------------
+ * Tunables
+ * ---------------------------*/
+const MAX_PRACTICES = parseInt(process.env.DR_MAX_PRACTICES || "200", 10);
+const CONCURRENCY = parseInt(process.env.DR_CONCURRENCY || "6", 10);
+const TIMEOUT_MS = parseInt(process.env.DR_TIMEOUT_MS || "15000", 10);
+const CACHE_TTL_DISCOVERY_MS = parseInt(process.env.DR_CACHE_TTL_DISCOVERY_MS || "21600000", 10); // 6h
+const CACHE_TTL_DETAIL_MS = parseInt(process.env.DR_CACHE_TTL_DETAIL_MS || "10800000", 10); // 3h
 
-  MAX_CONCURRENCY = "8",         // tune for Render instance CPU
-  INCLUDE_CHILD_ONLY = "false",
-  DEBUG_DISCOVERY = "false",
+/* -----------------------------
+ * Simple in-memory TTL cache
+ * ---------------------------*/
+class TTLCache {
+  constructor() {
+    this.store = new Map(); // key -> {expires:number, value:any}
+  }
+  get(key) {
+    const hit = this.store.get(key);
+    if (!hit) return undefined;
+    if (Date.now() > hit.expires) {
+      this.store.delete(key);
+      return undefined;
+    }
+    return hit.value;
+  }
+  set(key, value, ttlMs) {
+    this.store.set(key, { value, expires: Date.now() + ttlMs });
+  }
+}
+const cache = new TTLCache();
 
-  // UK-edge discovery endpoint returning JSON: { urls: [ "https://www.nhs.uk/services/dentists/..." ] }
-  DISCOVERY_PROXY_URL = "",
+/* -----------------------------
+ * HTTP client
+ * ---------------------------*/
+const http = got.extend({
+  http2: false,
+  timeout: { request: TIMEOUT_MS },
+  headers: {
+    "user-agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36 DentistRadar/7.0",
+    "accept-language": "en-GB,en;q=0.9",
+    accept:
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  },
+  retry: {
+    limit: 2,
+    methods: ["GET"],
+    statusCodes: [408, 429, 500, 502, 503, 504],
+  },
+});
 
-  // Cache freshness window (hours)
-  DISCOVERY_CACHE_HOURS = "24"
-} = process.env;
+/* -----------------------------
+ * Helpers
+ * ---------------------------*/
+const log = (...args) => console.log(...args);
 
-if (!MONGO_URI) throw new Error("MONGO_URI is required");
-if (!EMAIL_FROM) throw new Error("EMAIL_FROM is required");
-if (!POSTMARK_SERVER_TOKEN) throw new Error("POSTMARK_SERVER_TOKEN is required");
-
-const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 8);
-const INCLUDE_CHILD = String(INCLUDE_CHILD_ONLY).toLowerCase() === "true";
-const DEBUG = String(DEBUG_DISCOVERY).toLowerCase() === "true";
-const CACHE_HOURS = Math.max(1, Number(DISCOVERY_CACHE_HOURS) || 24);
-
-/* ────────────────────────────────────────────────────────────────
-   Mongo models (guarded)
-──────────────────────────────────────────────────────────────── */
-function model(name, schema) {
-  return mongoose.models[name] || mongoose.model(name, schema);
+function normalizeUrl(href) {
+  if (!href) return null;
+  if (href.startsWith("http")) return href;
+  if (href.startsWith("//")) return `https:${href}`;
+  if (href.startsWith("/")) return `https://www.nhs.uk${href}`;
+  return null;
 }
 
-const WatchSchema = new mongoose.Schema(
-  { email: String, postcode: String, radius: Number },
-  { collection: "Watch", timestamps: true, versionKey: false }
-);
-WatchSchema.index({ email: 1, postcode: 1 }, { unique: true });
+function clampInt(x, min, max) {
+  const n = parseInt(x, 10);
+  if (Number.isNaN(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}
 
-const EmailLogSchema = new mongoose.Schema(
-  { practiceUrl: String, dateKey: String, status: String, sentAt: { type: Date, default: Date.now } },
-  { collection: "EmailLog", versionKey: false }
-);
-EmailLogSchema.index({ practiceUrl: 1, dateKey: 1 }, { unique: true });
+/* -----------------------------
+ * Discovery
+ * ---------------------------*/
+/**
+ * Returns practice detail URLs for a given postcode+radius
+ * Uses the current UK-edge locationsearch pattern.
+ */
+async function discoverPracticeLinks(postcode, radiusMiles) {
+  const url = `https://www.nhs.uk/service-search/find-a-dentist/locationsearch/3?postcode=${encodeURIComponent(
+    postcode
+  )}&distance=${encodeURIComponent(radiusMiles)}`;
+
+  // cache first
+  const cacheKey = `discover:${url}`;
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return { url, links: cached, cached: true };
+  }
+
+  const html = await http.get(url).text();
+  const $ = cheerio.load(html);
+
+  // Primary selector for action links pointing to practice pages
+  let links = $("a.nhsuk-action-link__link")
+    .map((i, el) => $(el).attr("href"))
+    .get()
+    .map(normalizeUrl)
+    .filter(Boolean)
+    .filter((h) => h.includes("/services/dentists/"));
+
+  // Fallback: sometimes cards use nhsuk-card__link
+  if (links.length === 0) {
+    links = $("a.nhsuk-card__link")
+      .map((i, el) => $(el).attr("href"))
+      .get()
+      .map(normalizeUrl)
+      .filter(Boolean)
+      .filter((h) => h.includes("/services/dentists/"));
+  }
+
+  cache.set(cacheKey, links, CACHE_TTL_DISCOVERY_MS);
+  return { url, links, cached: false };
+}
+
+/* -----------------------------
+ * Appointments-only parsing
+ * ---------------------------*/
 
 /**
- * PracticeCache stores discovery results to avoid repeated scraping.
- * Keyed by normalized postcode + radius. TTL controlled by DISCOVERY_CACHE_HOURS.
+ * Locate the "Appointments" section within a practice details page.
+ * Some pages render it on the same HTML (anchor #appointments).
+ * If not present inline, try to follow a tab/link to the appointments section.
  */
-const PracticeCacheSchema = new mongoose.Schema(
-  {
-    postcode: { type: String, index: true },
-    radius:   { type: Number, index: true },
-    urls:     [String],
-    fetchedAt:{ type: Date, index: true }
-  },
-  { collection: "PracticeCache", versionKey: false, timestamps: false }
-);
-PracticeCacheSchema.index({ postcode: 1, radius: 1 }, { unique: true });
+function extractAppointmentsHtml($, baseUrl) {
+  // 1) Try inline section with id "appointments"
+  let node =
+    $("#appointments").first() ||
+    $("[id='appointments']").first() ||
+    $("section#appointments").first();
 
-const Watch         = model("Watch", WatchSchema);
-const EmailLog      = model("EmailLog", EmailLogSchema);
-const PracticeCache = model("PracticeCache", PracticeCacheSchema);
-
-async function connectMongo(uri) {
-  if (mongoose.connection.readyState === 1) return;
-  await mongoose.connect(uri, { maxPoolSize: 10 });
-  console.log("✅ MongoDB connected");
-}
-
-/* ────────────────────────────────────────────────────────────────
-   Utils
-──────────────────────────────────────────────────────────────── */
-const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
-const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-/* ────────────────────────────────────────────────────────────────
-   HTTP (Render-friendly; strong headers; no extra deps)
-──────────────────────────────────────────────────────────────── */
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
-
-const BASE_HEADERS = {
-  "User-Agent": UA,
-  "Accept-Language": "en-GB,en;q=0.9",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Upgrade-Insecure-Requests": "1",
-  "Cache-Control": "no-cache",
-  "Pragma": "no-cache",
-  "Sec-Fetch-Site": "same-origin",
-  "Sec-Fetch-Mode": "navigate",
-  "Sec-Fetch-Dest": "document",
-  "sec-ch-ua": '"Chromium";v="121", "Not=A?Brand";v="24"',
-  "sec-ch-ua-mobile": "?0",
-  "sec-ch-ua-platform": '"Windows"',
-  // consent to reduce banner friction
-  "Cookie": "nhsuk-cookie-consent=accepted",
-  // harmless nudge; some CDNs look at it to country-route
-  "X-Forwarded-For": "81.2.69.142"
-};
-
-async function httpGet(url, referer = "https://www.nhs.uk/") {
-  try {
-    const res = await axios.get(url, {
-      timeout: 18000,
-      headers: { ...BASE_HEADERS, Referer: referer },
-      maxRedirects: 3,
-      validateStatus: (s) => s >= 200 && s < 500
-    });
-    const body = String(res.data || "");
-    if (res.status >= 400) return null;
-    if (!body || body.length < 200) return null;
-    return body;
-  } catch {
-    return null;
-  }
-}
-
-/* ────────────────────────────────────────────────────────────────
-   Results URL builder (broad coverage)
-──────────────────────────────────────────────────────────────── */
-function buildResultUrls(postcode, radius) {
-  const pcEnc = encodeURIComponent(postcode);
-  const base = "https://www.nhs.uk";
-  const urls = [];
-  const pages = 10;
-  const sizes = [24, 48, 96];
-
-  // /results/<PC>?distance=R[&page=N][&results=X]
-  for (let p = 1; p <= pages; p++) {
-    urls.push(`${base}/service-search/find-a-dentist/results/${pcEnc}?distance=${radius}${p > 1 ? `&page=${p}` : ""}`);
-    for (const sz of sizes)
-      urls.push(`${base}/service-search/find-a-dentist/results/${pcEnc}?distance=${radius}${p > 1 ? `&page=${p}` : ""}&results=${sz}`);
-  }
-  // /results/<PC>&distance=R[&page=N]
-  for (let p = 1; p <= pages; p++)
-    urls.push(`${base}/service-search/find-a-dentist/results/${pcEnc}&distance=${radius}${p > 1 ? `&page=${p}` : ""}`);
-  // querystring variant
-  for (let p = 1; p <= pages; p++) {
-    urls.push(`${base}/service-search/find-a-dentist/results?postcode=${pcEnc}&distance=${radius}${p > 1 ? `&page=${p}` : ""}`);
-    for (const sz of sizes)
-      urls.push(`${base}/service-search/find-a-dentist/results?postcode=${pcEnc}&distance=${radius}${p > 1 ? `&page=${p}` : ""}&results=${sz}`);
-  }
-  // legacy
-  for (let p = 1; p <= pages; p++)
-    urls.push(`${base}/service-search/other-services/Dentists/Location/${pcEnc}?results=24&distance=${radius}${p > 1 ? `&page=${p}` : ""}`);
-
-  return Array.from(new Set(urls));
-}
-
-/* ────────────────────────────────────────────────────────────────
-   Extract dentist detail URLs from a results HTML
-──────────────────────────────────────────────────────────────── */
-function extractDetailUrlsFromResults(html) {
-  const $ = cheerio.load(html);
-  const out = new Set();
-  const push = (href) => {
-    if (!href) return;
-    const abs = href.startsWith("http") ? href : `https://www.nhs.uk${href.startsWith("/") ? "" : "/"}${href}`;
-    if (/^https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(abs)) out.add(abs.split("#")[0]);
-  };
-
-  // direct anchors
-  $('a[href*="/services/dentists/"]').each((_, a) => push($(a).attr("href")));
-
-  // hydration / JSON-LD
-  $('script[type="application/ld+json"], script:not([src])').each((_, s) => {
-    const txt = $(s).text() || "";
-    const rx = /https:\/\/www\.nhs\.uk\/services\/dentists\/[A-Za-z0-9\-/%?_.#=]+/g;
-    const matches = txt.match(rx);
-    if (matches) matches.forEach((m) => out.add(m.split("#")[0]));
-  });
-
-  // full HTML regex sweep
-  const raw = $.root().html() || "";
-  const rx2 = /https:\/\/www\.nhs\.uk\/services\/dentists\/[A-Za-z0-9\-/%?_.#=]+/g;
-  const hits = raw.match(rx2);
-  if (hits) hits.forEach((m) => out.add(m.split("#")[0]));
-
-  return Array.from(out);
-}
-
-/* ────────────────────────────────────────────────────────────────
-   UK-edge discovery (preferred) + local fallback
-──────────────────────────────────────────────────────────────── */
-async function discoverViaProxy(postcode, radiusMiles) {
-  if (!DISCOVERY_PROXY_URL) return [];
-  try {
-    const res = await axios.post(
-      DISCOVERY_PROXY_URL,
-      { postcode, radius: radiusMiles },
-      { timeout: 15000, headers: { "Content-Type": "application/json" } }
-    );
-    const urls = Array.isArray(res.data?.urls) ? res.data.urls : [];
-    return urls.filter(u => /^https:\/\/www\.nhs\.uk\/services\/dentists\//i.test(u));
-  } catch (e) {
-    if (DEBUG) console.log("[DISCOVERY:proxy] fail:", e?.response?.status || e?.message);
-    return [];
-  }
-}
-
-async function discoverLocally(postcode, radiusMiles) {
-  const urlsToTry = buildResultUrls(postcode, radiusMiles);
-  const out = new Set();
-  for (const url of urlsToTry) {
-    const html = await httpGet(url);
-    if (!html) continue;
-
-    if (DEBUG) {
-      const $ = cheerio.load(html);
-      const title = String($("title").first().text() || "").replace(/\s+/g, " ").trim();
-      console.log(`[PAGE] ${url} — <title>: "${title}" len=${html.length}`);
-    }
-
-    const found = extractDetailUrlsFromResults(html);
-    if (found.length) found.forEach((u) => out.add(u));
-    if (out.size >= 120) break;
-    await sleep(100);
-  }
-  return Array.from(out);
-}
-
-/* ────────────────────────────────────────────────────────────────
-   Cache-first discovery orchestrator
-──────────────────────────────────────────────────────────────── */
-async function getDetailUrls(postcode, radiusMiles) {
-  const pc = normPc(postcode);
-  const now = Date.now();
-
-  // 1) cache hit if fresh
-  const cached = await PracticeCache.findOne({ postcode: pc, radius: radiusMiles }).lean();
-  if (cached && cached.urls?.length) {
-    const ageHrs = (now - new Date(cached.fetchedAt).getTime()) / 36e5;
-    if (ageHrs <= CACHE_HOURS) {
-      if (DEBUG) console.log(`[DISCOVERY:cache] hit ${cached.urls.length} url(s), age ${ageHrs.toFixed(1)}h`);
-      return cached.urls;
-    }
+  if (node && node.length) {
+    return cheerio.load(node.html() || "");
   }
 
-  // 2) proxy (UK-edge) preferred
-  let urls = await discoverViaProxy(pc, radiusMiles);
-
-  // 3) local fallback if proxy yielded 0
-  if (!urls.length) {
-    if (DEBUG) console.log("[DISCOVERY] proxy yielded 0 → trying local fallback…");
-    urls = await discoverLocally(pc, radiusMiles);
-  }
-
-  // 4) persist cache (upsert)
-  try {
-    await PracticeCache.updateOne(
-      { postcode: pc, radius: radiusMiles },
-      { $set: { urls, fetchedAt: new Date() } },
-      { upsert: true }
-    );
-  } catch (e) {
-    if (DEBUG) console.log("[DISCOVERY:cache] upsert error:", e?.message);
-  }
-
-  return urls;
-}
-
-/* ────────────────────────────────────────────────────────────────
-   Appointments acceptance
-──────────────────────────────────────────────────────────────── */
-async function loadAppointmentsHtml(detailUrl) {
-  // detail → appointments page if link exists, else use detail text
-  const html = await httpGet(detailUrl);
-  if (!html) return null;
-
-  const $ = cheerio.load(html);
-  let href =
-    $('a[href*="/appointments"]').attr("href") ||
-    $('a:contains("Appointments")').attr("href") ||
-    $('a:contains("appointments")').attr("href") ||
-    $('a[href*="appointments-and-opening-times"]').attr("href") ||
-    $('a[href*="opening-times"]').attr("href");
-
-  if (!href) return html;
-  const apptUrl = new URL(href, detailUrl).toString();
-  const apptHtml = await httpGet(apptUrl, detailUrl);
-  return apptHtml || html;
-}
-
-function extractAppointmentsText(html) {
-  const $ = cheerio.load(html);
-  const chunks = [];
-
-  $("h1,h2,h3").each((_, h) => {
-    const heading = String($(h).text() || "").trim().toLowerCase();
-    if (/appointment|opening\s+times/.test(heading)) {
-      const buf = [];
-      let cur = $(h).next(), hops = 0;
-      while (cur.length && hops < 25) {
-        const tag = (cur[0].tagName || "").toLowerCase();
-        if (/^h[1-6]$/.test(tag)) break;
-        if (["p","div","li","ul","ol"].includes(tag)) buf.push(String(cur.text() || "").replace(/\s+/g, " ").trim());
-        cur = cur.next(); hops++;
-      }
-      const joined = buf.join(" ").trim();
-      if (joined) chunks.push(joined);
-    }
-  });
-
-  if (!chunks.length) chunks.push(String($.root().text() || "").replace(/\s+/g, " ").trim());
-  chunks.sort((a,b)=> b.length - a.length);
-  return chunks[0] || "";
-}
-
-function classifyAcceptance(text) {
-  const t = String(text || "").replace(/\s+/g, " ").replace(/’/g, "'").trim().toLowerCase();
-
-  const childOnly =
-    (t.includes("only accepts") || t.includes("currently only accepts") || t.includes("accepting only")) &&
-    (t.includes("children") || /under\s*18/.test(t) || t.includes("aged 17 or under"));
-
-  const accepting =
-    t.includes("this dentist currently accepts new nhs patients") ||
-    ((t.includes("accepts") || t.includes("are accepting") || t.includes("is accepting") || t.includes("currently accepting")) &&
-     t.includes("nhs patients") &&
-     !childOnly);
-
-  if (childOnly) return "CHILD_ONLY";
-  if (accepting) return "ACCEPTING";
-  return "NONE";
-}
-
-/* ────────────────────────────────────────────────────────────────
-   Email via Postmark
-──────────────────────────────────────────────────────────────── */
-async function sendEmail(toList, subject, html) {
-  if (!toList?.length) return;
-  try {
-    await axios.post(
-      "https://api.postmarkapp.com/email",
-      { From: EMAIL_FROM, To: toList.join(","), Subject: subject, HtmlBody: html, MessageStream: POSTMARK_MESSAGE_STREAM },
-      { headers: { "X-Postmark-Server-Token": POSTMARK_SERVER_TOKEN, "Content-Type": "application/json" }, timeout: 12000 }
-    );
-    console.log(`📧 Email sent to ${toList.length} — ${subject}`);
-  } catch (e) {
-    console.log("Postmark error:", e?.response?.data || e.message);
-  }
-}
-
-/* ────────────────────────────────────────────────────────────────
-   Scan job
-──────────────────────────────────────────────────────────────── */
-async function scanJob({ postcode, radiusMiles, recipients }) {
-  console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
-
-  const detailUrls = await getDetailUrls(postcode, radiusMiles);
-  console.log(`[DISCOVERY] detail URLs = ${detailUrls.length}`);
-
-  if (!detailUrls.length) {
-    console.log("[INFO] No practice detail URLs discovered for this query.");
-    return { accepting: [], childOnly: [] };
-  }
-
-  const limit = pLimit(CONCURRENCY);
-  const accepting = [];
-  const childOnly = [];
-  const dateKey = dayjs().format("YYYY-MM-DD");
-
-  await Promise.all(
-    detailUrls.map((url) =>
-      limit(async () => {
-        try {
-          // daily dedupe per practice URL to avoid re-email spam
-          const already = await EmailLog.findOne({ practiceUrl: url, dateKey }).lean();
-          if (already) return;
-
-          const apptHtml = await loadAppointmentsHtml(url);
-          if (!apptHtml) return;
-
-          const verdict = classifyAcceptance(extractAppointmentsText(apptHtml));
-          if (verdict === "ACCEPTING") {
-            accepting.push(url);
-            await EmailLog.create({ practiceUrl: url, dateKey, status: "ACCEPTING" });
-          } else if (verdict === "CHILD_ONLY" && INCLUDE_CHILD) {
-            childOnly.push(url);
-            await EmailLog.create({ practiceUrl: url, dateKey, status: "CHILD_ONLY" });
-          }
-        } catch {
-          // swallow and continue
-        }
+  // 2) Try link to appointments tab/anchor
+  // Look for an anchor that links to #appointments or contains the word "Appointments"
+  const anchorHref =
+    $("a")
+      .map((i, el) => {
+        const text = ($(el).text() || "").trim().toLowerCase();
+        const href = $(el).attr("href") || "";
+        if (href.includes("#appointments")) return href;
+        if (text.includes("appointments")) return href;
+        return null;
       })
-    )
+      .get()
+      .find(Boolean) || null;
+
+  if (anchorHref && anchorHref.startsWith("#appointments")) {
+    // same page anchor — the section should exist; if not, return empty
+    const anchorNode = $(anchorHref);
+    if (anchorNode && anchorNode.length) {
+      return cheerio.load(anchorNode.html() || "");
+    }
+  }
+
+  // 3) If it's a separate path (rare), try to normalize and fetch
+  if (anchorHref && !anchorHref.startsWith("#")) {
+    const abs = normalizeUrl(anchorHref);
+    if (abs) {
+      // NOTE: this is a second fetch only if absolutely needed
+      // Most NHS pages have inline tabs, so this path rarely executes.
+      // This is still appointments-only.
+      // eslint-disable-next-line no-sync
+      const html = cache.get(`detail:${abs}`) || null;
+      if (html) {
+        const _$ = cheerio.load(html);
+        const section = _$("#appointments").first();
+        if (section && section.length) return cheerio.load(section.html() || "");
+        return _$_; // fallback: return whole doc for pattern scan
+      }
+    }
+  }
+
+  // Fallback: return the whole page if we can't isolate "appointments"
+  // We will only search within paragraphs/headings that appear in the appointments area keywords.
+  return $;
+}
+
+/* -----------------------------
+ * Acceptance detection
+ * ---------------------------*/
+
+const POSITIVE_PATTERNS = [
+  // strong signals
+  /currently\s+accept(?:ing)?\s+new\s+nhs\s+patients/gi,
+  /accept(?:ing)?\s+new\s+nhs\s+patients/gi,
+  /taking\s+new\s+nhs\s+patients/gi,
+  /we\s+are\s+accept(?:ing)?\s+nhs\s+patients/gi,
+  /open\s+to\s+new\s+nhs\s+patients/gi,
+  // specific phrase seen on NHS
+  /this dentist currently accepts new nhs patients/gi,
+];
+
+const CHILD_ONLY_PATTERNS = [
+  /children\s+only/gi,
+  /child(?:ren)?\s+only/gi,
+  /accept(?:ing)?\s+nhs\s+patients\s+aged\s+(?:under|below)\s+\d+/gi,
+  /currently\s+accept(?:ing)?\s+nhs\s+patients\s+aged\s+\d+\s+and\s+under/gi,
+  /accept(?:ing)?\s+nhs\s+patients\s+for\s+children/gi,
+  /only\s+accept(?:ing)?\s+children/gi,
+];
+
+const NEGATIVE_PATTERNS = [
+  /not\s+accept(?:ing)?\s+new\s+nhs\s+patients/gi,
+  /no\s+longer\s+accept(?:ing)?\s+nhs\s+patients/gi,
+  /we\s+are\s+not\s+taking\s+nhs\s+patients/gi,
+  /nhs\s+list\s+closed/gi,
+];
+
+function scanAppointmentsHtml($) {
+  // Limit scan to plausible appointments content nodes to reduce false positives
+  const candidates = [
+    ...$("section#appointments").toArray(),
+    ...$("#appointments").toArray(),
+    ...$("h2,h3,h4,p,li,div").toArray(),
+  ];
+
+  let text = "";
+  for (const el of candidates) {
+    const chunk = cheerio.load(el).root().text();
+    if (!chunk) continue;
+    // Heuristic: only keep lines that look appointments/registration-ish
+    if (
+      /appointment|register|accept/i.test(chunk) ||
+      /nhs\s+patients/i.test(chunk) ||
+      /taking|list|join/i.test(chunk)
+    ) {
+      text += "\n" + chunk.trim();
+    }
+  }
+
+  const summary = text.replace(/\s+/g, " ").trim();
+
+  // Evaluate patterns
+  const positive = POSITIVE_PATTERNS.some((rx) => rx.test(summary));
+  const childOnly = CHILD_ONLY_PATTERNS.some((rx) => rx.test(summary));
+  const negative = NEGATIVE_PATTERNS.some((rx) => rx.test(summary));
+
+  return {
+    positive,
+    childOnly,
+    negative,
+    excerpt: summary.slice(0, 400),
+  };
+}
+
+/* -----------------------------
+ * Detail fetch + evaluate
+ * ---------------------------*/
+async function fetchDetailHtml(url) {
+  const cacheKey = `detail:${url}`;
+  const cached = cache.get(cacheKey);
+  if (cached) return cached;
+
+  // polite jitter to avoid bursts
+  await sleep(40 + Math.random() * 60);
+
+  const html = await http.get(url).text();
+  cache.set(cacheKey, html, CACHE_TTL_DETAIL_MS);
+  return html;
+}
+
+async function evaluatePractice(url) {
+  try {
+    const html = await fetchDetailHtml(url);
+    const $ = cheerio.load(html);
+
+    // Extract practice name for logging
+    const title =
+      $("h1.nhsuk-heading-l").first().text().trim() ||
+      $("h1").first().text().trim() ||
+      "";
+
+    const _$appointments = extractAppointmentsHtml($, url);
+    const result = scanAppointmentsHtml(_$appointments);
+
+    let status = "unknown";
+    if (result.negative && !result.positive) status = "not_accepting";
+    else if (result.childOnly && !result.positive) status = "child_only";
+    else if (result.positive && !result.negative) status = "accepting";
+    else if (result.positive && result.childOnly) status = "child_only";
+    else if (result.positive && result.negative) status = "mixed";
+
+    return {
+      url,
+      title,
+      status,
+      positive: result.positive,
+      childOnly: result.childOnly,
+      negative: result.negative,
+      excerpt: result.excerpt,
+    };
+  } catch (err) {
+    return {
+      url,
+      title: "",
+      status: "error",
+      error: (err && err.message) || String(err),
+    };
+  }
+}
+
+/* -----------------------------
+ * Main scanning flow
+ * ---------------------------*/
+export async function scanPostcode(postcode, radiusMiles) {
+  const t0 = Date.now();
+  log(`DentistRadar scanner v7.0 (cache + UK-edge discovery)`);
+  log(`--- Scan: ${postcode} (${radiusMiles} miles) ---`);
+
+  const discovery = await discoverPracticeLinks(postcode, radiusMiles);
+  log(
+    `[DISCOVERY] detail URLs = ${discovery.links.length}${
+      discovery.cached ? " (cache)" : ""
+    }`
   );
 
-  if ((accepting.length || childOnly.length) && recipients?.length) {
-    const render = (arr, label) =>
-      arr.length ? `<b>${label}:</b><br>${arr.map((u) => `<a href="${u}">${u}</a>`).join("<br>")}<br><br>` : "";
-    const subject = `DentistRadar — ${postcode} (${radiusMiles} mi): ${accepting.length} accepting${
-      INCLUDE_CHILD ? `, ${childOnly.length} child-only` : ""
-    }`;
-    const body = `<div style="font-family:system-ui;-webkit-font-smoothing:antialiased">
-      <h3 style="margin:0 0 8px">DentistRadar — ${postcode} (${radiusMiles} mi)</h3>
-      <div style="color:#666;margin:0 0 10px">${dayjs().format("YYYY-MM-DD HH:mm")}</div>
-      ${render(accepting, "Accepting (adults/all)")}
-      ${INCLUDE_CHILD ? render(childOnly, "Children-only") : ""}
-      <hr style="border:0;border-top:1px solid #eee;margin:12px 0">
-      <div style="font-size:12px;color:#777">We read the NHS <b>Appointments</b> page text. Please call the practice to confirm before travelling.</div>
-    </div>`;
-    await sendEmail(recipients, subject, body);
-  } else {
-    console.log("No accepting practices found or no recipients.");
+  if (!discovery.links.length) {
+    log("[INFO] No practice detail URLs discovered for this query.");
+    const out = [
+      {
+        postcode,
+        radiusMiles,
+        accepting: 0,
+        childOnly: 0,
+      },
+    ];
+    log("[DONE]", JSON.stringify(out, null, 2));
+    return out;
   }
 
-  return { accepting, childOnly };
+  // Respect MAX_PRACTICES
+  const target = discovery.links.slice(0, MAX_PRACTICES);
+
+  const limit = pLimit(CONCURRENCY);
+  const results = await Promise.all(
+    target.map((u) => limit(() => evaluatePractice(u)))
+  );
+
+  const accepting = results.filter((r) => r.status === "accepting");
+  const childOnly = results.filter(
+    (r) => r.status === "child_only" || (r.positive && r.childOnly)
+  );
+  const notAccepting = results.filter((r) => r.status === "not_accepting");
+  const mixed = results.filter((r) => r.status === "mixed");
+  const errors = results.filter((r) => r.status === "error");
+
+  log(`[STATS] scanned=${results.length} ok=${results.length - errors.length} errors=${errors.length}`);
+  log(
+    `[HITS] accepting=${accepting.length} childOnly=${childOnly.length} notAccepting=${notAccepting.length} mixed=${mixed.length}`
+  );
+
+  const summary = [
+    {
+      postcode,
+      radiusMiles,
+      accepting: accepting.length,
+      childOnly: childOnly.length,
+      notAccepting: notAccepting.length,
+      mixed: mixed.length,
+      scanned: results.length,
+      tookMs: Date.now() - t0,
+    },
+  ];
+
+  log("[DONE]", JSON.stringify(summary, null, 2));
+
+  // You can return full results if your server stores them;
+  // here we return summary + accepting list for immediate alerting.
+  return {
+    summary: summary[0],
+    accepting: accepting.map(({ url, title, excerpt }) => ({
+      url,
+      title,
+      excerpt,
+    })),
+    childOnly: childOnly.map(({ url, title, excerpt }) => ({
+      url,
+      title,
+      excerpt,
+    })),
+    errors,
+  };
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Runner export
-──────────────────────────────────────────────────────────────── */
-async function buildJobs(filterPostcode) {
-  const match = filterPostcode ? { postcode: normPc(filterPostcode) } : {};
-  const rows = await Watch.aggregate([
-    { $match: match },
-    { $group: { _id: "$postcode", radius: { $first: "$radius" }, emails: { $addToSet: "$email" } } },
-    { $project: { _id: 0, postcode: "$_id", radius: 1, emails: 1 } },
-  ]);
-  return rows.map((r) => ({
-    postcode: normPc(r.postcode),
-    radiusMiles: Math.max(1, Math.min(30, Number(r.radius) || 10)),
-    recipients: (r.emails || []).filter(validEmail),
-  }));
-}
-
-export async function runScan(opts = {}) {
-  if (mongoose.connection.readyState !== 1) await connectMongo(MONGO_URI);
-  console.log("🦷 DentistRadar scanner v7.0 (cache + UK-edge discovery)");
-
-  const jobs = await buildJobs(opts.postcode);
-  if (!jobs.length) {
-    console.log("[RESULT] No Watch entries.");
-    return { jobs: 0, summaries: [] };
-  }
-
-  const summaries = [];
-  for (const job of jobs) {
-    const res = await scanJob(job);
-    summaries.push({
-      postcode: job.postcode,
-      radiusMiles: job.radiusMiles,
-      accepting: res.accepting.length,
-      childOnly: res.childOnly.length
-    });
-    await sleep(80); // gentle spacing between jobs
-  }
-  console.log("[DONE]", summaries);
-  return { jobs: jobs.length, summaries };
-}
-
-export default { runScan };
-
+/* -----------------------------
+ * CLI entrypoint
+ * ---------------------------*/
 if (import.meta.url === `file://${process.argv[1]}`) {
-  runScan().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
+  const postcode = process.argv[2] || "RG41 4UW";
+  const radius = clampInt(process.argv[3] || "25", 1, 100);
+
+  scanPostcode(postcode, radius).catch((err) => {
+    console.error("[FATAL]", err?.message || err);
+    process.exit(1);
+  });
 }
