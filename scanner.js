@@ -1,7 +1,11 @@
-// scanner.js (v9.0 email-upgraded, models aligned)
-// Behaviours preserved; uses shared models (watches), curated HTML emails.
-// If you had your own discovery/classification, keep it below—this version
-// includes a robust HTML-first discovery + appointments classifier.
+// scanner.js — uses shared models (watches), HTML-first discovery, curated HTML emails.
+// ENV:
+//   MONGO_URI (and optionally MONGO_DBNAME) — DB selection
+//   EMAIL_FROM, POSTMARK_SERVER_TOKEN or POSTMARK_TOKEN
+//   POSTMARK_MESSAGE_STREAM=outbound
+//   INCLUDE_CHILD_ONLY=false
+//   MAX_CONCURRENCY=6
+//   APPT_TTL_HOURS=6
 
 import axios from "axios";
 import * as cheerio from "cheerio";
@@ -188,15 +192,13 @@ function extractAppointmentsText(html) {
     const heading = String($(h).text() || "").toLowerCase();
     if (/appointment|opening\s+times/.test(heading)) {
       const buf = [];
-      let cur = $(h).next(),
-        hops = 0;
+      let cur = $(h).next(), hops = 0;
       while (cur.length && hops < 30) {
         const tag = (cur[0].tagName || "").toLowerCase();
         if (/^h[1-6]$/.test(tag)) break;
         if (["p", "div", "li", "ul", "ol", "section"].includes(tag))
           buf.push(String(cur.text() || "").replace(/\s+/g, " ").trim());
-        cur = cur.next();
-        hops++;
+        cur = cur.next(); hops++;
       }
       const joined = buf.join(" ").trim();
       if (joined) buckets.push(joined);
@@ -290,7 +292,7 @@ async function sendEmail(toList, subject, html) {
   if (!toList?.length) {
     console.log("✋ Email skipped: recipients empty.");
     return { ok: false, reason: "no_recipients" };
-    }
+  }
   if (!token) {
     console.log("✋ Email skipped: POSTMARK token missing.");
     return { ok: false, reason: "no_token" };
@@ -375,7 +377,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           const { status, apptUrl } = await fetchAppointments(detailUrl, memo);
 
           const card = {
-            name: undefined, // can be enriched later if you store it
+            name: undefined, // enrich later if you store it
             address: undefined,
             appointmentUrl: apptUrl || detailUrl,
             detailUrl,
