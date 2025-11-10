@@ -1,61 +1,32 @@
 // emailTemplates.js
 // DentistRadar — transactional email templates (v1.2, curated cards with phone, distance & map links)
-//
-// Usage:
-//   import { renderEmail } from "./emailTemplates.js";
-//   const { subject, html } = renderEmail("availability", {
-//     postcode: "RG41 4UW",
-//     radius: 25,
-//     practices: [
-//       {
-//         name: "Woodley Dental Care",
-//         address: "123 Reading Rd, Woodley RG41",
-//         appointmentUrl: "https://www.nhs.uk/services/dentists/.../appointments",
-//         detailUrl: "https://www.nhs.uk/services/dentists/...",
-//         phone: "0118 123 4567",
-//         distanceMiles: 2.4,
-//         lat: 51.444, lon: -0.891,
-//         checkedAt: new Date()
-//       }
-//     ],
-//     includeChildOnly: false
-//   });
-//
-//   await sendEmail(recipients, subject, html);
 
 const BRAND = {
   name: "DentistRadar",
   site: process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk",
   logo: process.env.BRAND_LOGO_URL || "", // e.g. "https://www.dentistradar.co.uk/logo.png"
-  primary: "#0B6FB7",   // NHS-adjacent blue shade
+  primary: "#0B6FB7",
   lightBg: "#F3F8FC",
   border: "#E5EEF8",
   text: "#222",
   muted: "#667085"
 };
 
-/* ────────────────────────────────────────────────────────────────
-   Utilities
-──────────────────────────────────────────────────────────────── */
 const esc = (s) =>
-  String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 
 const fmtDate = (d) => {
   try {
     const dt = d instanceof Date ? d : new Date(d);
     return dt.toLocaleString("en-GB", {
-      year: "numeric", month: "short", day: "2-digit",
-      hour: "2-digit", minute: "2-digit"
+      year:"numeric", month:"short", day:"2-digit",
+      hour:"2-digit", minute:"2-digit"
     });
   } catch { return ""; }
 };
 
 const plural = (n, one, many) => (Number(n) === 1 ? one : many);
 
-// Build a Google Maps link; prefer lat/lon, fallback to address query.
 const mapLinkFor = (p) => {
   if (typeof p?.lat === "number" && typeof p?.lon === "number") {
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${p.lat},${p.lon}`)}`;
@@ -68,7 +39,7 @@ const mapLinkFor = (p) => {
 
 const milesBadge = (m) => {
   if (m == null || Number.isNaN(Number(m))) return "";
-  const v = Number(m).toFixed(1).replace(/\.0$/, "");
+  const v = Number(m).toFixed(1).replace(/\.0$/,"");
   return `<span style="
     display:inline-block;background:${BRAND.lightBg};color:${BRAND.primary};
     border:1px solid ${BRAND.border};border-radius:999px;
@@ -118,10 +89,6 @@ const footerBlock = (extra = "") => `
 
 const tipBlock = (text) => `<div style="${baseStyles.tip}">💡 <strong>Tip:</strong> ${text}</div>`;
 
-/* ────────────────────────────────────────────────────────────────
-   Templates
-──────────────────────────────────────────────────────────────── */
-
 function welcomeTemplate({ postcode, radius }) {
   const pc = esc(postcode);
   const rad = esc(radius);
@@ -154,11 +121,8 @@ function availabilityTemplate({ postcode, radius, practices = [], includeChildOn
     const maps = mapLinkFor(p);
     const dist = p.distanceMiles != null ? milesBadge(p.distanceMiles) : "";
 
-    const mapLine = maps
-      ? `🗺️ <a href="${esc(maps)}" style="${baseStyles.link}">Map</a>`
-      : "";
+    const mapLine = maps ? `🗺️ <a href="${esc(maps)}" style="${baseStyles.link}">Map</a>` : "";
 
-    // join meta lines neatly
     const metaParts = []
       .concat(phone ? `📞 ${phone}` : [])
       .concat(mapLine ? mapLine : [])
@@ -204,10 +168,6 @@ function availabilityTemplate({ postcode, radius, practices = [], includeChildOn
   </div>`
   };
 }
-
-/* ────────────────────────────────────────────────────────────────
-   Public API
-──────────────────────────────────────────────────────────────── */
 
 export function renderEmail(type, data) {
   if (type === "welcome") return welcomeTemplate(data || {});
