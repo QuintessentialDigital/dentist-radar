@@ -1,9 +1,17 @@
 /**
- * DentistRadar Scanner v8.8
- * - NEW: Guard for “has not confirmed if/whether … currently accept new NHS patients” → classify as UNKNOWN (unconfirmed)
- * - NEW: Hard dedupe by canonical URL + NHS org ID (last path segment like XV015042)
- * - Keeps: /appointments-first parse, broader DOM containers, tags, structured bullets, robust negatives/positives
- * - Compatible with server.js v1.8.7 (no changes)
+ * DentistRadar Scanner v9.0
+ * - Discovery: NHS results pages (confirmed) + fallbacks, early-stop pagination
+ * - Detail classification order for BOTH main and /appointments pages:
+ *    1) NHS tags (.nhsuk-tag) → accept / not accept
+ *    2) Structured headings (“Who can use/register this service” and variants)
+ *       → next <ul><li> → adults / children
+ *    3) Regex over #appointments section (if present)
+ *    4) Regex over whole page
+ * - Robust text normalisation; expanded positive/negative patterns
+ * - “Unconfirmed” guard: pages that say “has not confirmed if/whether…” ⇒ UNKNOWN
+ * - Hard de-dupe by canonical URL + NHS org ID (last path segment like XV015042)
+ * - Returns expanded summary: accepting, childOnly, notAccepting, mixed, unknown, unconfirmed, errors, scanned, tookMs, reasons
+ * - Node 20+ native fetch, Cheerio; compatible with server.js v1.8.7 (no changes)
  */
 
 import * as cheerio from "cheerio";
@@ -17,6 +25,8 @@ const CACHE_DISC_MS = envInt("DR_CACHE_TTL_DISCOVERY_MS", 6 * 60 * 60 * 1000);
 const CACHE_DET_MS  = envInt("DR_CACHE_TTL_DETAIL_MS",    3 * 60 * 60 * 1000);
 const CACHE_APPT_MS = envInt("DR_CACHE_TTL_APPT_MS",      2 * 60 * 60 * 1000);
 const MAX_PAGES     = envInt("DR_MAX_DISCOVERY_PAGES", 3);
+const DEBUG         = /^1|true$/i.test(process.env.DR_DEBUG || "1"); // default on for visibility
+
 function envInt(k, d){ const n = parseInt(process.env[k] ?? d, 10); return Number.isNaN(n) ? d : n; }
 
 /* --------------------------- Normalisation -------------------------- */
@@ -48,7 +58,7 @@ function textify($root){ return cleanText($root.text()); }
 /* ------------------------------- HTTP ------------------------------- */
 function buildHeaders(referer = ""){
   return {
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DentistRadar/8.8",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DentistRadar/9.0",
     "accept-language": "en-GB,en;q=0.9",
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "cache-control": "no-cache",
@@ -77,7 +87,6 @@ function canonicalizeUrl(u){
     url.hash = "";
     url.search = "";
     url.hostname = url.hostname.toLowerCase();
-    // drop trailing slash (but keep '/')
     if (url.pathname.length > 1 && url.pathname.endsWith("/")) url.pathname = url.pathname.slice(0, -1);
     return url.toString();
   } catch { return null; }
@@ -96,9 +105,9 @@ function buildDiscoveryUrls(pc, radius){
   const encPC = encodeURIComponent(pc);
   const encR  = encodeURIComponent(radius);
   return [
-    `${base}/results/postcode=${encPC}&distance=${encR}`,         // confirmed
-    `${base}/results?postcode=${encPC}&distance=${encR}`,         // fallback
-    `${base}/locationsearch/3?postcode=${encPC}&distance=${encR}` // legacy fallback
+    `${base}/results/postcode=${encPC}&distance=${encR}`,
+    `${base}/results?postcode=${encPC}&distance=${encR}`,
+    `${base}/locationsearch/3?postcode=${encPC}&distance=${encR}`
   ];
 }
 function injectPage(url, page){
@@ -114,7 +123,7 @@ function extractPracticeLinks(html){
   const raw = $(selector).map((_, el) => $(el).attr("href")).get().map(canonicalizeUrl).filter(Boolean);
   const seen = new Set(); const out = [];
   for (const u of raw){ if (!seen.has(u)){ seen.add(u); out.push(u); } }
-  if (out.length) console.log("[DISCOVERY_SAMPLE]", out.slice(0,3));
+  if (DEBUG && out.length) console.log("[DISCOVERY_SAMPLE]", out.slice(0,3));
   return out;
 }
 async function discoverPracticeLinks(pc, radius){
@@ -128,7 +137,7 @@ async function discoverPracticeLinks(pc, radius){
       const urls = injectPage(b, p);
       let pageAdded = 0;
       for (const u of urls){
-        console.log(`[DISCOVERY_URL] ${u}`);
+        if (DEBUG) console.log(`[DISCOVERY_URL] ${u}`);
         const key = `DISC:${u}`;
         const cached = cache.get(key);
         let links;
@@ -148,7 +157,7 @@ async function discoverPracticeLinks(pc, radius){
           baseAdded++; pageAdded++;
         }
       }
-      if (p > 1 && pageAdded === 0) break; // early stop
+      if (p > 1 && pageAdded === 0) break; // early stop for this base
     }
     if (baseAdded > 0) break; // stop at first base that yields
   }
@@ -183,7 +192,7 @@ const RX_NEG_STRICT = [
   /\bwe(?:\s*are|'re)?\s*currently\s*unable\s*to\s*accept\s*new\s*nhs\s*patients\b/i,
   /\bclosed\s*to\s*new\s*nhs\s*patients\b/i
 ];
-/* UNCONFIRMED guard — prevents false accepting due to “currently accept” substring */
+/* UNCONFIRMED guard — prevents false accepting */
 const RX_UNCONFIRMED = /\b(has\s+not\s+confirmed|not\s+confirmed|unable\s+to\s+confirm)\s+(if|whether)\s+they?\s+(?:are\s+)?(?:currently\s+)?accept(?:ing|s)?\s+new\s+nhs\s+patients\b/i;
 
 const WHO_HEADINGS_RX = /who\s+can\s+(use|register)|who\s+can\s+use\s+this\s+service|who\s+can\s+get\s+routine\s+nhs\s+dental\s+care/i;
@@ -237,7 +246,6 @@ function parseStructuredAnywhere($){
 
     if (seen) {
       const txt = textify(root);
-      // Unconfirmed guard at section level
       if (RX_UNCONFIRMED.test(txt)) return { status:'unknown', reason:`structured_any_unconfirmed@${sel}`, text: txt };
       if (adult) return { status:'accepting', reason:`structured_any_adult@${sel}`, text: txt };
       if (!adult && child) return { status:'child_only', reason:`structured_any_child@${sel}`, text: txt };
@@ -248,9 +256,8 @@ function parseStructuredAnywhere($){
   return null;
 }
 
-/* Analyze a text with precedence rules (unconfirmed & negatives first) */
+/* Analyze a text with precedence rules */
 function analyzeText(text, scope){
-  // 0) Explicit "unconfirmed" → always UNKNOWN and override everything else
   if (RX_UNCONFIRMED.test(text)) return { status:"unknown", reason:`${scope}_unconfirmed`, text };
 
   const strictPos = RX_STRICT_POS.test(text);
@@ -268,7 +275,6 @@ function analyzeText(text, scope){
     if (!adultPos && childPos) return { status:"child_only", reason:`${scope}_neg+child_only`, text };
     return { status:"not_accepting", reason:`${scope}_negative`, text };
   }
-  // Loose positive is only valid if NOT unconfirmed/negative
   if (loosePos){
     if (adultPos) return { status:"accepting", reason:`${scope}_loose+adult`, text };
     if (!adultPos && childPos) return { status:"child_only", reason:`${scope}_loose+child`, text };
@@ -279,23 +285,18 @@ function analyzeText(text, scope){
 
 /* Parse a cheerio document: tags → structured-anywhere → regex on #appointments → regex on page */
 function parseCheerio($, scopeLabel){
-  // 1) NHS status tags
   const t = parseByTags($);
   if (t) return t;
 
-  // 2) Structured bullets / headings across common containers
   const structured = parseStructuredAnywhere($);
   if (structured) return structured;
 
-  // 3) Regex over #appointments if present
   const $ap = $("#appointments");
   if ($ap.length){
-    const apTxt = textify($ap);
-    const ar = analyzeText(apTxt, `${scopeLabel}_appointments`);
+    const ar = analyzeText(textify($ap), `${scopeLabel}_appointments`);
     if (ar.status !== "unknown") return ar;
   }
 
-  // 4) Regex over whole page
   return analyzeText(textify($.root()), `${scopeLabel}_page`);
 }
 
@@ -330,20 +331,21 @@ function extractTitleFromUrl(u){
 async function evaluatePractice(url){
   try{
     const mainCanon = canonicalizeUrl(url);
+
     // 1) Try /appointments FIRST
     const { html: apptHtml, url: apptUrl } = await fetchAppointmentsHtml(mainCanon);
     if (apptHtml){
       const $a = cheerio.load(apptHtml);
       const ra = parseCheerio($a, "APPT");
       if (ra && ra.status !== "unknown"){
-        console.log(`[DETAIL] (APPT) → ${ra.status} (${ra.reason}) ${apptUrl}`);
-        return { url: mainCanon, title: extractTitle($a) || extractTitleFromUrl(mainCanon), status: ra.status, excerpt: (ra.text || "").slice(0, 400) };
-      } else {
+        if (DEBUG) console.log(`[DETAIL] (APPT) → ${ra.status} (${ra.reason}) ${apptUrl}`);
+        return { url: mainCanon, title: extractTitle($a) || extractTitleFromUrl(mainCanon), status: ra.status, reason: ra.reason, excerpt: (ra.text || "").slice(0, 400) };
+      } else if (DEBUG) {
         const t = textify($a.root());
         console.log(`[DETAIL] (APPT) → unknown (${ra ? ra.reason : "no_parse"}) len=${t.length} url=${apptUrl}`);
         if (t.length < 800) console.log("[DEBUG_SAMPLE_APPT]", t.slice(0, 300));
       }
-    } else {
+    } else if (DEBUG) {
       console.log(`[DETAIL] (APPT) → empty ${mainCanon}/appointments`);
     }
 
@@ -354,14 +356,17 @@ async function evaluatePractice(url){
 
     const rm = parseCheerio($, "MAIN");
     const title = extractTitle($) || extractTitleFromUrl(mainCanon);
-    if (rm.status === "unknown"){
-      const all = textify($.root());
-      console.log(`[DETAIL] (MAIN) → unknown (${rm.reason}) len=${all.length} url=${mainCanon}`);
-      if (all.length < 1200) console.log("[DEBUG_SAMPLE_MAIN]", all.slice(0, 400));
-    } else {
-      console.log(`[DETAIL] (MAIN) → ${rm.status} (${rm.reason}) ${mainCanon}`);
+
+    if (DEBUG) {
+      if (rm.status === "unknown"){
+        const all = textify($.root());
+        console.log(`[DETAIL] (MAIN) → unknown (${rm.reason}) len=${all.length} url=${mainCanon}`);
+        if (all.length < 1200) console.log("[DEBUG_SAMPLE_MAIN]", all.slice(0, 400));
+      } else {
+        console.log(`[DETAIL] (MAIN) → ${rm.status} (${rm.reason}) ${mainCanon}`);
+      }
     }
-    return { url: mainCanon, title, status: rm.status, excerpt: (rm.text || "").slice(0, 400) };
+    return { url: mainCanon, title, status: rm.status, reason: rm.reason, excerpt: (rm.text || "").slice(0, 400) };
 
   } catch (e){
     return { url: canonicalizeUrl(url) || url, title:"", status:"error", error: e?.message || String(e) };
@@ -383,11 +388,11 @@ async function mapLimit(arr, n, fn){
 /* ------------------------------ Public ----------------------------- */
 export async function scanPostcode(pc, radiusMiles = 25){
   pc = coercePostcode(pc); radiusMiles = coerceRadius(radiusMiles);
-  console.log(`DentistRadar v8.8`);
+  console.log(`DentistRadar v9.0`);
   console.log(`--- Scan: ${pc || "(empty)"} (${radiusMiles} miles) ---`);
 
   if (!pc){
-    return { ok:true, summary:{ postcode:"", radiusMiles, accepting:0, childOnly:0, notAccepting:0, mixed:0, scanned:0, tookMs:0 }, accepting:[], childOnly:[], errors:[] };
+    return { ok:true, summary:{ postcode:"", radiusMiles, accepting:0, childOnly:0, notAccepting:0, mixed:0, unknown:0, unconfirmed:0, errors:0, scanned:0, tookMs:0, reasons:{} }, accepting:[], childOnly:[], notAccepting:[], unknown:[], errors:[] };
   }
 
   const t0 = Date.now();
@@ -395,7 +400,7 @@ export async function scanPostcode(pc, radiusMiles = 25){
   console.log(`[DISCOVERY] detail URLs = ${links.length}`);
 
   if (!links.length){
-    return { ok:true, summary:{ postcode:pc, radiusMiles, accepting:0, childOnly:0, notAccepting:0, mixed:0, scanned:0, tookMs:Date.now()-t0 }, accepting:[], childOnly:[], errors:[] };
+    return { ok:true, summary:{ postcode:pc, radiusMiles, accepting:0, childOnly:0, notAccepting:0, mixed:0, unknown:0, unconfirmed:0, errors:0, scanned:0, tookMs:Date.now()-t0, reasons:{} }, accepting:[], childOnly:[], notAccepting:[], unknown:[], errors:[] };
   }
 
   const target  = links.slice(0, MAX_PRACTICES);
@@ -419,6 +424,15 @@ export async function scanPostcode(pc, radiusMiles = 25){
   const notAccepting = uniq.filter(x => x.status === "not_accepting");
   const mixed        = uniq.filter(x => x.status === "mixed");
   const errors       = uniq.filter(x => x.status === "error");
+  const unknown      = uniq.filter(x => x.status === "unknown");
+
+  const unconfirmed  = unknown.filter(x => (x.reason || x.excerpt || "").toLowerCase().includes("unconfirmed"));
+
+  const reasonCounts = {};
+  for (const r of uniq) {
+    const key = (r.reason || r.status || "unknown").toLowerCase();
+    reasonCounts[key] = (reasonCounts[key] || 0) + 1;
+  }
 
   const summary = {
     postcode: pc,
@@ -427,8 +441,12 @@ export async function scanPostcode(pc, radiusMiles = 25){
     childOnly: childOnly.length,
     notAccepting: notAccepting.length,
     mixed: mixed.length,
+    unknown: unknown.length,
+    unconfirmed: unconfirmed.length,
+    errors: errors.length,
     scanned: uniq.length,
-    tookMs: Date.now() - t0
+    tookMs: Date.now() - t0,
+    reasons: reasonCounts
   };
 
   return {
@@ -436,6 +454,8 @@ export async function scanPostcode(pc, radiusMiles = 25){
     summary,
     accepting: accepting.map(x => ({ url:x.url, title:x.title, excerpt:x.excerpt })),
     childOnly: childOnly.map(x => ({ url:x.url, title:x.title, excerpt:x.excerpt })),
+    notAccepting: notAccepting.map(x => ({ url:x.url, title:x.title })),
+    unknown: unknown.map(x => ({ url:x.url, title:x.title, reason: x.reason })),
     errors
   };
 }
@@ -452,11 +472,13 @@ export async function runScan(argsOrString){
     ok: true,
     checked: base.summary.scanned,
     found: base.accepting.length + (includeChildOnly ? base.childOnly.length : 0),
-    alertsSent: 0,
+    alertsSent: 0, // server.js handles emailing + EmailLog in Mongo
     summary: base.summary,
     accepting: base.accepting,
     childOnly: includeChildOnly ? base.childOnly : [],
-    errors: base.errors
+    notAccepting: base.notAccepting || [],
+    unknown: base.unknown || [],
+    errors: base.errors || []
   };
 }
 
