@@ -1,10 +1,9 @@
 /**
- * DentistRadar Scanner v7.2
- * - Defensive input coercion (works even if server sends objects)
- * - UK postcode normalisation (light)
- * - Radius clamp + defaults
- * - Graceful HTTP handling (404 -> 0 results, no throw)
- * - Native fetch, no extra deps
+ * DentistRadar Scanner v7.3
+ * - Defensive input coercion + UK postcode normalisation
+ * - Env fallbacks: DEFAULT_POSTCODE / SCAN_POSTCODE and DEFAULT_RADIUS / SCAN_RADIUS
+ * - Graceful HTTP failures -> 0 results
+ * - Native fetch; no extra deps
  *
  * Exports (unchanged):
  *   - export async function scanPostcode(postcode, radiusMiles)
@@ -26,16 +25,16 @@ function envInt(k, d){ const v=parseInt(process.env[k]||`${d}`,10); return Numbe
 
 /* ----------------------------- Input guards ----------------------------- */
 function coercePostcode(input){
-  // Accept: string, or objects like { value: "..."} or { postcode: "..." }
+  // Accept string, or objects like { value: "..." } or { postcode: "..." }
   let raw = input;
   if (typeof raw === "object" && raw !== null) {
     raw = raw.value ?? raw.postcode ?? JSON.stringify(raw);
   }
   raw = String(raw ?? "").trim();
-  // Light normalisation: uppercase, keep letters/numbers/spaces, fix spacing
+  // Light normalisation: uppercase, keep A-Z/0-9/spaces, collapse spaces
   const normal = raw.toUpperCase().replace(/[^A-Z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
   if (!normal) return "";
-  // If no space and looks like a valid length, reinsert space before inward code
+  // If missing space and looks UK-ish (≥5), insert space before inward code
   const compact = normal.replace(/\s+/g,"");
   if (!normal.includes(" ") && compact.length >= 5) {
     return compact.slice(0, compact.length - 3) + " " + compact.slice(-3);
@@ -45,9 +44,7 @@ function coercePostcode(input){
 
 function coerceRadius(input, def=25){
   let r = input;
-  if (typeof r === "object" && r !== null) {
-    r = r.value ?? r.radius;
-  }
+  if (typeof r === "object" && r !== null) r = r.value ?? r.radius;
   const n = parseInt(r ?? def, 10);
   if (Number.isNaN(n)) return def;
   return Math.max(1, Math.min(100, n));
@@ -64,7 +61,7 @@ async function fetchText(url, tries=0){
     const r=await fetch(url,{
       method:"GET", redirect:"follow", signal:ctrl.signal,
       headers:{
-        "user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36 DentistRadar/7.2",
+        "user-agent":"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36 DentistRadar/7.3",
         "accept-language":"en-GB,en;q=0.9",
         "accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
       }
@@ -73,8 +70,7 @@ async function fetchText(url, tries=0){
     return await r.text();
   } catch(e){
     if (tries < 2){ await sleep(120 + Math.random()*240); return fetchText(url, tries+1); }
-    // Final failure: return empty so discovery can degrade gracefully to 0 results
-    return "";
+    return ""; // graceful final failure
   } finally { clearTimeout(t); }
 }
 
@@ -88,10 +84,7 @@ async function discoverPracticeLinks(postcode, radiusMiles){
   const cached=cache.get(key); if(cached) return {url,links:cached,cached:true};
 
   const html=await fetchText(url);
-  if (!html) {
-    // HTTP error or timeout already handled -> return 0 results gracefully
-    return { url, links: [], cached: false };
-  }
+  if (!html) return { url, links: [], cached: false };
 
   const $=cheerio.load(html);
 
@@ -148,8 +141,8 @@ async function evaluatePractice(url){
     if(r.negative && !r.positive) status="not_accepting";
     else if(r.childOnly && !r.positive) status="child_only";
     else if(r.positive && !r.negative) status="accepting";
-    else if(r.positive && r.childOnly) status="child_only";
     else if(r.positive && r.negative) status="mixed";
+    if(r.positive && r.childOnly) status="child_only";
     return {url,title,status,positive:r.positive,childOnly:r.childOnly,negative:r.negative,excerpt:r.excerpt};
   }catch(e){ return {url,title:"",status:"error",error:e?.message||String(e)}; }
 }
@@ -163,14 +156,19 @@ async function mapWithConcurrency(items, limit, worker){
 
 /* ----------------------------- Public API ----------------------------- */
 export async function scanPostcode(postcodeInput, radiusInput){
-  const postcode = coercePostcode(postcodeInput);
-  const radiusMiles = coerceRadius(radiusInput, 25);
+  // NEW: env fallbacks so server.js can stay unchanged
+  const postcode = coercePostcode(
+    postcodeInput ?? process.env.DEFAULT_POSTCODE ?? process.env.SCAN_POSTCODE ?? ""
+  );
+  const radiusMiles = coerceRadius(
+    radiusInput ?? process.env.DEFAULT_RADIUS ?? process.env.SCAN_RADIUS ?? 25,
+    25
+  );
 
-  console.log(`DentistRadar scanner v7.2`);
+  console.log(`DentistRadar scanner v7.3`);
   console.log(`--- Scan: ${postcode || "(empty)"} (${radiusMiles} miles) ---`);
 
   if (!postcode) {
-    // Don’t throw (keeps server.js unchanged). Return a benign 0-result payload.
     const out=[{ postcode:"", radiusMiles, accepting:0, childOnly:0 }];
     console.log("[INFO] Empty/invalid postcode; returning 0 results.");
     console.log("[DONE]", JSON.stringify(out,null,2));
@@ -215,7 +213,7 @@ export default scanPostcode;
 
 /* ----------------------------- CLI ----------------------------- */
 if (import.meta.url === `file://${process.argv[1]}`){
-  const postcode=process.argv[2]||"RG41 4UW";
-  const radius=Math.max(1,Math.min(100,parseInt(process.argv[3]||"25",10)));
+  const postcode=process.env.DEFAULT_POSTCODE || process.env.SCAN_POSTCODE || process.argv[2] || "RG41 4UW";
+  const radius=Math.max(1,Math.min(100,parseInt(process.env.DEFAULT_RADIUS || process.env.SCAN_RADIUS || process.argv[3] || "25",10)));
   scanPostcode(postcode,radius).catch(err=>{ console.error("[FATAL]",err?.message||err); process.exit(1); });
 }
