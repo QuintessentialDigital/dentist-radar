@@ -1,5 +1,8 @@
-// Dentist Radar Server (v1.8.6+) — email templates upgrade
-// Keeps all routes/logic the same; only welcome email now uses curated HTML.
+// Dentist Radar Server (v1.8.6+) — aligned to 'watches' collection & curated emails
+// Changes vs your last file:
+// - Uses shared models.js (watches/users/emaillogs) — no DB name rewrite
+// - Welcome email uses HTML template via Postmark
+// - Adds /api/debug/peek to verify DB/collections
 
 import express from "express";
 import cors from "cors";
@@ -8,11 +11,11 @@ import dotenv from "dotenv";
 import Stripe from "stripe";
 import path from "path";
 import { fileURLToPath } from "url";
-import { runScan } from "./scanner.js";
-
-// NEW: curated email templates
-import { renderEmail } from "./emailTemplates.js";
 import axios from "axios";
+
+import { runScan } from "./scanner.js";
+import { renderEmail } from "./emailTemplates.js";
+import { connectMongo, Watch, User, EmailLog, peek } from "./models.js";
 
 dotenv.config();
 
@@ -23,59 +26,16 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static("public"));
 
-function forceDentistRadarDb(uri = "") {
-  if (!uri) return "";
-  if (/\/dentistradar(\?|$)/i.test(uri)) return uri;
-  if (/\/[^/?]+(\?|$)/.test(uri)) return uri.replace(/\/[^/?]+(\?|$)/, "/dentistradar$1");
-  return uri.replace(/(\.net)(\/)?/, "$1/dentistradar");
-}
-
+/* ---------------------------
+   Mongo — connect to URI as-is
+--------------------------- */
 const RAW_URI = process.env.MONGO_URI || "";
-const FIXED_URI = forceDentistRadarDb(RAW_URI);
-
-mongoose
-  .connect(FIXED_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log("✅ MongoDB connected →", FIXED_URI.replace(/:[^@]+@/, ":***@")))
+connectMongo(RAW_URI)
+  .then((c) => console.log("✅ MongoDB connected →", c?.name))
   .catch((err) => console.error("❌ MongoDB connection error:", err.message));
 
 /* ---------------------------
-   Schemas / Models
---------------------------- */
-const watchSchema = new mongoose.Schema(
-  { email: { type: String, index: true }, postcode: { type: String, index: true }, radius: Number },
-  { timestamps: true, versionKey: false }
-);
-watchSchema.index({ email: 1, postcode: 1 }, { unique: true });
-
-const userSchema = new mongoose.Schema(
-  {
-    email: { type: String, unique: true, index: true },
-    plan: { type: String, default: "free" },
-    postcode_limit: { type: Number, default: 1 },
-    status: { type: String, default: "active" }
-  },
-  { timestamps: true, versionKey: false }
-);
-
-const emailLogSchema = new mongoose.Schema(
-  {
-    to: String,
-    subject: String,
-    type: String,
-    provider: { type: String, default: "postmark" },
-    providerId: String,
-    meta: Object,
-    sentAt: { type: Date, default: Date.now }
-  },
-  { versionKey: false, timestamps: false }
-);
-
-const Watch   = mongoose.models.Watch || mongoose.model("Watch", watchSchema);
-const User    = mongoose.models.User || mongoose.model("User", userSchema);
-const EmailLog= mongoose.models.EmailLog || mongoose.model("EmailLog", emailLogSchema);
-
-/* ---------------------------
-   Email sender (Postmark)
+   Helpers (email + validation)
 --------------------------- */
 async function sendEmailHTML(to, subject, html, type = "other", meta = {}) {
   const key = process.env.POSTMARK_SERVER_TOKEN || process.env.POSTMARK_TOKEN;
@@ -84,22 +44,23 @@ async function sendEmailHTML(to, subject, html, type = "other", meta = {}) {
     return { ok: false, skipped: true };
   }
   try {
-    const r = await axios.post("https://api.postmarkapp.com/email",
+    const r = await axios.post(
+      "https://api.postmarkapp.com/email",
       {
         From: process.env.MAIL_FROM || process.env.EMAIL_FROM || "alerts@dentistradar.co.uk",
         To: to,
         Subject: subject,
         HtmlBody: html,
-        MessageStream: process.env.POSTMARK_MESSAGE_STREAM || "outbound"
+        MessageStream: process.env.POSTMARK_MESSAGE_STREAM || "outbound",
       },
       {
         headers: {
           Accept: "application/json",
           "Content-Type": "application/json",
-          "X-Postmark-Server-Token": key
+          "X-Postmark-Server-Token": key,
         },
         timeout: 12000,
-        validateStatus: () => true
+        validateStatus: () => true,
       }
     );
 
@@ -113,7 +74,7 @@ async function sendEmailHTML(to, subject, html, type = "other", meta = {}) {
           type,
           providerId: body.MessageID,
           meta,
-          sentAt: new Date()
+          sentAt: new Date(),
         });
       } catch (e) {
         console.error("⚠️ EmailLog save error:", e?.message || e);
@@ -149,8 +110,22 @@ async function planLimitFor(email) {
 /* ---------------------------
    Health / Debug
 --------------------------- */
-app.get("/api/health", (req, res) => res.json({ ok: true, db: "dentistradar", time: new Date().toISOString() }));
-app.get("/health", (req, res) => res.json({ ok: true, db: "dentistradar", time: new Date().toISOString() }));
+app.get("/api/health", (req, res) =>
+  res.json({ ok: true, db: mongoose.connection?.name, time: new Date().toISOString() })
+);
+app.get("/health", (req, res) =>
+  res.json({ ok: true, db: mongoose.connection?.name, time: new Date().toISOString() })
+);
+
+// Quick peek to verify we're on the correct DB/collection
+app.get("/api/debug/peek", async (req, res) => {
+  try {
+    const info = await peek();
+    res.json({ ok: true, ...info });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e?.message });
+  }
+});
 
 /* ---------------------------
    Create Watch (Welcome email improved)
@@ -161,13 +136,31 @@ app.post("/api/watch/create", async (req, res) => {
     const postcode = normalizePostcode(String(req.body?.postcode || ""));
     const radius = Number(req.body?.radius);
 
-    if (!emailRe.test(email)) return res.status(400).json({ ok: false, error: "invalid_email", message: "Please enter a valid email address." });
-    if (!looksLikeUkPostcode(postcode)) return res.status(400).json({ ok: false, error: "invalid_postcode", message: "Please enter a valid UK postcode (e.g. RG1 2AB)." });
-    if (!radius || radius < 1 || radius > 30) return res.status(400).json({ ok: false, error: "invalid_radius", message: "Please select a radius between 1 and 30 miles." });
+    if (!emailRe.test(email))
+      return res
+        .status(400)
+        .json({ ok: false, error: "invalid_email", message: "Please enter a valid email address." });
+    if (!looksLikeUkPostcode(postcode))
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_postcode",
+        message: "Please enter a valid UK postcode (e.g. RG1 2AB).",
+      });
+    if (!radius || radius < 1 || radius > 30)
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_radius",
+        message: "Please select a radius between 1 and 30 miles.",
+      });
 
+    // Duplicate check
     const exists = await Watch.findOne({ email, postcode }).lean();
-    if (exists) return res.status(400).json({ ok: false, error: "duplicate", message: "Alert already exists for this postcode." });
+    if (exists)
+      return res
+        .status(400)
+        .json({ ok: false, error: "duplicate", message: "Alert already exists for this postcode." });
 
+    // Plan limit
     const limit = await planLimitFor(email);
     const count = await Watch.countDocuments({ email });
     if (count >= limit) {
@@ -175,13 +168,13 @@ app.post("/api/watch/create", async (req, res) => {
         ok: false,
         error: "upgrade_required",
         message: `Your plan allows up to ${limit} postcode${limit > 1 ? "s" : ""}.`,
-        upgradeLink: "/pricing.html"
+        upgradeLink: "/pricing.html",
       });
     }
 
     await Watch.create({ email, postcode, radius });
 
-    // NEW: curated Welcome email
+    // Curated Welcome email
     const { subject, html } = renderEmail("welcome", { postcode, radius });
     await sendEmailHTML(email, subject, html, "welcome", { postcode, radius });
 
@@ -193,7 +186,7 @@ app.post("/api/watch/create", async (req, res) => {
 });
 
 /* ---------------------------
-   Stripe Checkout (unchanged)
+   Stripe Checkout (compat route names)
 --------------------------- */
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || "";
 const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
@@ -215,8 +208,8 @@ async function handleCheckoutSession(req, res) {
       payment_method_types: ["card"],
       line_items: [{ price: priceId, quantity: 1 }],
       customer_email: email,
-      success_url: `${SITE}/thankyou.html?plan=${(plan||'pro')}`,
-      cancel_url: `${SITE}/upgrade.html?canceled=true`
+      success_url: `${SITE}/thankyou.html?plan=${plan || "pro"}`,
+      cancel_url: `${SITE}/upgrade.html?canceled=true`,
     });
     return res.json({ ok: true, url: session.url });
   } catch (err) {
@@ -229,7 +222,7 @@ app.post("/api/create-checkout-session", handleCheckoutSession);
 app.post("/api/stripe/create-checkout-session", handleCheckoutSession);
 
 /* ---------------------------
-   Manual / Cron Scan Endpoint (unchanged)
+   Manual / Cron Scan Endpoint (token-gated)
 --------------------------- */
 app.post("/api/scan", async (req, res) => {
   const token = process.env.SCAN_TOKEN || "";
@@ -237,7 +230,7 @@ app.post("/api/scan", async (req, res) => {
     return res.status(403).json({ ok: false, error: "forbidden" });
   }
   try {
-    const result = await runScan();
+    const result = await runScan(); // from scanner.js
     res.json(result && typeof result === "object" ? result : { ok: true, checked: 0, found: 0, alertsSent: 0 });
   } catch (err) {
     console.error("❌ /api/scan error:", err);
@@ -246,10 +239,10 @@ app.post("/api/scan", async (req, res) => {
 });
 
 /* ---------------------------
-   SPA Fallback (unchanged)
+   SPA Fallback
 --------------------------- */
 const __filename = fileURLToPath(import.meta.url);
-const __dirname  = path.dirname(__filename);
+const __dirname = path.dirname(__filename);
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
 /* ---------------------------
