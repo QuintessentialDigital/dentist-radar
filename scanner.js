@@ -1,15 +1,13 @@
 /**
- * DentistRadar Scanner v8.3
- * - Discovery: confirmed NHS endpoints (+ fallbacks) with early-stop
+ * DentistRadar Scanner v8.4
+ * - Discovery: confirmed NHS endpoints (+ fallbacks) with early-stop paging
  * - Detail links: /services/dentist/... (singular) + tolerant variants
- * - Acceptance parsing (Appointments-first → Page fallback):
- *     • STRICT POSITIVE banner:
- *         "This dentist/dental practice currently accepts new NHS patients ..."
- *       (robust to spacing/punctuation)
- *     • Adults / Children bullet detection
- *     • NEGATIVE-FIRST precedence unless STRICT POSITIVE is present
- *       (prevents false positives like "does not accept new NHS patients")
- * - Per-practice debug flags to explain decisions
+ * - Acceptance parsing order:
+ *    1) DOM tags: .nhsuk-tag (“Accepting new NHS patients” / “Not accepting…”)
+ *    2) #appointments → “Who can use this service / Who can register” → next <ul><li> bullets (adults/children)
+ *    3) Regex over #appointments (strict + loose, adult/child bullets)
+ *    4) Regex over full page (strict negative precedence unless strict positive banner present)
+ * - Per-practice debug shows which detector fired.
  * - Node 20+ native fetch, Cheerio; compatible with server.js v1.8.7
  */
 
@@ -60,7 +58,7 @@ async function fetchText(url, tries=0){
       redirect: "follow",
       signal: ctrl.signal,
       headers: {
-        "user-agent": "Mozilla/5.0 DentistRadar/8.3",
+        "user-agent": "Mozilla/5.0 DentistRadar/8.4",
         "accept-language": "en-GB,en;q=0.9",
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
       }
@@ -147,11 +145,11 @@ async function discoverPracticeLinks(pc, radius){
 /* ----------------------- Acceptance parsing ------------------------ */
 function textify($root){ return ($root.text() || "").replace(/\s+/g," ").trim(); }
 
-/* STRICT POSITIVE banner (robust to "dentist"/"dental practice") */
-const RX_STRICT_POS = /\bthis\s+(?:dentist|dental\s+practice)\s+currently\s+accepts?\s+new\s+nhs\s+patients\b/i;
+/* STRICT POSITIVE banner (dentist/dental practice) + variants */
+const RX_STRICT_POS = /\bthis\s+(?:dentist|dental\s+practice)\s+(?:is\s+)?currently\s+accept(?:ing|s)?\s+new\s+nhs\s+patients\b/i;
 
-/* Loose positive phrase (used only if no strict negative present) */
-const RX_LOOSE_POS  = /\baccept(?:ing)?\s+new\s+nhs\s+patients\b/i;
+/* Loose positive phrase (only used when no strict negative detected) */
+const RX_LOOSE_POS  = /\b(?:is\s+)?currently\s+accept(?:ing|s)?\s+new\s+nhs\s+patients\b/i;
 
 /* Adult/Child bullets */
 const RX_ADULT_POS = [
@@ -163,77 +161,141 @@ const RX_CHILD_POS = [
   /\bchildren\s+(?:aged\s*)?(?:\d{1,2}\s*or\s*under|under\s*18|1?\d\s*or\s*under|17\s*or\s*under)\b/i,
   /\bchild(?:ren)?\s+nhs\s+patients?\b/i,
   /\bchildren\s+only\b/i,
-  /\bonly\s+accept(?:ing)?\s+(?:nhs\s+)?children\b/i
+  /\bonly\s+accept(?:ing|s)?\s+(?:nhs\s+)?children\b/i
 ];
 
 /* NEGATIVE phrases (strict) */
 const RX_NEG_STRICT = [
   /\bdoes\s+not\s+accept\s+new\s+nhs\s+patients\b/i,
-  /\bnot\s+(?:currently\s+)?accept(?:ing)?\s+new\s+nhs\s+patients\b/i,
+  /\bnot\s+(?:currently\s+)?accept(?:ing|s)?\s+new\s+nhs\s+patients\b/i,
   /\bno\s+capacity\s+for\s+nhs\s+patients\b/i,
   /\bnhs\s+list\s+closed\b/i,
   /\bwe\s+are\s+not\s+taking\s+nhs\s+patients\b/i,
   /\bwe\s+do\s+not\s+provide\s+nhs\s+dental\s+treatment\b/i
 ];
 
-function someMatch(rxList, text){ return rxList.some(rx => rx.test(text)); }
+function some(rxList, text){ return rxList.some(rx => rx.test(text)); }
 
-/** Extract Appointments section if present */
-function parseAppointments($){
-  const $sec = $("#appointments").first();
-  if (!$sec.length) return null;
-  const text = textify($sec);
-  return analyzeText(text, "appointments");
+/* 1) DOM TAGS: look for NHS status chips */
+function parseByTags($){
+  const tags = $('.nhsuk-tag').map((_,el)=> cheerio.load(el).root().text().trim().toLowerCase()).get();
+  if (!tags.length) return null;
+
+  const joined = tags.join(" | ");
+  const neg = /\bnot\s+accept(?:ing|s)?\s+new\s+nhs\s+patients\b/.test(joined) || /\bnhs\s+list\s+closed\b/.test(joined);
+  const pos = /\baccept(?:ing|s)?\s+new\s+nhs\s+patients\b/.test(joined);
+
+  if (neg && !pos) return { status:"not_accepting", reason:"tag_negative", text: joined };
+  if (pos && !neg) return { status:"accepting", reason:"tag_positive", text: joined };
+
+  // tags contradictory → let deeper checks decide
+  return null;
 }
 
-/** Fallback: analyze whole page */
-function parseWholePage($){
-  const text = textify($.root());
-  return analyzeText(text, "page");
+/* Helper: from a heading element, get the next UL (skipping non-ul siblings) */
+function nextUl($, $start){
+  let n = $start.next();
+  for (let i=0; i<6 && n && n.length; i++){
+    if (n.is("ul")) return n;
+    n = n.next();
+  }
+  return null;
 }
 
-/** Core analyzer with correct precedence:
- *  - If STRICT POSITIVE present:
- *      adults? -> accepting
- *      only children -> child_only
- *      otherwise -> accepting (positive default)
- *  - Else if NEGATIVE present:
- *      child only mentioned? -> child_only
- *      otherwise -> not_accepting
- *  - Else if LOOSE POSITIVE present:
- *      adults? -> accepting
- *      only children -> child_only
- *      otherwise -> accepting
- *  - Else -> unknown
- */
-function analyzeText(text, scope){
-  const strictPos = RX_STRICT_POS.test(text);
-  const negative  = someMatch(RX_NEG_STRICT, text);
-  const adultPos  = someMatch(RX_ADULT_POS, text);
-  const childPos  = someMatch(RX_CHILD_POS, text);
-  const loosePos  = RX_LOOSE_POS.test(text);
+/* 2) STRUCTURED APPOINTMENTS: “Who can use this service / Who can register” bullets */
+function parseAppointmentsStructured($){
+  const $ap = $("#appointments");
+  if (!$ap.length) return null;
 
-  // STRICT POSITIVE wins over negatives elsewhere on the page
+  const headingSel = 'h2,h3,h4';
+  let adult = false, child = false;
+
+  $ap.find(headingSel).each((_, el) => {
+    const t = cheerio.load(el).root().text().trim().toLowerCase();
+    if (/who\s+can\s+(use|register)/i.test(t)){
+      const $ul = nextUl($, cheerio.load(el).root());
+      if ($ul && $ul.length){
+        const lis = $ul.find("li").map((__, li) => cheerio.load(li).root().text().trim()).get();
+        for (const li of lis){
+          const s = li.replace(/\s+/g," ");
+          if (some(RX_ADULT_POS, s)) adult = true;
+          if (some(RX_CHILD_POS, s)) child = true;
+        }
+      }
+    }
+  });
+
+  if (adult || child){
+    // determine positive/negative context from the same section text
+    const secText = textify($ap);
+    const strictPos = RX_STRICT_POS.test(secText) || RX_LOOSE_POS.test(secText);
+    const negative  = some(RX_NEG_STRICT, secText);
+
+    if (strictPos || (!negative && (adult || child))){
+      if (adult) return { status:"accepting", reason:"appointments_structured_adult", text: textify($ap) };
+      return { status:"child_only", reason:"appointments_structured_child", text: textify($ap) };
+    }
+    if (negative && !adult) return { status:"not_accepting", reason:"appointments_structured_negative", text: textify($ap) };
+  }
+
+  return null;
+}
+
+/* 3) REGEX over #appointments (fallback) */
+function parseAppointmentsRegex($){
+  const $ap = $("#appointments");
+  if (!$ap.length) return null;
+
+  const txt = textify($ap);
+  const strictPos = RX_STRICT_POS.test(txt);
+  const loosePos  = RX_LOOSE_POS.test(txt);
+  const adultPos  = some(RX_ADULT_POS, txt);
+  const childPos  = some(RX_CHILD_POS, txt);
+  const negative  = some(RX_NEG_STRICT, txt);
+
   if (strictPos){
-    if (adultPos) return { status:"accepting", reason:`${scope}_strict+adult`, flags:{strictPos, adultPos, childPos, negative, loosePos}, text };
-    if (!adultPos && childPos) return { status:"child_only", reason:`${scope}_strict+child`, flags:{strictPos, adultPos, childPos, negative, loosePos}, text };
-    return { status:"accepting", reason:`${scope}_strict_only`, flags:{strictPos, adultPos, childPos, negative, loosePos}, text };
+    if (adultPos) return { status:"accepting", reason:"appointments_strict+adult", text: txt };
+    if (!adultPos && childPos) return { status:"child_only", reason:"appointments_strict+child", text: txt };
+    return { status:"accepting", reason:"appointments_strict_only", text: txt };
   }
-
-  // NEGATIVE-FIRST if no strict positive banner
-  if (negative){
-    if (!adultPos && childPos) return { status:"child_only", reason:`${scope}_neg+child_only`, flags:{strictPos, adultPos, childPos, negative, loosePos}, text };
-    return { status:"not_accepting", reason:`${scope}_negative`, flags:{strictPos, adultPos, childPos, negative, loosePos}, text };
+  if (negative && !strictPos){
+    if (!adultPos && childPos) return { status:"child_only", reason:"appointments_neg+child_only", text: txt };
+    return { status:"not_accepting", reason:"appointments_negative", text: txt };
   }
-
-  // LOOSE positive (safe only when no negatives detected)
   if (loosePos){
-    if (adultPos) return { status:"accepting", reason:`${scope}_loose+adult`, flags:{strictPos, adultPos, childPos, negative, loosePos}, text };
-    if (!adultPos && childPos) return { status:"child_only", reason:`${scope}_loose+child`, flags:{strictPos, adultPos, childPos, negative, loosePos}, text };
-    return { status:"accepting", reason:`${scope}_loose_only`, flags:{strictPos, adultPos, childPos, negative, loosePos}, text };
+    if (adultPos) return { status:"accepting", reason:"appointments_loose+adult", text: txt };
+    if (!adultPos && childPos) return { status:"child_only", reason:"appointments_loose+child", text: txt };
+    return { status:"accepting", reason:"appointments_loose_only", text: txt };
   }
 
-  return { status:"unknown", reason:`${scope}_inconclusive`, flags:{strictPos, adultPos, childPos, negative, loosePos}, text };
+  return null;
+}
+
+/* 4) PAGE-WIDE regex (last resort) */
+function parseWholePage($){
+  const txt = textify($.root());
+  const strictPos = RX_STRICT_POS.test(txt);
+  const loosePos  = RX_LOOSE_POS.test(txt);
+  const adultPos  = some(RX_ADULT_POS, txt);
+  const childPos  = some(RX_CHILD_POS, txt);
+  const negative  = some(RX_NEG_STRICT, txt);
+
+  if (strictPos){
+    if (adultPos) return { status:"accepting", reason:"page_strict+adult", text: txt };
+    if (!adultPos && childPos) return { status:"child_only", reason:"page_strict+child", text: txt };
+    return { status:"accepting", reason:"page_strict_only", text: txt };
+  }
+  if (negative && !strictPos){
+    if (!adultPos && childPos) return { status:"child_only", reason:"page_neg+child_only", text: txt };
+    return { status:"not_accepting", reason:"page_negative", text: txt };
+  }
+  if (loosePos){
+    if (adultPos) return { status:"accepting", reason:"page_loose+adult", text: txt };
+    if (!adultPos && childPos) return { status:"child_only", reason:"page_loose+child", text: txt };
+    return { status:"accepting", reason:"page_loose_only", text: txt };
+  }
+
+  return { status:"unknown", reason:"page_inconclusive", text: txt };
 }
 
 /* ------------------------------ Detail ----------------------------- */
@@ -255,14 +317,19 @@ async function evaluatePractice(url){
       $("h1.nhsuk-heading-l").first().text().trim() ||
       $("h1").first().text().trim() || "";
 
-    // 1) Appointments-first
-    let r = parseAppointments($);
+    // 1) NHS status tags
+    let r = parseByTags($);
 
-    // 2) Fallback to full page if absent/inconclusive
-    if (!r || r.status === "unknown") r = parseWholePage($);
+    // 2) Structured appointments lists
+    if (!r) r = parseAppointmentsStructured($);
 
-    // Compact debug: title → status (reason) flags
-    console.log(`[DETAIL] ${title ? title.slice(0,60) : "(no title)"} → ${r.status} (${r.reason}) flags=${JSON.stringify(r.flags)}`);
+    // 3) Appointments regex fallback
+    if (!r) r = parseAppointmentsRegex($);
+
+    // 4) Full page fallback
+    if (!r) r = parseWholePage($);
+
+    console.log(`[DETAIL] ${title ? title.slice(0,60) : "(no title)"} → ${r.status} (${r.reason})`);
 
     return { url, title, status: r.status, excerpt: (r.text || "").slice(0, 400) };
   } catch (e){
@@ -285,7 +352,7 @@ async function mapLimit(arr, n, fn){
 /* ------------------------------ Public ----------------------------- */
 export async function scanPostcode(pc, radiusMiles = 25){
   pc = coercePostcode(pc); radiusMiles = coerceRadius(radiusMiles);
-  console.log(`DentistRadar v8.3`);
+  console.log(`DentistRadar v8.4`);
   console.log(`--- Scan: ${pc || "(empty)"} (${radiusMiles} miles) ---`);
 
   if (!pc){
@@ -306,7 +373,7 @@ export async function scanPostcode(pc, radiusMiles = 25){
   const accepting    = results.filter(x => x.status === "accepting");
   const childOnly    = results.filter(x => x.status === "child_only");
   const notAccepting = results.filter(x => x.status === "not_accepting");
-  const mixed        = results.filter(x => x.status === "mixed"); // unlikely now
+  const mixed        = results.filter(x => x.status === "mixed"); // unlikely
   const errors       = results.filter(x => x.status === "error");
 
   const summary = {
