@@ -1,84 +1,177 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Dentist Radar — Admin</title>
-  <link rel="stylesheet" href="style.css" />
+  <title>DentistRadar Admin Panel</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    .admin-wrap{max-width:800px;margin:32px auto;padding:16px}
-    .card{border:1px solid #e7ecf2;border-radius:12px;padding:16px;background:#fff}
-    .row{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px}
-    .row input{flex:1;min-width:220px;height:44px;border:1px solid #e7ecf2;border-radius:10px;padding:0 12px}
-    .btn{height:44px;padding:0 16px;border:0;border-radius:10px;background:#2b7fff;color:#fff;font-weight:700;cursor:pointer}
-    pre{background:#0e1525;color:#e6edf3;border-radius:10px;padding:12px;overflow:auto}
-    .muted{color:#5b6578;font-size:14px;margin-top:6px}
+    body {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      margin: 24px;
+      max-width: 960px;
+    }
+    h1 { margin-bottom: 10px; }
+    .muted { color:#666; font-size:13px; }
+    .row { display:flex; flex-wrap:wrap; gap:14px; margin-bottom:14px; }
+    label { display:flex; flex-direction:column; font-size:13px; }
+    input[type="text"], input[type="password"], input[type="number"] {
+      padding:8px; min-width:220px; font-size:14px;
+    }
+    input[type="checkbox"] { margin-top:8px; }
+    button {
+      padding:10px 16px;
+      background:#005eb8; color:white;
+      border:none; border-radius:4px;
+      cursor:pointer; font-size:14px;
+    }
+    button:hover { background:#014f96; }
+    .ok { color:#0a7f2e; font-weight:600; }
+    .err { color:#b00020; font-weight:600; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:20px; margin-top:20px; }
+    @media(max-width:800px){ .grid { grid-template-columns:1fr; } }
+    .card {
+      border:1px solid #ddd;
+      border-radius:8px;
+      padding:12px 14px;
+      margin-bottom:10px;
+      background:#fafafa;
+    }
+    .list { margin-top:6px; }
   </style>
 </head>
+
 <body>
-  <header class="site-header">
-    <div class="container navbar">
-      <div class="nav-left">
-        <a class="logo" href="/"><img src="logo.svg" alt="Dentist Radar" /></a>
-      </div>
-      <div class="nav-right">
-        <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
-        <ul id="nav-links" class="nav-links">
-          <li><a href="pricing.html">Pricing</a></li>
-          <li><a href="about.html">About</a></li>
-          <li><a href="terms.html">Terms</a></li>
-          <li><a href="privacy.html">Privacy</a></li>
-        </ul>
-      </div>
-    </div>
-  </header>
+  <h1>DentistRadar Admin</h1>
+  <p class="muted">Manual NHS scanner tool (secured + JSON only). Calls <code class="mono">POST /api/scan?token=...</code></p>
 
-  <main class="admin-wrap">
-    <h1>Admin — Manual Scan</h1>
-    <div class="card">
-      <div class="row">
-        <input id="token" placeholder="Scan token" />
-        <button id="run" class="btn">Run Scan Now</button>
-      </div>
-      <div class="muted">Tip: paste your <strong>SCAN_TOKEN</strong> once — it’s stored locally for next time.</div>
-      <pre id="out">{ "hint": "Click Run Scan Now" }</pre>
-    </div>
-  </main>
+  <div class="row">
+    <label>SCAN Token
+      <input id="token" type="password" placeholder="SCAN_TOKEN from env" />
+    </label>
 
-  <footer class="site-footer">
-    <div class="container footer">
-      © 2025 Dentist Radar · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="about.html">About</a>
-    </div>
-  </footer>
+    <label>Postcode
+      <input id="postcode" type="text" placeholder="e.g. RG41 4UW" />
+    </label>
+
+    <label>Include Child-Only?
+      <input id="childOnly" type="checkbox" />
+    </label>
+  </div>
+
+  <div class="row">
+    <button id="run">Run Scan</button>
+    <span id="status" class="muted"></span>
+  </div>
+
+  <div id="out"></div>
 
   <script>
-  (function(){
-    const menuBtn = document.getElementById('menu-toggle');
-    const nav = document.getElementById('nav-links');
-    menuBtn?.addEventListener('click',()=>nav?.classList.toggle('open'));
+    (function () {
+      const $ = (id) => document.getElementById(id);
+      const tokenEl = $("token");
+      const pcEl = $("postcode");
+      const childEl = $("childOnly");
+      const runBtn = $("run");
+      const statusEl = $("status");
+      const outEl = $("out");
 
-    const tokenEl = document.getElementById('token');
-    const out = document.getElementById('out');
-    const run = document.getElementById('run');
+      // Restore last used token & postcode
+      tokenEl.value = localStorage.getItem("dr_token") || "";
+      pcEl.value = localStorage.getItem("dr_postcode") || "";
 
-    // load saved token
-    tokenEl.value = localStorage.getItem('scan_token') || '';
-
-    run.addEventListener('click', async ()=>{
-      const token = (tokenEl.value || '').trim();
-      if(!token){ out.textContent = JSON.stringify({ok:false,error:'missing_token'}, null, 2); return; }
-      localStorage.setItem('scan_token', token);
-      out.textContent = 'Running…';
-
-      try{
-        const r = await fetch(`/api/scan?token=${encodeURIComponent(token)}`, { method:'POST' });
-        const j = await r.json().catch(()=>({ok:false,error:'non_json_response'}));
-        out.textContent = JSON.stringify(j, null, 2);
-      }catch(e){
-        out.textContent = JSON.stringify({ ok:false, error: e?.message || 'network_error' }, null, 2);
+      function setStatus(msg, cls = "muted") {
+        statusEl.className = cls;
+        statusEl.textContent = msg;
       }
-    });
-  })();
+
+      function escapeHtml(s) {
+        return (s || "").replace(/[&<>"']/g, (c) =>
+          ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+        );
+      }
+
+      function renderList(title, items) {
+        const wrap = document.createElement("div");
+        wrap.innerHTML = `<h3>${title} (${items.length})</h3>`;
+        const list = document.createElement("div");
+        list.className = "list";
+
+        items.forEach((p) => {
+          const div = document.createElement("div");
+          div.className = "card";
+          div.innerHTML = `
+            <strong>${escapeHtml(p.title || "Practice")}</strong><br>
+            <a href="${p.url}" target="_blank" rel="noopener">${p.url}</a><br>
+            ${p.excerpt ? `<div class="muted">${escapeHtml(p.excerpt.slice(0,200))}</div>` : ""}
+          `;
+          list.appendChild(div);
+        });
+
+        wrap.appendChild(list);
+        return wrap;
+      }
+
+      async function runScan() {
+        const token = tokenEl.value.trim();
+        const postcode = pcEl.value.trim();
+        const includeChildOnly = childEl.checked;
+
+        if (!token) return setStatus("Missing scan token", "err");
+        if (!postcode) return setStatus("Enter postcode", "err");
+
+        localStorage.setItem("dr_token", token);
+        localStorage.setItem("dr_postcode", postcode);
+
+        setStatus("Running…");
+
+        try {
+          const res = await fetch(`/api/scan?token=${encodeURIComponent(token)}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              postcode,
+              includeChildOnly
+            }),
+          });
+
+          if (res.status === 403) {
+            setStatus("Forbidden — wrong token", "err");
+            return;
+          }
+
+          const data = await res.json();
+
+          if (!data || typeof data !== "object") {
+            setStatus("Invalid response", "err");
+            outEl.textContent = JSON.stringify(data, null, 2);
+            return;
+          }
+
+          const s = data.summary || {};
+          setStatus(
+            `OK — scanned ${s.scanned || 0} | accepting=${s.accepting || 0} | childOnly=${s.childOnly || 0}`,
+            "ok"
+          );
+
+          outEl.innerHTML = "";
+          const pre = document.createElement("pre");
+          pre.className = "mono";
+          pre.textContent = JSON.stringify(s, null, 2);
+          outEl.appendChild(pre);
+
+          const grid = document.createElement("div");
+          grid.className = "grid";
+          grid.appendChild(renderList("Accepting", data.accepting || []));
+          grid.appendChild(renderList("Child Only", data.childOnly || []));
+          outEl.appendChild(grid);
+        } catch (err) {
+          setStatus(err.message || "Error", "err");
+        }
+      }
+
+      runBtn.addEventListener("click", runScan);
+    })();
   </script>
 </body>
 </html>
