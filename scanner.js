@@ -1,14 +1,17 @@
 /**
- * DentistRadar Scanner v8.1
- * - Discovery: your confirmed NHS endpoints (+ fallbacks) with early-stop paging
- * - Detail links: /services/dentist/ (singular) + tolerant variants
- * - Acceptance parsing:
- *     1) Scan #appointments section text
- *     2) If inconclusive, scan full page
- *     3) NEW: semantic parsing of acceptance lists (adults/children bullets)
- *        - If adults indicated => accepting
- *        - If only children indicated => child_only
- * - Native fetch (Node 20+), Cheerio only. Compatible with server.js v1.8.7
+ * DentistRadar Scanner v8.2
+ * - Discovery:
+ *    /results/postcode=PC&distance=R (confirmed by you)
+ *    /results?postcode=PC&distance=R (fallback)
+ *    /locationsearch/3?postcode=PC&distance=R (fallback)
+ *   with pagination that EARLY-STOPS when a page yields no new links.
+ * - Detail links: /services/dentist/... (singular) + tolerant variants.
+ * - Acceptance parsing (Appointments-first, Full-page fallback):
+ *    • Detects “This dentist currently accepts new NHS patients …”
+ *    • Adults/Children bullets (e.g., “adults aged 18 or over”, “children 17 or under”)
+ *    • Strict negatives (not accepting / list closed / no capacity)
+ * - Logs concise debug line per practice: title, status, reason.
+ * - Native fetch (Node 20+), Cheerio only. Compatible with server.js v1.8.7.
  */
 
 import * as cheerio from "cheerio";
@@ -21,6 +24,7 @@ const TIMEOUT_MS    = envInt("DR_TIMEOUT_MS", 15000);
 const CACHE_DISC_MS = envInt("DR_CACHE_TTL_DISCOVERY_MS", 6 * 60 * 60 * 1000);
 const CACHE_DET_MS  = envInt("DR_CACHE_TTL_DETAIL_MS",    3 * 60 * 60 * 1000);
 const MAX_PAGES     = envInt("DR_MAX_DISCOVERY_PAGES", 3);
+
 function envInt(k, d){ const n = parseInt(process.env[k] ?? d, 10); return Number.isNaN(n) ? d : n; }
 
 /* --------------------------- Normalisation -------------------------- */
@@ -58,7 +62,7 @@ async function fetchText(url, tries=0){
       redirect: "follow",
       signal: ctrl.signal,
       headers: {
-        "user-agent": "Mozilla/5.0 DentistRadar/8.1",
+        "user-agent": "Mozilla/5.0 DentistRadar/8.2",
         "accept-language": "en-GB,en;q=0.9",
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
       }
@@ -121,9 +125,8 @@ async function discoverPracticeLinks(pc, radius){
         const key = `DISC:${u}`;
         const cached = cache.get(key);
         let links;
-        if (cached){
-          links = cached;
-        } else {
+        if (cached){ links = cached; }
+        else {
           const html  = await fetchText(u);
           links = extractPracticeLinks(html);
           cache.set(key, links, CACHE_DISC_MS);
@@ -144,33 +147,24 @@ async function discoverPracticeLinks(pc, radius){
 }
 
 /* ----------------------- Acceptance parsing ------------------------ */
-function collectText($root){
-  const txt = $root.text() || "";
-  return txt.replace(/\s+/g," ").trim();
-}
+function textify($root){ return ($root.text() || "").replace(/\s+/g," ").trim(); }
 
-/* Broader but safer patterns */
-const RX_POS_GENERIC = [
-  /this\s+dentist\s+currently\s+accepts?\s+new\s+nhs\s+patients/i,
-  /accept(?:ing)?\s+new\s+nhs\s+patients/i,
-  /currently\s+accept(?:ing)?\s+nhs\s+patients/i,
-  /taking\s+new\s+nhs\s+patients/i,
-  /open\s+to\s+new\s+nhs\s+patients/i
+/* explicit anchors inside Appointments */
+const RX_GENERIC_ACCEPT = /\bthis\s+dentist\s+currently\s+accepts?\s+new\s+nhs\s+patients\b/i;
+const RX_ACCEPTING      = /\baccept(?:ing)?\s+new\s+nhs\s+patients\b/i;
+
+const RX_ADULT_POS = [
+  /\badults?\s+(?:aged\s*)?(?:18|1[89]|[2-9]\d)\s*(?:\+|or\s+over)?\b/i,
+  /\badults?\s+entitled\s+to\s+free\s+routine\s+dental\s+care\b/i,
+  /\badult\s+nhs\s+patients?\b/i
+];
+const RX_CHILD_POS = [
+  /\bchildren\s+(?:aged\s*)?(?:\d{1,2}\s*or\s*under|under\s*18|1?\d\s*or\s*under|17\s*or\s*under)\b/i,
+  /\bchild(?:ren)?\s+nhs\s+patients?\b/i,
+  /\bchildren\s+only\b/i,
+  /\bonly\s+accept(?:ing)?\s+(?:nhs\s+)?children\b/i
 ];
 
-const RX_POS_ADULT = [
-  /adults?\s+(?:aged\s*)?(?:18|\d{2})\s*(?:\+|or\s+over)?/i,
-  /adults?\s+entitled\s+to\s+free\s+routine\s+dental\s+care/i,
-  /adult\s+nhs\s+patients/i
-];
-
-const RX_POS_CHILD = [
-  /children\s+(?:aged\s*)?(?:\d{1,2}\s*or\s*under|under\s*18|17\s*or\s*under)/i,
-  /child(?:ren)?\s+nhs\s+patients/i,
-  /only\s+accept(?:ing)?\s*(?:nhs\s*)?children/i
-];
-
-/* Tighten negatives to avoid unrelated matches (e.g., not accepting online bookings) */
 const RX_NEG_STRICT = [
   /\bnot\s+(?:currently\s+)?accept(?:ing)?\s+new\s+nhs\s+patients\b/i,
   /\bnhs\s+list\s+closed\b/i,
@@ -179,60 +173,44 @@ const RX_NEG_STRICT = [
   /\bwe\s+do\s+not\s+provide\s+nhs\s+dental\s+treatment\b/i
 ];
 
-/** Inspect structured acceptance copy like:
- *  "This dentist currently accepts new NHS patients for routine dental care if they are:
- *    - adults aged 18 or over
- *    - adults entitled to free routine dental care
- *    - children aged 17 or under"
- */
-function semanticAcceptance($root){
-  const text = collectText($root);
-  const hasGeneric = RX_POS_GENERIC.some(rx => rx.test(text));
-  const adult = RX_POS_ADULT.some(rx => rx.test(text));
-  const child = RX_POS_CHILD.some(rx => rx.test(text));
-  return { hasGeneric, adult, child, text };
+function someMatch(rxList, text){ return rxList.some(rx => rx.test(text)); }
+
+/** Parse #appointments with structure awareness (lists/bullets) */
+function parseAppointments($){
+  const $sec = $("#appointments").first();
+  if (!$sec.length) return null;
+
+  const text = textify($sec);
+  const generic = RX_GENERIC_ACCEPT.test(text) || RX_ACCEPTING.test(text);
+  const adult   = someMatch(RX_ADULT_POS, text);
+  const child   = someMatch(RX_CHILD_POS, text);
+  const negative= someMatch(RX_NEG_STRICT, text);
+
+  // Prefer explicit Appointments logic
+  if (generic && adult) return { status:"accepting", reason:"appointments_generic+adult", text };
+  if (generic && !adult && child) return { status:"child_only", reason:"appointments_generic+child", text };
+  if (!generic && child && !adult) return { status:"child_only", reason:"appointments_child_only", text };
+  if (negative && !generic) return { status:"not_accepting", reason:"appointments_negative", text };
+
+  // Inconclusive
+  return { status:"unknown", reason:"appointments_inconclusive", text };
 }
 
-function decideStatusFromTexts(textA, textFull){
-  // First, semantic parse on both texts
-  const sA = semanticAcceptance({ text: () => textA });
-  const sF = semanticAcceptance({ text: () => textFull });
+/** Fallback: scan the whole page */
+function parseWholePage($){
+  const text = textify($.root());
+  const generic = RX_GENERIC_ACCEPT.test(text) || RX_ACCEPTING.test(text);
+  const adult   = someMatch(RX_ADULT_POS, text);
+  const child   = someMatch(RX_CHILD_POS, text);
+  const negative= someMatch(RX_NEG_STRICT, text);
 
-  const hasGeneric = sA.hasGeneric || sF.hasGeneric;
-  const adult      = sA.adult || sF.adult;
-  const child      = sA.child || sF.child;
+  if (generic && adult) return { status:"accepting", reason:"page_generic+adult", text };
+  if (generic && !adult && child) return { status:"child_only", reason:"page_generic+child", text };
+  if (!generic && child && !adult && !negative) return { status:"child_only", reason:"page_child_only", text };
+  if (negative && !generic) return { status:"not_accepting", reason:"page_negative", text };
+  if (generic) return { status:"accepting", reason:"page_generic_only", text };
 
-  const negA = RX_NEG_STRICT.some(rx => rx.test(textA));
-  const negF = RX_NEG_STRICT.some(rx => rx.test(textFull));
-  const negative = negA || negF;
-
-  // Decision precedence:
-  // 1) If generic acceptance + adults mentioned => accepting
-  if (hasGeneric && adult) return { status: "accepting", positive: true, childOnly: child, negative };
-
-  // 2) If generic acceptance and only children mentioned => child_only
-  if (hasGeneric && !adult && child) return { status: "child_only", positive: true, childOnly: true, negative };
-
-  // 3) If explicit negatives and no generic positive => not_accepting (unless child explicitly allowed)
-  if (negative && !hasGeneric) {
-    if (child && !adult) return { status: "child_only", positive: false, childOnly: true, negative: true };
-    return { status: "not_accepting", positive: false, childOnly: false, negative: true };
-  }
-
-  // 4) If generic positive but neither adult/child matched (rare wording) => accepting (default to positive)
-  if (hasGeneric) return { status: "accepting", positive: true, childOnly: false, negative };
-
-  // 5) Fallback: unknown or mixed if both signals found oddly
-  if (negative) return { status: "not_accepting", positive: false, childOnly: false, negative: true };
-  return { status: "unknown", positive: false, childOnly: false, negative: false };
-}
-
-function extractAppointmentsHtml($){
-  const sec = $("#appointments").first();
-  if (sec && sec.length) return cheerio.load(sec.html() || "");
-  const anchor = $("a").map((_, el) => $(el).attr("href") || "").get().find(h => h && h.includes("#appointments"));
-  if (anchor){ const node = $(anchor); if (node && node.length) return cheerio.load(node.html() || ""); }
-  return $;
+  return { status:"unknown", reason:"page_inconclusive", text };
 }
 
 /* ------------------------------ Detail ----------------------------- */
@@ -243,6 +221,7 @@ async function fetchDetailHtml(url){
   cache.set(key, html, CACHE_DET_MS);
   return html;
 }
+
 async function evaluatePractice(url){
   try{
     const html = await fetchDetailHtml(url);
@@ -253,12 +232,18 @@ async function evaluatePractice(url){
       $("h1.nhsuk-heading-l").first().text().trim() ||
       $("h1").first().text().trim() || "";
 
-    // Appointments-first
-    const $app = extractAppointmentsHtml($);
-    const textA = collectText($app);
-    let decision = decideStatusFromTexts(textA, collectText($.root()));
+    // 1) Appointments-first
+    let r = parseAppointments($);
 
-    return { url, title, status: decision.status, excerpt: (textA || collectText($.root())).slice(0, 400) };
+    // 2) Fallback to full page if unknown
+    if (!r || r.status === "unknown") {
+      r = parseWholePage($);
+    }
+
+    // Debug (compact): shows why a status was chosen
+    console.log(`[DETAIL] ${title ? title.slice(0,60) : "(no title)"} → ${r.status} (${r.reason})`);
+
+    return { url, title, status: r.status, excerpt: (r.text || "").slice(0, 400) };
   } catch (e){
     return { url, title:"", status:"error", error: e?.message || String(e) };
   }
@@ -279,7 +264,7 @@ async function mapLimit(arr, n, fn){
 /* ------------------------------ Public ----------------------------- */
 export async function scanPostcode(pc, radiusMiles = 25){
   pc = coercePostcode(pc); radiusMiles = coerceRadius(radiusMiles);
-  console.log(`DentistRadar v8.1`);
+  console.log(`DentistRadar v8.2`);
   console.log(`--- Scan: ${pc || "(empty)"} (${radiusMiles} miles) ---`);
 
   if (!pc){
@@ -300,7 +285,7 @@ export async function scanPostcode(pc, radiusMiles = 25){
   const accepting    = results.filter(x => x.status === "accepting");
   const childOnly    = results.filter(x => x.status === "child_only");
   const notAccepting = results.filter(x => x.status === "not_accepting");
-  const mixed        = results.filter(x => x.status === "mixed");
+  const mixed        = results.filter(x => x.status === "mixed"); // unlikely now
   const errors       = results.filter(x => x.status === "error");
 
   const summary = {
@@ -309,7 +294,7 @@ export async function scanPostcode(pc, radiusMiles = 25){
     accepting: accepting.length,
     childOnly: childOnly.length,
     notAccepting: notAccepting.length,
-    mixed: mixed.length, // should drop now in cases like White Dental Finch.
+    mixed: mixed.length,
     scanned: results.length,
     tookMs: Date.now() - t0
   };
