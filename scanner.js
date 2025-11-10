@@ -1,16 +1,14 @@
 /**
- * DentistRadar Scanner v8.0
- * - Discovery hits:
- *     /results/postcode=PC&distance=R (your confirmed)
- *     /results?postcode=PC&distance=R (fallback)
- *     /locationsearch/3?postcode=PC&distance=R (fallback)
- *   with pagination that EARLY-STOPS when a page yields no new links.
- * - Detail selector matches /services/dentist/… (singular) + tolerant variants.
+ * DentistRadar Scanner v8.1
+ * - Discovery: your confirmed NHS endpoints (+ fallbacks) with early-stop paging
+ * - Detail links: /services/dentist/ (singular) + tolerant variants
  * - Acceptance parsing:
- *     1) Scan #appointments section
- *     2) If inconclusive, scan full page text (covers badges, notices)
- *   Expanded regex to catch common NHS phrasings.
- * - Native fetch (Node 20+), Cheerio only. Compatible with server.js v1.8.7.
+ *     1) Scan #appointments section text
+ *     2) If inconclusive, scan full page
+ *     3) NEW: semantic parsing of acceptance lists (adults/children bullets)
+ *        - If adults indicated => accepting
+ *        - If only children indicated => child_only
+ * - Native fetch (Node 20+), Cheerio only. Compatible with server.js v1.8.7
  */
 
 import * as cheerio from "cheerio";
@@ -23,7 +21,6 @@ const TIMEOUT_MS    = envInt("DR_TIMEOUT_MS", 15000);
 const CACHE_DISC_MS = envInt("DR_CACHE_TTL_DISCOVERY_MS", 6 * 60 * 60 * 1000);
 const CACHE_DET_MS  = envInt("DR_CACHE_TTL_DETAIL_MS",    3 * 60 * 60 * 1000);
 const MAX_PAGES     = envInt("DR_MAX_DISCOVERY_PAGES", 3);
-
 function envInt(k, d){ const n = parseInt(process.env[k] ?? d, 10); return Number.isNaN(n) ? d : n; }
 
 /* --------------------------- Normalisation -------------------------- */
@@ -61,7 +58,7 @@ async function fetchText(url, tries=0){
       redirect: "follow",
       signal: ctrl.signal,
       headers: {
-        "user-agent": "Mozilla/5.0 DentistRadar/8.0",
+        "user-agent": "Mozilla/5.0 DentistRadar/8.1",
         "accept-language": "en-GB,en;q=0.9",
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
       }
@@ -96,7 +93,6 @@ function injectPage(url, page){
   if (page <= 1) return [url];
   const hasQ = url.includes("?");
   const sep  = hasQ ? "&" : "?";
-  // NHS sometimes uses 'page' or 'p'
   return [ `${url}${sep}page=${page}`, `${url}${sep}p=${page}` ];
 }
 
@@ -111,18 +107,15 @@ function extractPracticeLinks(html){
   if (out.length) console.log("[DISCOVERY_SAMPLE]", out.slice(0,3));
   return out;
 }
-
 async function discoverPracticeLinks(pc, radius){
   const bases = buildDiscoveryUrls(pc, radius);
   const globalSeen = new Set();
   let all = [];
-
   for (const b of bases){
     let baseAdded = 0;
     for (let p=1; p<=MAX_PAGES; p++){
       const urls = injectPage(b, p);
       let pageAdded = 0;
-
       for (const u of urls){
         console.log(`[DISCOVERY_URL] ${u}`);
         const key = `DISC:${u}`;
@@ -135,87 +128,110 @@ async function discoverPracticeLinks(pc, radius){
           links = extractPracticeLinks(html);
           cache.set(key, links, CACHE_DISC_MS);
         }
-
         for (const link of links){
           if (!globalSeen.has(link)){
             globalSeen.add(link);
             all.push(link);
-            baseAdded++;
-            pageAdded++;
+            baseAdded++; pageAdded++;
           }
         }
       }
-
-      // If this page contributed ZERO new links, stop paging this base (NHS often ignores pagination)
-      if (p > 1 && pageAdded === 0) {
-        break;
-      }
+      if (p > 1 && pageAdded === 0) break; // early stop for this base
     }
-
-    // If this base produced any links, don't try the next base
-    if (baseAdded > 0) break;
+    if (baseAdded > 0) break; // stop at first base that yields
   }
-
   return all;
 }
 
 /* ----------------------- Acceptance parsing ------------------------ */
-/** Build a condensed text string from a Cheerio root */
 function collectText($root){
   const txt = $root.text() || "";
   return txt.replace(/\s+/g," ").trim();
 }
 
-const RX_POS = [
+/* Broader but safer patterns */
+const RX_POS_GENERIC = [
+  /this\s+dentist\s+currently\s+accepts?\s+new\s+nhs\s+patients/i,
   /accept(?:ing)?\s+new\s+nhs\s+patients/i,
   /currently\s+accept(?:ing)?\s+nhs\s+patients/i,
-  /we\s+are\s+accept(?:ing)?\s+nhs\s+patients/i,
   /taking\s+new\s+nhs\s+patients/i,
-  /open\s+to\s+new\s+nhs\s+patients/i,
-  /accept(?:ing)?\s+nhs\s+patients\s+(?:adults|children|adults\s+and\s+children)/i,
+  /open\s+to\s+new\s+nhs\s+patients/i
 ];
 
-const RX_CHILD = [
-  /children\s+only/i,
-  /child(?:ren)?\s+only/i,
-  /only\s+accept(?:ing)?\s+(?:nhs\s+)?children/i,
-  /nhs\s+patients.*(?:under|below)\s*\d+/i,
+const RX_POS_ADULT = [
+  /adults?\s+(?:aged\s*)?(?:18|\d{2})\s*(?:\+|or\s+over)?/i,
+  /adults?\s+entitled\s+to\s+free\s+routine\s+dental\s+care/i,
+  /adult\s+nhs\s+patients/i
 ];
 
-const RX_NEG = [
-  /not\s+accept(?:ing)?\s+new\s+nhs\s+patients/i,
-  /not\s+currently\s+accept(?:ing)?\s+nhs\s+patients/i,
-  /no\s+longer\s+accept(?:ing)?\s+nhs\s+patients/i,
-  /nhs\s+list\s+closed/i,
-  /waiting\s+list\s+(?:is\s+)?closed/i,
-  /no\s+capacity\s+for\s+nhs\s+patients/i,
-  /we\s+are\s+not\s+taking\s+nhs\s+patients/i,
-  /we\s+do\s+not\s+provide\s+nhs\s+dental\s+treatment/i,
+const RX_POS_CHILD = [
+  /children\s+(?:aged\s*)?(?:\d{1,2}\s*or\s*under|under\s*18|17\s*or\s*under)/i,
+  /child(?:ren)?\s+nhs\s+patients/i,
+  /only\s+accept(?:ing)?\s*(?:nhs\s*)?children/i
 ];
 
-function decideStatus(text){
-  const positive = RX_POS.some(rx => rx.test(text));
-  const child    = RX_CHILD.some(rx => rx.test(text));
-  const negative = RX_NEG.some(rx => rx.test(text));
+/* Tighten negatives to avoid unrelated matches (e.g., not accepting online bookings) */
+const RX_NEG_STRICT = [
+  /\bnot\s+(?:currently\s+)?accept(?:ing)?\s+new\s+nhs\s+patients\b/i,
+  /\bnhs\s+list\s+closed\b/i,
+  /\bwe\s+are\s+not\s+taking\s+nhs\s+patients\b/i,
+  /\bno\s+capacity\s+for\s+nhs\s+patients\b/i,
+  /\bwe\s+do\s+not\s+provide\s+nhs\s+dental\s+treatment\b/i
+];
 
-  let status = "unknown";
-  if (negative && !positive) status = "not_accepting";
-  else if (child && !positive) status = "child_only";
-  else if (positive && !negative && child) status = "child_only";
-  else if (positive && !negative) status = "accepting";
-  else if (positive && negative) status = "mixed";
-  return { status, positive, childOnly: child, negative };
+/** Inspect structured acceptance copy like:
+ *  "This dentist currently accepts new NHS patients for routine dental care if they are:
+ *    - adults aged 18 or over
+ *    - adults entitled to free routine dental care
+ *    - children aged 17 or under"
+ */
+function semanticAcceptance($root){
+  const text = collectText($root);
+  const hasGeneric = RX_POS_GENERIC.some(rx => rx.test(text));
+  const adult = RX_POS_ADULT.some(rx => rx.test(text));
+  const child = RX_POS_CHILD.some(rx => rx.test(text));
+  return { hasGeneric, adult, child, text };
+}
+
+function decideStatusFromTexts(textA, textFull){
+  // First, semantic parse on both texts
+  const sA = semanticAcceptance({ text: () => textA });
+  const sF = semanticAcceptance({ text: () => textFull });
+
+  const hasGeneric = sA.hasGeneric || sF.hasGeneric;
+  const adult      = sA.adult || sF.adult;
+  const child      = sA.child || sF.child;
+
+  const negA = RX_NEG_STRICT.some(rx => rx.test(textA));
+  const negF = RX_NEG_STRICT.some(rx => rx.test(textFull));
+  const negative = negA || negF;
+
+  // Decision precedence:
+  // 1) If generic acceptance + adults mentioned => accepting
+  if (hasGeneric && adult) return { status: "accepting", positive: true, childOnly: child, negative };
+
+  // 2) If generic acceptance and only children mentioned => child_only
+  if (hasGeneric && !adult && child) return { status: "child_only", positive: true, childOnly: true, negative };
+
+  // 3) If explicit negatives and no generic positive => not_accepting (unless child explicitly allowed)
+  if (negative && !hasGeneric) {
+    if (child && !adult) return { status: "child_only", positive: false, childOnly: true, negative: true };
+    return { status: "not_accepting", positive: false, childOnly: false, negative: true };
+  }
+
+  // 4) If generic positive but neither adult/child matched (rare wording) => accepting (default to positive)
+  if (hasGeneric) return { status: "accepting", positive: true, childOnly: false, negative };
+
+  // 5) Fallback: unknown or mixed if both signals found oddly
+  if (negative) return { status: "not_accepting", positive: false, childOnly: false, negative: true };
+  return { status: "unknown", positive: false, childOnly: false, negative: false };
 }
 
 function extractAppointmentsHtml($){
   const sec = $("#appointments").first();
   if (sec && sec.length) return cheerio.load(sec.html() || "");
-  // fallback: anchor pointing to #appointments
   const anchor = $("a").map((_, el) => $(el).attr("href") || "").get().find(h => h && h.includes("#appointments"));
-  if (anchor){
-    const node = $(anchor);
-    if (node && node.length) return cheerio.load(node.html() || "");
-  }
+  if (anchor){ const node = $(anchor); if (node && node.length) return cheerio.load(node.html() || ""); }
   return $;
 }
 
@@ -233,24 +249,16 @@ async function evaluatePractice(url){
     if (!html) return { url, title:"", status:"error", error:"empty_html" };
 
     const $ = cheerio.load(html);
-    const title = $("h1.nhsuk-heading-l").first().text().trim() || $("h1").first().text().trim() || "";
+    const title =
+      $("h1.nhsuk-heading-l").first().text().trim() ||
+      $("h1").first().text().trim() || "";
 
-    // 1) Appointments-only first
+    // Appointments-first
     const $app = extractAppointmentsHtml($);
-    let text   = collectText($app);
-    let r      = decideStatus(text);
+    const textA = collectText($app);
+    let decision = decideStatusFromTexts(textA, collectText($.root()));
 
-    // 2) If inconclusive, scan the entire page text
-    if (r.status === "unknown") {
-      const full = collectText($.root());
-      const r2   = decideStatus(full);
-      if (r2.status !== "unknown") {
-        r = r2;
-        text = full;
-      }
-    }
-
-    return { url, title, status: r.status, excerpt: text.slice(0, 400) };
+    return { url, title, status: decision.status, excerpt: (textA || collectText($.root())).slice(0, 400) };
   } catch (e){
     return { url, title:"", status:"error", error: e?.message || String(e) };
   }
@@ -258,13 +266,10 @@ async function evaluatePractice(url){
 
 /* ---------------------------- Concurrency -------------------------- */
 async function mapLimit(arr, n, fn){
-  const out = new Array(arr.length);
-  let i = 0;
+  const out = new Array(arr.length); let i = 0;
   const workers = Array(Math.min(n, arr.length)).fill(0).map(async () => {
-    while (true){
-      const idx = i++; if (idx >= arr.length) return;
-      try{ out[idx] = await fn(arr[idx], idx); }
-      catch(e){ out[idx] = { status:"error", error:e.message }; }
+    while (true){ const idx = i++; if (idx >= arr.length) return;
+      try{ out[idx] = await fn(arr[idx], idx); } catch(e){ out[idx] = { status:"error", error:e.message }; }
     }
   });
   await Promise.all(workers);
@@ -274,7 +279,7 @@ async function mapLimit(arr, n, fn){
 /* ------------------------------ Public ----------------------------- */
 export async function scanPostcode(pc, radiusMiles = 25){
   pc = coercePostcode(pc); radiusMiles = coerceRadius(radiusMiles);
-  console.log(`DentistRadar v8.0`);
+  console.log(`DentistRadar v8.1`);
   console.log(`--- Scan: ${pc || "(empty)"} (${radiusMiles} miles) ---`);
 
   if (!pc){
@@ -304,7 +309,7 @@ export async function scanPostcode(pc, radiusMiles = 25){
     accepting: accepting.length,
     childOnly: childOnly.length,
     notAccepting: notAccepting.length,
-    mixed: mixed.length,
+    mixed: mixed.length, // should drop now in cases like White Dental Finch.
     scanned: results.length,
     tookMs: Date.now() - t0
   };
