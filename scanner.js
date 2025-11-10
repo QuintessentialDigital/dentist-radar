@@ -1,18 +1,9 @@
 /**
- * DentistRadar Scanner v8.7
- * - Discovery unchanged (confirmed NHS endpoints + fallbacks, early-stop)
- * - Classification order (for BOTH main and /appointments pages):
- *    1) NHS status tags (.nhsuk-tag) → accept / not accept
- *    2) Structured headings (“Who can use/register this service” and variants)
- *       → next <ul><li> → adults / children
- *    3) Regex over scoped section
- *    4) Regex over whole page
- * - Broadened containers searched: #appointments, .nhsuk-accordion, .nhsuk-card,
- *   .nhsuk-details, main, article
- * - Expanded negatives & positives, robust whitespace normalisation
- * - /appointments page fetched with Referer
- * - Clear debug for unknown pages (content length + sample)
- * - Node 20+ native fetch, Cheerio; compatible with server.js v1.8.7
+ * DentistRadar Scanner v8.8
+ * - NEW: Guard for “has not confirmed if/whether … currently accept new NHS patients” → classify as UNKNOWN (unconfirmed)
+ * - NEW: Hard dedupe by canonical URL + NHS org ID (last path segment like XV015042)
+ * - Keeps: /appointments-first parse, broader DOM containers, tags, structured bullets, robust negatives/positives
+ * - Compatible with server.js v1.8.7 (no changes)
  */
 
 import * as cheerio from "cheerio";
@@ -26,7 +17,6 @@ const CACHE_DISC_MS = envInt("DR_CACHE_TTL_DISCOVERY_MS", 6 * 60 * 60 * 1000);
 const CACHE_DET_MS  = envInt("DR_CACHE_TTL_DETAIL_MS",    3 * 60 * 60 * 1000);
 const CACHE_APPT_MS = envInt("DR_CACHE_TTL_APPT_MS",      2 * 60 * 60 * 1000);
 const MAX_PAGES     = envInt("DR_MAX_DISCOVERY_PAGES", 3);
-
 function envInt(k, d){ const n = parseInt(process.env[k] ?? d, 10); return Number.isNaN(n) ? d : n; }
 
 /* --------------------------- Normalisation -------------------------- */
@@ -48,8 +38,8 @@ function coerceRadius(x, def=25){
 function cleanText(s){
   return (s || "")
     .replace(/\u00A0/g, " ")                 // nbsp
-    .replace(/[\u2018\u2019\u201C\u201D]/g, "'") // smart quotes
-    .replace(/[•·▪‣]/g, "-")                 // bullets to dash
+    .replace(/[\u2018\u2019\u201C\u201D]/g, "'") // smart quotes → '
+    .replace(/[•·▪‣]/g, "-")                 // bullets → dash
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -58,7 +48,7 @@ function textify($root){ return cleanText($root.text()); }
 /* ------------------------------- HTTP ------------------------------- */
 function buildHeaders(referer = ""){
   return {
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DentistRadar/8.7",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DentistRadar/8.8",
     "accept-language": "en-GB,en;q=0.9",
     "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "cache-control": "no-cache",
@@ -78,12 +68,26 @@ async function fetchText(url, tries=0, referer=""){
     return "";
   } finally { clearTimeout(timer); }
 }
-function normalizeUrl(h){
-  if (!h) return null;
-  if (h.startsWith("http")) return h;
-  if (h.startsWith("//"))  return `https:${h}`;
-  if (h.startsWith("/"))   return `https://www.nhs.uk${h}`;
-  return null;
+
+/* ------------------------------- URLs -------------------------------- */
+function canonicalizeUrl(u){
+  if (!u) return null;
+  try{
+    const url = new URL(u.startsWith("http") ? u : `https://www.nhs.uk${u.startsWith("/")?u:`/${u}`}`);
+    url.hash = "";
+    url.search = "";
+    url.hostname = url.hostname.toLowerCase();
+    // drop trailing slash (but keep '/')
+    if (url.pathname.length > 1 && url.pathname.endsWith("/")) url.pathname = url.pathname.slice(0, -1);
+    return url.toString();
+  } catch { return null; }
+}
+function nhsOrgId(u){
+  try{
+    const p = new URL(u).pathname.split("/").filter(Boolean);
+    const id = p[p.length - 1] || "";
+    return id.toUpperCase();
+  } catch { return ""; }
 }
 
 /* ------------------------------ Discovery -------------------------- */
@@ -107,7 +111,7 @@ function extractPracticeLinks(html){
   if (!html) return [];
   const $ = cheerio.load(html);
   const selector = 'a[href*="/services/dentist/"], a[href*="/services/dentists/"], a[href*="/services/dental-"]';
-  const raw = $(selector).map((_, el) => $(el).attr("href")).get().map(normalizeUrl).filter(Boolean);
+  const raw = $(selector).map((_, el) => $(el).attr("href")).get().map(canonicalizeUrl).filter(Boolean);
   const seen = new Set(); const out = [];
   for (const u of raw){ if (!seen.has(u)){ seen.add(u); out.push(u); } }
   if (out.length) console.log("[DISCOVERY_SAMPLE]", out.slice(0,3));
@@ -115,7 +119,8 @@ function extractPracticeLinks(html){
 }
 async function discoverPracticeLinks(pc, radius){
   const bases = buildDiscoveryUrls(pc, radius);
-  const globalSeen = new Set();
+  const seenCanon = new Set();
+  const seenIds   = new Set();
   let all = [];
   for (const b of bases){
     let baseAdded = 0;
@@ -134,11 +139,13 @@ async function discoverPracticeLinks(pc, radius){
           cache.set(key, links, CACHE_DISC_MS);
         }
         for (const link of links){
-          if (!globalSeen.has(link)){
-            globalSeen.add(link);
-            all.push(link);
-            baseAdded++; pageAdded++;
-          }
+          const canon = canonicalizeUrl(link);
+          const id = nhsOrgId(canon || "");
+          if (!canon) continue;
+          if (seenCanon.has(canon) || (id && seenIds.has(id))) continue;
+          seenCanon.add(canon); if (id) seenIds.add(id);
+          all.push(canon);
+          baseAdded++; pageAdded++;
         }
       }
       if (p > 1 && pageAdded === 0) break; // early stop
@@ -151,7 +158,7 @@ async function discoverPracticeLinks(pc, radius){
 /* -------------------------- Pattern Libraries ---------------------- */
 /* STRICT positive banner (more variants) */
 const RX_STRICT_POS = /\bthis\s+(?:service|practice|dentist|dental\s+practice)\s+(?:is\s+)?currently\s+accept(?:ing|s)?\s+new\s+nhs\s+patients\b/i;
-/* Loose positive (gated by absence of negatives) */
+/* Loose positive (gated by absence of negatives and unconfirmed) */
 const RX_LOOSE_POS  = /\b(?:is\s+)?currently\s+accept(?:ing|s)?\s+new\s+nhs\s+patients\b/i;
 /* Adult/Child bullets */
 const RX_ADULT_POS = [
@@ -176,6 +183,8 @@ const RX_NEG_STRICT = [
   /\bwe(?:\s*are|'re)?\s*currently\s*unable\s*to\s*accept\s*new\s*nhs\s*patients\b/i,
   /\bclosed\s*to\s*new\s*nhs\s*patients\b/i
 ];
+/* UNCONFIRMED guard — prevents false accepting due to “currently accept” substring */
+const RX_UNCONFIRMED = /\b(has\s+not\s+confirmed|not\s+confirmed|unable\s+to\s+confirm)\s+(if|whether)\s+they?\s+(?:are\s+)?(?:currently\s+)?accept(?:ing|s)?\s+new\s+nhs\s+patients\b/i;
 
 const WHO_HEADINGS_RX = /who\s+can\s+(use|register)|who\s+can\s+use\s+this\s+service|who\s+can\s+get\s+routine\s+nhs\s+dental\s+care/i;
 const CONTAINERS = ['#appointments', '.nhsuk-accordion', '.nhsuk-card', '.nhsuk-details', 'main', 'article'];
@@ -228,19 +237,22 @@ function parseStructuredAnywhere($){
 
     if (seen) {
       const txt = textify(root);
+      // Unconfirmed guard at section level
+      if (RX_UNCONFIRMED.test(txt)) return { status:'unknown', reason:`structured_any_unconfirmed@${sel}`, text: txt };
       if (adult) return { status:'accepting', reason:`structured_any_adult@${sel}`, text: txt };
       if (!adult && child) return { status:'child_only', reason:`structured_any_child@${sel}`, text: txt };
-      // if seen but no signals, fall through to regex
-      const txt2 = textify(root);
-      const analyzed = analyzeText(txt2, `structured_any@${sel}`);
+      const analyzed = analyzeText(txt, `structured_any@${sel}`);
       if (analyzed.status !== 'unknown') return analyzed;
     }
   }
   return null;
 }
 
-/* Analyze a text with precedence rules */
+/* Analyze a text with precedence rules (unconfirmed & negatives first) */
 function analyzeText(text, scope){
+  // 0) Explicit "unconfirmed" → always UNKNOWN and override everything else
+  if (RX_UNCONFIRMED.test(text)) return { status:"unknown", reason:`${scope}_unconfirmed`, text };
+
   const strictPos = RX_STRICT_POS.test(text);
   const loosePos  = RX_LOOSE_POS.test(text);
   const adultPos  = some(RX_ADULT_POS, text);
@@ -256,6 +268,7 @@ function analyzeText(text, scope){
     if (!adultPos && childPos) return { status:"child_only", reason:`${scope}_neg+child_only`, text };
     return { status:"not_accepting", reason:`${scope}_negative`, text };
   }
+  // Loose positive is only valid if NOT unconfirmed/negative
   if (loosePos){
     if (adultPos) return { status:"accepting", reason:`${scope}_loose+adult`, text };
     if (!adultPos && childPos) return { status:"child_only", reason:`${scope}_loose+child`, text };
@@ -270,14 +283,15 @@ function parseCheerio($, scopeLabel){
   const t = parseByTags($);
   if (t) return t;
 
-  // 2) Structured bullets in many containers
+  // 2) Structured bullets / headings across common containers
   const structured = parseStructuredAnywhere($);
   if (structured) return structured;
 
   // 3) Regex over #appointments if present
   const $ap = $("#appointments");
   if ($ap.length){
-    const ar = analyzeText(textify($ap), `${scopeLabel}_appointments`);
+    const apTxt = textify($ap);
+    const ar = analyzeText(apTxt, `${scopeLabel}_appointments`);
     if (ar.status !== "unknown") return ar;
   }
 
@@ -315,41 +329,42 @@ function extractTitleFromUrl(u){
 
 async function evaluatePractice(url){
   try{
+    const mainCanon = canonicalizeUrl(url);
     // 1) Try /appointments FIRST
-    const { html: apptHtml, url: apptUrl } = await fetchAppointmentsHtml(url);
+    const { html: apptHtml, url: apptUrl } = await fetchAppointmentsHtml(mainCanon);
     if (apptHtml){
       const $a = cheerio.load(apptHtml);
       const ra = parseCheerio($a, "APPT");
       if (ra && ra.status !== "unknown"){
         console.log(`[DETAIL] (APPT) → ${ra.status} (${ra.reason}) ${apptUrl}`);
-        return { url, title: extractTitle($a) || extractTitleFromUrl(url), status: ra.status, excerpt: (ra.text || "").slice(0, 400) };
+        return { url: mainCanon, title: extractTitle($a) || extractTitleFromUrl(mainCanon), status: ra.status, excerpt: (ra.text || "").slice(0, 400) };
       } else {
         const t = textify($a.root());
         console.log(`[DETAIL] (APPT) → unknown (${ra ? ra.reason : "no_parse"}) len=${t.length} url=${apptUrl}`);
         if (t.length < 800) console.log("[DEBUG_SAMPLE_APPT]", t.slice(0, 300));
       }
     } else {
-      console.log(`[DETAIL] (APPT) → empty ${url}/appointments`);
+      console.log(`[DETAIL] (APPT) → empty ${mainCanon}/appointments`);
     }
 
     // 2) Fall back to MAIN detail page
-    const mainHtml = await fetchDetailHtml(url);
-    if (!mainHtml) return { url, title:"", status:"error", error:"empty_html" };
+    const mainHtml = await fetchDetailHtml(mainCanon);
+    if (!mainHtml) return { url: mainCanon, title:"", status:"error", error:"empty_html" };
     const $ = cheerio.load(mainHtml);
 
     const rm = parseCheerio($, "MAIN");
-    const title = extractTitle($) || extractTitleFromUrl(url);
+    const title = extractTitle($) || extractTitleFromUrl(mainCanon);
     if (rm.status === "unknown"){
       const all = textify($.root());
-      console.log(`[DETAIL] (MAIN) → unknown (${rm.reason}) len=${all.length} url=${url}`);
+      console.log(`[DETAIL] (MAIN) → unknown (${rm.reason}) len=${all.length} url=${mainCanon}`);
       if (all.length < 1200) console.log("[DEBUG_SAMPLE_MAIN]", all.slice(0, 400));
     } else {
-      console.log(`[DETAIL] (MAIN) → ${rm.status} (${rm.reason}) ${url}`);
+      console.log(`[DETAIL] (MAIN) → ${rm.status} (${rm.reason}) ${mainCanon}`);
     }
-    return { url, title, status: rm.status, excerpt: (rm.text || "").slice(0, 400) };
+    return { url: mainCanon, title, status: rm.status, excerpt: (rm.text || "").slice(0, 400) };
 
   } catch (e){
-    return { url, title:"", status:"error", error: e?.message || String(e) };
+    return { url: canonicalizeUrl(url) || url, title:"", status:"error", error: e?.message || String(e) };
   }
 }
 
@@ -368,7 +383,7 @@ async function mapLimit(arr, n, fn){
 /* ------------------------------ Public ----------------------------- */
 export async function scanPostcode(pc, radiusMiles = 25){
   pc = coercePostcode(pc); radiusMiles = coerceRadius(radiusMiles);
-  console.log(`DentistRadar v8.7`);
+  console.log(`DentistRadar v8.8`);
   console.log(`--- Scan: ${pc || "(empty)"} (${radiusMiles} miles) ---`);
 
   if (!pc){
@@ -386,11 +401,24 @@ export async function scanPostcode(pc, radiusMiles = 25){
   const target  = links.slice(0, MAX_PRACTICES);
   const results = await mapLimit(target, CONCURRENCY, evaluatePractice);
 
-  const accepting    = results.filter(x => x.status === "accepting");
-  const childOnly    = results.filter(x => x.status === "child_only");
-  const notAccepting = results.filter(x => x.status === "not_accepting");
-  const mixed        = results.filter(x => x.status === "mixed");
-  const errors       = results.filter(x => x.status === "error");
+  // final dedupe safety (by URL + NHS ID)
+  const seenU = new Set(); const seenI = new Set();
+  const uniq = [];
+  for (const r of results){
+    const cu = canonicalizeUrl(r.url) || r.url;
+    const id = nhsOrgId(cu);
+    const keyU = cu;
+    const keyI = id ? `ID:${id}` : null;
+    if (seenU.has(keyU) || (keyI && seenI.has(keyI))) continue;
+    seenU.add(keyU); if (keyI) seenI.add(keyI);
+    uniq.push({ ...r, url: cu });
+  }
+
+  const accepting    = uniq.filter(x => x.status === "accepting");
+  const childOnly    = uniq.filter(x => x.status === "child_only");
+  const notAccepting = uniq.filter(x => x.status === "not_accepting");
+  const mixed        = uniq.filter(x => x.status === "mixed");
+  const errors       = uniq.filter(x => x.status === "error");
 
   const summary = {
     postcode: pc,
@@ -399,7 +427,7 @@ export async function scanPostcode(pc, radiusMiles = 25){
     childOnly: childOnly.length,
     notAccepting: notAccepting.length,
     mixed: mixed.length,
-    scanned: results.length,
+    scanned: uniq.length,
     tookMs: Date.now() - t0
   };
 
