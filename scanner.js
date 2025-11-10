@@ -1,15 +1,13 @@
 /**
- * DentistRadar Scanner v8.5
- * - Discovery: confirmed NHS endpoints (+ fallbacks) with early-stop paging
- * - Detail links: /services/dentist/... (singular) + tolerant variants
- * - Acceptance parsing order:
- *    1) Fetch and parse dedicated /appointments page (primary source)
- *        • NHS status tags (.nhsuk-tag)
- *        • Appointments headings “Who can use this service / Who can register” → next <ul><li> bullets (adults/children)
- *        • Regex positives/negatives (strict precedence)
- *    2) If inconclusive, parse the main detail page (tags → structured → regex)
- * - Per-practice debug shows which detector fired and which URL (main vs appointments) was used.
- * - Node 20+ native fetch, Cheerio; compatible with server.js v1.8.7
+ * DentistRadar Scanner v8.6
+ * - Discovery unchanged (confirmed NHS endpoints + early-stop pagination)
+ * - Detail classification order:
+ *    1) Fetch /appointments first (with Referer) → DOM tags → structured “Who can use/register” bullets → regex
+ *    2) Fall back to main detail page with same flow
+ * - Robust text normalisation (handles \u00A0 non-breaking spaces)
+ * - Expanded negatives: “does not (currently) accept new NHS patients”, etc.
+ * - Stronger HTTP headers for NHS pages
+ * - Compatible with server.js v1.8.7 (no changes needed)
  */
 
 import * as cheerio from "cheerio";
@@ -51,7 +49,18 @@ class TTLCache{
 const cache = new TTLCache();
 
 /* -------------------------------- HTTP ------------------------------ */
-async function fetchText(url, tries=0){
+function buildHeaders(referer = ""){
+  return {
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DentistRadar/8.6",
+    "accept-language": "en-GB,en;q=0.9",
+    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "cache-control": "no-cache",
+    "pragma": "no-cache",
+    ...(referer ? { "referer": referer } : {})
+  };
+}
+
+async function fetchText(url, tries=0, referer=""){
   const ctrl = new AbortController();
   const timer = setTimeout(()=>ctrl.abort(), TIMEOUT_MS);
   try{
@@ -59,19 +68,16 @@ async function fetchText(url, tries=0){
       method: "GET",
       redirect: "follow",
       signal: ctrl.signal,
-      headers: {
-        "user-agent": "Mozilla/5.0 DentistRadar/8.5",
-        "accept-language": "en-GB,en;q=0.9",
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-      }
+      headers: buildHeaders(referer)
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     return await r.text();
   } catch (e){
-    if (tries < 2){ await sleep(120 + Math.random()*240); return fetchText(url, tries+1); }
+    if (tries < 2){ await sleep(150 + Math.random()*250); return fetchText(url, tries+1, referer); }
     return "";
   } finally { clearTimeout(timer); }
 }
+
 function normalizeUrl(h){
   if (!h) return null;
   if (h.startsWith("http")) return h;
@@ -86,8 +92,8 @@ function buildDiscoveryUrls(pc, radius){
   const encPC = encodeURIComponent(pc);
   const encR  = encodeURIComponent(radius);
   return [
-    `${base}/results/postcode=${encPC}&distance=${encR}`,         // confirmed by you
-    `${base}/results?postcode=${encPC}&distance=${encR}`,         // query fallback
+    `${base}/results/postcode=${encPC}&distance=${encR}`,         // confirmed
+    `${base}/results?postcode=${encPC}&distance=${encR}`,         // fallback
     `${base}/locationsearch/3?postcode=${encPC}&distance=${encR}` // legacy fallback
   ];
 }
@@ -109,6 +115,7 @@ function extractPracticeLinks(html){
   if (out.length) console.log("[DISCOVERY_SAMPLE]", out.slice(0,3));
   return out;
 }
+
 async function discoverPracticeLinks(pc, radius){
   const bases = buildDiscoveryUrls(pc, radius);
   const globalSeen = new Set();
@@ -137,15 +144,21 @@ async function discoverPracticeLinks(pc, radius){
           }
         }
       }
-      if (p > 1 && pageAdded === 0) break; // early stop for this base
+      if (p > 1 && pageAdded === 0) break;
     }
-    if (baseAdded > 0) break; // stop at first base that yields
+    if (baseAdded > 0) break;
   }
   return all;
 }
 
 /* ----------------------- Acceptance parsing ------------------------ */
-function textify($root){ return ($root.text() || "").replace(/\s+/g," ").trim(); }
+function cleanText(s){
+  return (s || "")
+    .replace(/\u00A0/g, " ")        // nbsp
+    .replace(/\s+/g, " ")
+    .trim();
+}
+function textify($root){ return cleanText($root.text()); }
 
 /* STRICT POSITIVE banner (dentist/dental practice) + variants */
 const RX_STRICT_POS = /\bthis\s+(?:dentist|dental\s+practice)\s+(?:is\s+)?currently\s+accept(?:ing|s)?\s+new\s+nhs\s+patients\b/i;
@@ -166,9 +179,9 @@ const RX_CHILD_POS = [
   /\bonly\s+accept(?:ing|s)?\s+(?:nhs\s+)?children\b/i
 ];
 
-/* NEGATIVE phrases (strict) */
+/* NEGATIVE phrases (strict, with “currently” optional in multiple spots) */
 const RX_NEG_STRICT = [
-  /\bdoes\s+not\s+accept\s+new\s+nhs\s+patients\b/i,
+  /\bdoes\s+not\s+(?:currently\s+)?accept\s+new\s+nhs\s+patients\b/i,
   /\bnot\s+(?:currently\s+)?accept(?:ing|s)?\s+new\s+nhs\s+patients\b/i,
   /\bno\s+capacity\s+for\s+nhs\s+patients\b/i,
   /\bnhs\s+list\s+closed\b/i,
@@ -180,9 +193,9 @@ function some(rxList, text){ return rxList.some(rx => rx.test(text)); }
 
 /* NHS status chips */
 function parseByTags($){
-  const tags = $('.nhsuk-tag').map((_,el)=> cheerio.load(el).root().text().trim().toLowerCase()).get();
+  const tags = $('.nhsuk-tag').map((_,el)=> cleanText(cheerio.load(el).root().text())).get();
   if (!tags.length) return null;
-  const joined = tags.join(" | ");
+  const joined = tags.join(" | ").toLowerCase();
   const neg = /\bnot\s+accept(?:ing|s)?\s+new\s+nhs\s+patients\b/.test(joined) || /\bnhs\s+list\s+closed\b/.test(joined);
   const pos = /\baccept(?:ing|s)?\s+new\s+nhs\s+patients\b/.test(joined);
   if (neg && !pos) return { status:"not_accepting", reason:"tag_negative", text: joined };
@@ -206,16 +219,15 @@ function parseStructuredLists($root, $){
   let adult = false, child = false, seen = false;
 
   $root.find(headingSel).each((_, el) => {
-    const t = cheerio.load(el).root().text().trim().toLowerCase();
+    const t = cleanText(cheerio.load(el).root().text()).toLowerCase();
     if (/who\s+can\s+(use|register)/i.test(t) || /who\s+can\s+use\s+this\s+service/i.test(t)){
       const $ul = nextUl($, cheerio.load(el).root());
       if ($ul && $ul.length){
-        const lis = $ul.find("li").map((__, li) => cheerio.load(li).root().text().trim()).get();
+        const lis = $ul.find("li").map((__, li) => cleanText(cheerio.load(li).root().text())).get();
         for (const li of lis){
           seen = true;
-          const s = li.replace(/\s+/g," ");
-          if (some(RX_ADULT_POS, s)) adult = true;
-          if (some(RX_CHILD_POS, s)) child = true;
+          if (some(RX_ADULT_POS, li)) adult = true;
+          if (some(RX_CHILD_POS, li)) child = true;
         }
       }
     }
@@ -255,15 +267,13 @@ function parseCheerio($, scope){
   const t = parseByTags($);
   if (t) return t;
 
-  // 2) Structured lists
+  // 2) Structured lists (appointments or whole page)
   const root = scope === "appointments" ? $("#appointments") : $.root();
   if (root && root.length){
     const s = parseStructuredLists(root, $);
     if (s.seen){
-      // If we saw the bullets, prefer them as positive signal unless explicit negatives dominate
       if (s.adult) return { status:"accepting", reason:`${scope}_structured_adult`, text: s.text };
       if (!s.adult && s.child) return { status:"child_only", reason:`${scope}_structured_child`, text: s.text };
-      // fall through to regex if bullets seen but not conclusive
     }
   }
 
@@ -281,41 +291,12 @@ async function fetchDetailHtml(url){
   return html;
 }
 async function fetchAppointmentsHtml(url){
-  // Ensure single trailing /appointments (avoid double slashes)
   const apptUrl = url.endsWith("/") ? `${url}appointments` : `${url}/appointments`;
   const key = `APPT:${apptUrl}`; const c = cache.get(key); if (c) return { html: c, url: apptUrl };
   await sleep(30 + Math.random()*50);
-  const html = await fetchText(apptUrl);
+  const html = await fetchText(apptUrl, 0, url /* Referer */);
   cache.set(key, html, CACHE_APPT_MS);
   return { html, url: apptUrl };
-}
-
-async function evaluatePractice(url){
-  try{
-    // 1) Try dedicated /appointments page FIRST
-    const { html: apptHtml, url: apptUrl } = await fetchAppointmentsHtml(url);
-    if (apptHtml){
-      const $a = cheerio.load(apptHtml);
-      const ra = parseCheerio($a, "appointments");
-      if (ra && ra.status !== "unknown"){
-        console.log(`[DETAIL] (APPT) → ${ra.status} (${ra.reason}) ${apptUrl}`);
-        return { url, title: extractTitle($a) || extractTitleFromUrl(url), status: ra.status, excerpt: (ra.text || "").slice(0, 400) };
-      }
-    }
-
-    // 2) Fall back to MAIN detail page
-    const mainHtml = await fetchDetailHtml(url);
-    if (!mainHtml) return { url, title:"", status:"error", error:"empty_html" };
-    const $ = cheerio.load(mainHtml);
-
-    // Tags → structured → regex
-    const rm = parseCheerio($, "page");
-    console.log(`[DETAIL] (MAIN) → ${rm.status} (${rm.reason}) ${url}`);
-    return { url, title: extractTitle($) || extractTitleFromUrl(url), status: rm.status, excerpt: (rm.text || "").slice(0, 400) };
-
-  } catch (e){
-    return { url, title:"", status:"error", error: e?.message || String(e) };
-  }
 }
 
 function extractTitle($){
@@ -327,6 +308,37 @@ function extractTitleFromUrl(u){
     const name = seg[seg.length-2] || "";
     return decodeURIComponent(name).replace(/[-_]+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
   }catch{ return ""; }
+}
+
+async function evaluatePractice(url){
+  try{
+    // 1) Try /appointments FIRST
+    const { html: apptHtml, url: apptUrl } = await fetchAppointmentsHtml(url);
+    if (apptHtml){
+      const $a = cheerio.load(apptHtml);
+      const ra = parseCheerio($a, "appointments");
+      if (ra && ra.status !== "unknown"){
+        console.log(`[DETAIL] (APPT) → ${ra.status} (${ra.reason}) ${apptUrl}`);
+        return { url, title: extractTitle($a) || extractTitleFromUrl(url), status: ra.status, excerpt: (ra.text || "").slice(0, 400) };
+      } else {
+        console.log(`[DETAIL] (APPT) → unknown (${ra ? ra.reason : "no_html"}) ${apptUrl}`);
+      }
+    } else {
+      console.log(`[DETAIL] (APPT) → empty ${url}/appointments`);
+    }
+
+    // 2) Fall back to MAIN detail page
+    const mainHtml = await fetchDetailHtml(url);
+    if (!mainHtml) return { url, title:"", status:"error", error:"empty_html" };
+    const $ = cheerio.load(mainHtml);
+
+    const rm = parseCheerio($, "page");
+    console.log(`[DETAIL] (MAIN) → ${rm.status} (${rm.reason}) ${url}`);
+    return { url, title: extractTitle($) || extractTitleFromUrl(url), status: rm.status, excerpt: (rm.text || "").slice(0, 400) };
+
+  } catch (e){
+    return { url, title:"", status:"error", error: e?.message || String(e) };
+  }
 }
 
 /* ---------------------------- Concurrency -------------------------- */
@@ -344,7 +356,7 @@ async function mapLimit(arr, n, fn){
 /* ------------------------------ Public ----------------------------- */
 export async function scanPostcode(pc, radiusMiles = 25){
   pc = coercePostcode(pc); radiusMiles = coerceRadius(radiusMiles);
-  console.log(`DentistRadar v8.5`);
+  console.log(`DentistRadar v8.6`);
   console.log(`--- Scan: ${pc || "(empty)"} (${radiusMiles} miles) ---`);
 
   if (!pc){
