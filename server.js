@@ -1,6 +1,5 @@
-// Dentist Radar Server (v1.8.6+) — aligned to 'watches' collection & curated emails
-// Changes vs your last file:
-// - Uses shared models.js (watches/users/emaillogs) — no DB name rewrite
+// Dentist Radar Server (aligned to 'watches' collection & curated emails)
+// - Uses shared models.js (watches/users/emaillogs)
 // - Welcome email uses HTML template via Postmark
 // - Adds /api/debug/peek to verify DB/collections
 
