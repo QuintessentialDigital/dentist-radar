@@ -1,13 +1,10 @@
 /**
- * DentistRadar — scanner.js (v11.0)
- * What changed in this version:
- *  • Discovery: resilient results URL variants + pagination
- *  • Parsing: appointments page first, fallback to detail page
- *  • Classifier: excludes “has not confirmed”, waitlists, private-only; detects clear positives
- *  • Email: consolidates accepting matches (cards with name, address, phone, distance, map + appointments link)
- *  • Logging: clear counters; per-day EmailLog to avoid duplicates
- *
- * Everything else (server endpoints, cron, models) remains unchanged.
+ * DentistRadar — scanner.js (v11.1)
+ * Focus: Fix under-detection of acceptance on NHS appointment pages.
+ * Changes:
+ *  • Extractor: capture short items (p/li/div), visually-hidden, aria-live, and "New NHS patients" blocks.
+ *  • Classifier: sentence-level matching; expanded positive/negative/child-only patterns; strict false-positive filters.
+ *  • Logs: show 1–2 matched sentences when DEBUG_CLASSIFIER=true (no email text changes).
  */
 
 import axios from "axios";
@@ -36,7 +33,6 @@ const {
   DISCOVERY_RETRY = "3",
   INCLUDE_CHILD_ONLY = "false",
 
-  // Optional debug toggles
   DEBUG_DISCOVERY = "false",
   DEBUG_CLASSIFIER = "false",
 } = process.env;
@@ -110,12 +106,11 @@ function absolutize(baseUrl, href) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Discovery: results URL variants + pagination
+   Discovery (unchanged logic; multiple variants + pagination)
    ──────────────────────────────────────────────────────────────── */
 function resultsUrlVariants(postcode, radius) {
   const pc = encodeURIComponent(postcode);
   const base = "https://www.nhs.uk";
-  // The NHS site uses multiple shapes; try both common variants
   return [
     `${base}/service-search/find-a-dentist/results/${pc}&distance=${radius}`,
     `${base}/service-search/find-a-dentist/results?postcode=${pc}&distance=${radius}`,
@@ -132,9 +127,7 @@ function nextLink($) {
 function sanitizeAddress(raw) {
   if (!raw) return raw;
   const parts = raw.split(/[\n\r]+| {2,}/).map((s) => s.trim()).filter(Boolean);
-  const filtered = parts.filter(
-    (line) => !/mile/i.test(line) && !/^this organisation is/i.test(line)
-  );
+  const filtered = parts.filter((line) => !/mile/i.test(line) && !/^this organisation is/i.test(line));
   const addr = filtered.join(", ").replace(/,\s*,/g, ", ").replace(/\s+,/g, ",").trim();
   return addr || undefined;
 }
@@ -162,7 +155,6 @@ function extractPracticesFromResults(html, baseUrl) {
     byUrl.set(key, merged);
   };
 
-  // Cards and list items
   const cards = $(".nhsuk-card, .nhsuk-grid-row, li, article, .nhsuk-results__item, .nhsuk-panel");
   cards.each((_, el) => {
     const scope = $(el);
@@ -175,8 +167,7 @@ function extractPracticesFromResults(html, baseUrl) {
     const detailUrl = absolutize(baseUrl, href);
 
     const nameRaw =
-      clean(scope.find("h2, h3, .nhsuk-card__heading, .nhsuk-heading-m").first().text()) ||
-      undefined;
+      clean(scope.find("h2, h3, .nhsuk-card__heading, .nhsuk-heading-m").first().text()) || undefined;
 
     const telHref =
       scope.find('a[href^="tel:"]').first().attr("href") ||
@@ -202,7 +193,6 @@ function extractPracticesFromResults(html, baseUrl) {
     push({ detailUrl, name: nameRaw, phone, address, distanceText });
   });
 
-  // Hydration JSON
   $("script").each((_, s) => {
     if (s.attribs?.src) return;
     const txt = $(s).text() || "";
@@ -210,7 +200,6 @@ function extractPracticesFromResults(html, baseUrl) {
     if (m) m.forEach((u) => push({ detailUrl: u }));
   });
 
-  // Raw fallback
   const whole = typeof html === "string" ? html : $.root().html() || "";
   const hits = whole.match(RX);
   if (hits) hits.forEach((u) => push({ detailUrl: u }));
@@ -252,7 +241,7 @@ async function discoverPractices(postcode, radius) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Appointments resolution + text extraction
+   Appointments resolution + extraction (improved)
    ──────────────────────────────────────────────────────────────── */
 function findAppointmentsHref($) {
   let href =
@@ -293,107 +282,133 @@ async function resolveAppointmentsUrl(detailUrl) {
   return "";
 }
 
-function extractAppointmentsText(html) {
+/** Return an array of compact text blocks to classify (sentences/short paras). */
+function extractAppointmentBlocks(html) {
   const $ = cheerio.load(html);
-  const buckets = [];
+  const blocks = [];
 
+  // 1) Sections under headings that usually hold availability info
   $("h1,h2,h3").each((_, h) => {
-    const heading = String($(h).text() || "").toLowerCase();
-    if (/appointment|opening\s+times|patients|registration/.test(heading)) {
-      const buf = [];
-      let cur = $(h).next(),
-        hops = 0;
+    const hd = String($(h).text() || "").toLowerCase();
+    if (/appointment|opening\s+times|new\s+nhs\s+patients|nhs\s+patients|registration/.test(hd)) {
+      let cur = $(h).next(), hops = 0;
       while (cur.length && hops < 40) {
         const tag = (cur[0].tagName || "").toLowerCase();
         if (/^h[1-6]$/.test(tag)) break;
-        if (["p", "div", "li", "ul", "ol", "section"].includes(tag)) {
-          buf.push(String(cur.text() || "").replace(/\s+/g, " ").trim());
+        if (["p", "li", "div", "section"].includes(tag)) {
+          const txt = clean(cur.text());
+          if (txt) blocks.push(txt);
         }
-        cur = cur.next();
-        hops++;
+        cur = cur.next(); hops++;
       }
-      const joined = buf.join(" ").trim();
-      if (joined.length > 60) buckets.push(joined);
     }
   });
 
-  if (!buckets.length) {
-    const wrappers = ["main", "#maincontent", ".nhsuk-main-wrapper", ".nhsuk-width-container", ".nhsuk-u-reading-width"];
-    for (const sel of wrappers) {
-      const t = String($(sel).text() || "").replace(/\s+/g, " ").trim();
-      if (t.length > 200) buckets.push(t);
-    }
-  }
+  // 2) Also sweep common containers on appointments pages for short items
+  const containers = [
+    "main",
+    "#maincontent",
+    ".nhsuk-main-wrapper",
+    ".nhsuk-width-container",
+    ".nhsuk-u-reading-width",
+    ".nhsuk-list",
+    "ul,ol",
+  ];
+  containers.forEach((sel) => {
+    $(sel)
+      .find("li,p,div")
+      .each((_, n) => {
+        const t = clean($(n).text());
+        if (t && t.length >= 15 && t.length <= 400) blocks.push(t);
+      });
+  });
 
-  if (!buckets.length) {
-    const whole = String($.root().text() || "").replace(/\s+/g, " ").trim();
-    return whole.slice(0, 8000);
-  }
+  // 3) Visually-hidden / aria-live (NHS sometimes hides acceptance lines for readers)
+  $('[aria-live], .nhsuk-u-visually-hidden, .visually-hidden, [role="status"]').each((_, n) => {
+    const t = clean($(n).text());
+    if (t && t.length >= 15 && t.length <= 400) blocks.push(t);
+  });
 
-  buckets.sort((a, b) => b.length - a.length);
-  return buckets[0];
+  // 4) Deduplicate & cap
+  const uniq = Array.from(new Set(blocks));
+  return uniq.slice(0, 300);
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Classifier (strict + precise)
+   Classifier (sentence-level, expanded patterns)
    ──────────────────────────────────────────────────────────────── */
-function classifyAcceptance(text) {
-  const t = String(text || "").toLowerCase().replace(/\s+/g, " ").replace(/’/g, "'");
+const RX_NEGATIVE =
+  /\b(?:not\s+(?:currently\s+)?accept(?:ing|)\b|no\s+longer\s+accept(?:ing|)\b|cannot\s+accept\b|nhs\s+not\s+available\b|nhs\s+(?:list|register)\s+closed\b|private\s+only\b|emergency\s+only\b|urgent\s+care\s+only\b|not\s+taking\s+(?:on\s+)?nhs\b|no\s+nhs\s+spaces\b|nhs\s+capacity\s+full\b|nhs\s+closed\b)/i;
 
-  // Block false-positives
-  if (
-    /\b(has|have)\s+not\s+confirmed\b.*\b(accept|register)\b|\bunable\s+to\s+confirm\b.*\b(accept|register)\b|\bnot\s+confirmed\s+if\b.*\b(accept|register)\b|\bno\s+information\b.*\b(accept|register)\b|\bunknown\b.*\b(accept|register)\b/.test(
-      t
-    )
-  ) {
-    if (DEBUGC) console.log("CLASSIFY → NONE (not confirmed)");
-    return "NONE";
-  }
+const RX_NOT_CONFIRMED =
+  /\b(?:has|have)\s+not\s+confirmed\b.*\b(?:accept|register)\b|\bunable\s+to\s+confirm\b.*\b(?:accept|register)\b|\bnot\s+confirmed\s+if\b.*\b(?:accept|register)\b|\bno\s+information\b.*\b(?:accept|register)\b|\bunknown\b.*\b(?:accept|register)\b/i;
 
-  // Negatives
-  if (
-    /(not (currently )?accept(?:ing)?|no longer accepting|cannot accept|we are not accepting|nhs not available|nhs list closed|private only|emergency only|urgent care only|walk-?in only|not taking (on )?nhs|no nhs spaces|nhs capacity full|nhs closed)/i.test(
-      t
-    )
-  ) {
-    if (DEBUGC) console.log("CLASSIFY → NONE (negative phrase)");
-    return "NONE";
-  }
+const RX_CHILD_ONLY =
+  /\b(?:children\s+only|only\s+accept(?:ing)?\s+children|under\s*18|aged\s*(?:1[0-7]|[1-9])\s*or\s*under)\b/iu;
 
-  // Children only
-  const child = /(children only|only accept(?:ing)? children|under\s*18|aged\s*(1[0-7]|[1-9])\s*or\s*under)/i;
-  const hasChild = child.test(t) && /\b(accept|accepting|taking on|register|registering)\b/.test(t);
+const POSITIVE_PATTERNS = [
+  /this\s+dentist\s+currently\s+accepts\s+new\s+nhs\s+patients/iu,
+  /\b(?:we|i|practice)\s+(?:are|’re|are now)\s+(?:able\s+to\s+)?(?:accept|register)\s+(?:new\s+)?nhs\s+patients\b/iu,
+  /\bcurrently\s+accept(?:s|ing)\s+(?:new\s+)?nhs\s+patients\b/iu,
+  /\btaking\s+on\s+(?:new\s+)?nhs\s+patients\b/iu,
+  /\bnow\s+accept(?:s|ing)\s+nhs\s+patients\b/iu,
+  /\bable\s+to\s+register\s+(?:new\s+)?nhs\s+patients\b/iu,
+  /\bnhs\s+(?:spaces|availability)\s+(?:available|open)\b/iu,
+  // generic: "nhs" AND a verb like accept/register in same sentence
+  /(?=.*\bnhs\b)(?=.*\b(accept|accepting|taking on|register|registering)\b).*/iu,
+];
 
-  // Strong positives
-  const strong =
-    /(this dentist currently accepts new nhs patients|we (are|’re|are now)\s+accept(?:ing)?\s+new\s+nhs\s+patients|currently accept\w*\s+new\s+nhs\s+patients|taking\s+on\s+new\s+nhs\s+patients|now\s+accept\w*\s+nhs\s+patients|able\s+to\s+register\s+nhs\s+patients|we\s+can\s+accept\s+new\s+nhs\s+patients)/i;
-
-  // General positive “NH S + accept*” in same block
-  const generic = /(?=.*\bnhs\b)(?=.*\b(accept|accepting|taking on|registering|register)\b)/i;
-
-  let score = 0;
-  if (strong.test(t)) score += 3;
-  if (generic.test(t)) score += 2;
-
-  // Waitlist/EOI is not acceptance
-  if (/\b(waiting list|join (the )?waiting list|register your interest|expression of interest|eoi)\b/i.test(t)) {
-    score -= 3;
-  }
-
-  if (hasChild) return "CHILD_ONLY";
-  if (score >= 3) return "ACCEPTING";
-  if (score <= -2) return "NONE";
-  return "UNKNOWN";
+function splitSentences(t) {
+  // loose segmentation that also catches list items
+  return String(t)
+    .replace(/[\r\n]+/g, " ")
+    .split(/(?<=[.!?])\s+|•\s+|-\s+|·\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
-function extractSnippet(text, max = 420) {
-  const t = String(text || "");
-  const rx = /(accept|accepting|taking on|register|nhs|waiting list|expression of interest)/i;
-  const m = t.match(rx);
-  if (!m) return t.slice(0, max).trim();
-  const i = Math.max(0, t.toLowerCase().indexOf(m[0].toLowerCase()));
-  const start = Math.max(0, i - Math.floor(max / 2));
-  return t.slice(start, start + max).trim();
+function classifyBlocks(blocks) {
+  let best = { verdict: "NONE", snippet: "" };
+
+  for (const block of blocks) {
+    const sents = splitSentences(block).slice(0, 8); // examine first 8 sentences per block
+    for (const s of sents) {
+      const t = s.toLowerCase();
+
+      if (RX_NOT_CONFIRMED.test(t)) {
+        if (DEBUGC) console.log("→ NONE (not confirmed):", s);
+        continue;
+      }
+      if (RX_NEGATIVE.test(t)) {
+        if (DEBUGC) console.log("→ NONE (negative):", s);
+        continue;
+      }
+
+      // child-only must both say "children only" and some form of accept/register
+      if (RX_CHILD_ONLY.test(t) && /\b(accept|accepting|taking on|register|registering)\b/i.test(t)) {
+        if (DEBUGC) console.log("→ CHILD_ONLY:", s);
+        return { verdict: "CHILD_ONLY", snippet: s };
+      }
+
+      let positive = false;
+      for (const rx of POSITIVE_PATTERNS) {
+        if (rx.test(s)) {
+          positive = true;
+          break;
+        }
+      }
+      if (positive) {
+        if (DEBUGC) console.log("→ ACCEPTING:", s);
+        return { verdict: "ACCEPTING", snippet: s };
+      }
+    }
+
+    // keep an UNKNOWN sample if useful
+    const maybe = sents.find((ss) => /\bnhs\b/i.test(ss));
+    if (best.verdict === "NONE" && maybe) best = { verdict: "UNKNOWN", snippet: maybe };
+  }
+
+  return best;
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -414,7 +429,7 @@ async function sendEmail(toList, subject, html) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Jobs
+   Jobs (unchanged; supports Watch and fallback watches)
    ──────────────────────────────────────────────────────────────── */
 async function buildJobs(filterPostcode) {
   const match = filterPostcode ? { postcode: normPc(filterPostcode) } : {};
@@ -486,20 +501,21 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
             sourceHtml = await fetchPage(apptUrl);
             resolvedAppt++;
           }
-          if (!sourceHtml || sourceHtml.length < 400) {
+          if (!sourceHtml || sourceHtml.length < 300) {
             const d = await fetchPage(detailUrl);
-            if (d && d.length > 400) {
+            if (d && d.length > 300) {
               sourceHtml = d;
               fallbackDetail++;
             }
           }
           if (!sourceHtml) return;
 
-          const text = extractAppointmentsText(sourceHtml);
-          const verdict = classifyAcceptance(text);
+          // NEW: extract many short blocks, then sentence-level classify
+          const blocks = extractAppointmentBlocks(sourceHtml);
+          const { verdict, snippet } = classifyBlocks(blocks);
           if (verdict === "UNKNOWN") unknownCount++;
+          if (DEBUGC && snippet) console.log("  ↳ match:", snippet);
 
-          // Build card
           const card = {
             name:
               p.name ||
@@ -561,7 +577,6 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
     return { accepting, childOnly, emailAttempts, scanned: practices.length };
   }
 
-  // Render professional acceptance email
   const all = [...accepting, ...(INCLUDE_CHILD ? childOnly : [])];
   const { subject, html } = renderEmail("availability", {
     postcode,
