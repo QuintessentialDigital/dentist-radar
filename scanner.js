@@ -1,11 +1,12 @@
 /**
- * DentistRadar — scanner.js (LEGACY + provider fetch, v9.0L-P)
- * Legacy discovery + improved emails, with pluggable page fetchers:
- *   - DISCOVERY_PROVIDER=direct|scrapingbee|browserless
- *   - SCRAPINGBEE_KEY, BROWSERLESS_TOKEN
+ * DentistRadar — scanner.js (LEGACY + timeout/retry hotfix)
+ * - Legacy discovery URL shapes that previously worked
+ * - Improved emails (renderEmail)
+ * - NEW: Tunable timeout + axios-retry backoff to avoid 20s timeouts
  */
 
 import axios from "axios";
+import axiosRetry from "axios-retry";
 import * as cheerio from "cheerio";
 import mongoose from "mongoose";
 import pLimit from "p-limit";
@@ -14,7 +15,9 @@ import dayjs from "dayjs";
 import { connectMongo, Watch, EmailLog } from "./models.js";
 import { renderEmail } from "./emailTemplates.js";
 
-/* ──────────────────────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────
+   ENV / constants
+──────────────────────────────────────────────────────────────── */
 const {
   MONGO_URI,
   EMAIL_FROM,
@@ -24,9 +27,13 @@ const {
   INCLUDE_CHILD_ONLY = "false",
   MAX_CONCURRENCY = "6",
 
-  DISCOVERY_PROVIDER = "direct",
+  // NEW hotfix knobs
+  DISCOVERY_PROVIDER = "direct",               // direct|scrapingbee|browserless
   SCRAPINGBEE_KEY = "",
   BROWSERLESS_TOKEN = "",
+  DISCOVERY_REQUEST_TIMEOUT_MS = "45000",      // 45s default
+  DISCOVERY_RETRY = "3",                       // 3 retries
+  DISCOVERY_MAX_PAGES = "3",                   // try first 3 pages fast; we can expand if needed
   DEBUG_DISCOVERY = "false",
 } = process.env;
 
@@ -35,73 +42,93 @@ if (!EMAIL_FROM) throw new Error("EMAIL_FROM is required");
 
 const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 6);
 const INCLUDE_CHILD = String(INCLUDE_CHILD_ONLY).toLowerCase() === "true";
+const REQUEST_TIMEOUT = Math.max(5000, Number(DISCOVERY_REQUEST_TIMEOUT_MS) || 45000);
+const RETRIES = Math.max(0, Number(DISCOVERY_RETRY) || 3);
+const MAX_PAGES = Math.max(1, Math.min(10, Number(DISCOVERY_MAX_PAGES) || 3));
 const DEBUG = String(DEBUG_DISCOVERY).toLowerCase() === "true";
 
-const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0 Safari/537.36";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
 const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
-const normText = (s) => String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
 
 /* ────────────────────────────────────────────────────────────────
-   Provider-backed GET (renders when needed)
+   Axios client with retry/backoff + IPv4 preference
 ──────────────────────────────────────────────────────────────── */
-async function getDirect(url, referer = "https://www.nhs.uk/") {
-  const res = await axios.get(url, {
-    timeout: 20000,
-    maxRedirects: 5,
-    validateStatus: () => true,
-    headers: {
-      "User-Agent": UA,
-      "Accept-Language": "en-GB,en;q=0.9",
-      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      Referer: referer,
-      "Cache-Control": "no-cache",
-    },
-  });
-  if (DEBUG) console.log(`[DIRECT] ${url} → ${res.status} len=${(res.data||"").length}`);
+const client = axios.create({
+  timeout: REQUEST_TIMEOUT,
+  maxRedirects: 7,
+  // prefer IPv4 on some hosts that are slow to answer on v6
+  transitional: { clarifyTimeoutError: true },
+  decompress: true,
+  validateStatus: () => true,
+  headers: {
+    "User-Agent": UA,
+    "Accept-Language": "en-GB,en;q=0.9",
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    Referer: "https://www.nhs.uk/",
+    Connection: "keep-alive",
+    "Cache-Control": "no-cache",
+  },
+});
+
+// Retry on 408/429/5xx and network/timeout errors with exponential backoff
+axiosRetry(client, {
+  retries: RETRIES,
+  retryDelay: axiosRetry.exponentialDelay,
+  shouldResetTimeout: true,
+  retryCondition: (err) => {
+    if (axiosRetry.isNetworkOrIdempotentRequestError(err)) return true;
+    const s = err?.response?.status || 0;
+    return s === 408 || s === 429 || (s >= 500 && s < 600);
+  },
+});
+
+/* ────────────────────────────────────────────────────────────────
+   Provider-backed GET (kept simple; default 'direct')
+──────────────────────────────────────────────────────────────── */
+async function getDirect(url) {
+  const res = await client.get(url);
+  if (DEBUG) console.log(`[DIRECT] ${url} → ${res.status} len=${(res.data || "").length}`);
   if (res.status >= 200 && res.status < 400) return typeof res.data === "string" ? res.data : "";
-  return null;
+  // 404/410 often carry content we can still parse
+  if ((res.status === 404 || res.status === 410) && typeof res.data === "string") return res.data;
+  return "";
 }
 
 async function getViaScrapingBee(url) {
-  if (!SCRAPINGBEE_KEY) return null;
+  if (!SCRAPINGBEE_KEY) return "";
   const api = "https://app.scrapingbee.com/api/v1";
-  const res = await axios.get(api, {
+  const res = await client.get(api, {
     params: { api_key: SCRAPINGBEE_KEY, url, render_js: "true", country_code: "gb", premium_proxy: "true" },
-    timeout: 30000,
-    validateStatus: () => true,
   });
-  if (DEBUG) console.log(`[SCRAPINGBEE] ${url} → ${res.status} len=${(res.data||"").length}`);
+  if (DEBUG) console.log(`[SCRAPINGBEE] ${url} → ${res.status} len=${(res.data || "").length}`);
   if (res.status >= 200 && res.status < 400) return typeof res.data === "string" ? res.data : "";
-  return null;
+  return "";
 }
 
 async function getViaBrowserless(url) {
-  if (!BROWSERLESS_TOKEN) return null;
-  // Browserless "content" endpoint returns fully rendered HTML
+  if (!BROWSERLESS_TOKEN) return "";
   const api = `https://chrome.browserless.io/content?token=${encodeURIComponent(BROWSERLESS_TOKEN)}&url=${encodeURIComponent(url)}`;
-  const res = await axios.get(api, { timeout: 30000, validateStatus: () => true });
-  if (DEBUG) console.log(`[BROWSERLESS] ${url} → ${res.status} len=${(res.data||"").length}`);
+  const res = await client.get(api);
+  if (DEBUG) console.log(`[BROWSERLESS] ${url} → ${res.status} len=${(res.data || "").length}`);
   if (res.status >= 200 && res.status < 400) return typeof res.data === "string" ? res.data : "";
-  return null;
+  return "";
 }
 
-async function fetchPage(url, referer) {
+async function fetchPage(url) {
   const mode = (DISCOVERY_PROVIDER || "direct").toLowerCase();
-  let html = null;
-
-  if (mode === "scrapingbee") html = await getViaScrapingBee(url);
-  else if (mode === "browserless") html = await getViaBrowserless(url);
-  else html = await getDirect(url, referer);
-
-  if (!html && mode !== "direct") {
-    // graceful fallback to direct if provider failed
-    html = await getDirect(url, referer);
+  let html = "";
+  try {
+    if (mode === "scrapingbee") html = await getViaScrapingBee(url);
+    else if (mode === "browserless") html = await getViaBrowserless(url);
+    else html = await getDirect(url);
+    if (!html && mode !== "direct") html = await getDirect(url); // graceful fallback
+  } catch (e) {
+    if (DEBUG) console.log(`[FETCH ERR] ${url} → ${e?.message}`);
   }
   if (DEBUG && html) {
-    const peek = html.replace(/\s+/g, " ").slice(0, 600);
-    console.log(`[PEEK] ${url} >> ${peek}`);
+    console.log(`[PEEK] ${url} >>`, html.replace(/\s+/g, " ").slice(0, 400));
   }
   return html || "";
 }
@@ -114,10 +141,10 @@ function buildLegacyResults(postcode, radius) {
   const base = "https://www.nhs.uk";
   const urls = [];
 
-  for (let p = 1; p <= 6; p++) {
+  for (let p = 1; p <= MAX_PAGES; p++) {
     urls.push(`${base}/service-search/find-a-dentist/results/${pcEnc}&distance=${radius}${p > 1 ? `&page=${p}` : ""}`);
   }
-  for (let p = 1; p <= 6; p++) {
+  for (let p = 1; p <= MAX_PAGES; p++) {
     urls.push(`${base}/service-search/find-a-dentist/results?postcode=${pcEnc}&distance=${radius}${p > 1 ? `&page=${p}` : ""}`);
   }
   return Array.from(new Set(urls));
@@ -180,6 +207,7 @@ async function resolveAppointmentsUrl(detailUrl) {
   if (!detailHtml) return "";
   const $ = cheerio.load(detailHtml);
   let href = findAppointmentsHref($);
+
   const candidates = [];
   if (href) candidates.push(new URL(href, detailUrl).toString());
   candidates.push(new URL("./appointments", detailUrl).toString());
@@ -187,7 +215,7 @@ async function resolveAppointmentsUrl(detailUrl) {
   candidates.push(new URL("./opening-times", detailUrl).toString());
 
   for (const u of Array.from(new Set(candidates))) {
-    const html = await fetchPage(u, detailUrl);
+    const html = await fetchPage(u);
     if (html && html.length > 200) return u;
   }
   return "";
@@ -261,8 +289,7 @@ function classifyAcceptance(text) {
   if (
     phrasesAccept.some((p) => t.includes(p)) ||
     (mentionsNhs && (t.includes("accepts") || t.includes("are accepting") || t.includes("is accepting")) && !t.includes("only"))
-  )
-    return "ACCEPTING";
+  ) return "ACCEPTING";
 
   if (t.includes("waiting list") || t.includes("register your interest")) return "NONE";
   return "UNKNOWN";
@@ -281,7 +308,7 @@ async function discoverDetailUrls(postcode, radius) {
     const links = extractDetailUrlsFromResults(html);
     links.forEach((x) => out.add(x));
     if (out.size >= 120) break;
-    await sleep(120);
+    await sleep(100); // polite
   }
   return Array.from(out);
 }
@@ -294,10 +321,10 @@ async function sendEmail(toList, subject, html) {
   if (!toList?.length) return { ok: false, reason: "no_recipients" };
   if (!token) return { ok: false, reason: "no_token" };
 
-  const res = await axios.post(
+  const res = await client.post(
     "https://api.postmarkapp.com/email",
     { From: EMAIL_FROM, To: toList.join(","), Subject: subject, HtmlBody: html, MessageStream: POSTMARK_MESSAGE_STREAM },
-    { headers: { "X-Postmark-Server-Token": token, "Content-Type": "application/json", Accept: "application/json" }, timeout: 15000, validateStatus: () => true }
+    { headers: { "X-Postmark-Server-Token": token, "Content-Type": "application/json", Accept: "application/json" } }
   );
   if (res.status >= 200 && res.status < 300) return { ok: true, id: res.data?.MessageID };
   return { ok: false, status: res.status, body: res.data };
@@ -332,6 +359,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
 
   const limit = pLimit(CONCURRENCY);
   const dateKey = dayjs().format("YYYY-MM-DD");
+
   const acceptingDetails = [];
   const childOnlyDetails = [];
 
@@ -345,7 +373,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           const apptUrl = await resolveAppointmentsUrl(detailUrl);
           if (!apptUrl) return;
 
-          const apptHtml = await fetchPage(apptUrl, detailUrl);
+          const apptHtml = await fetchPage(apptUrl);
           if (!apptHtml) return;
 
           const verdict = classifyAcceptance(extractAppointmentsText(apptHtml));
@@ -385,7 +413,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
 
 export async function runScan(opts = {}) {
   if (mongoose.connection.readyState !== 1) await connectMongo(MONGO_URI);
-  console.log("🦷 DentistRadar: Legacy scanner (v9.0L-P)");
+  console.log("🦷 DentistRadar: Legacy scanner (hotfix: timeout/retries)");
 
   const jobs = await buildJobs(opts.postcode);
   if (!jobs.length) return { jobs: 0, summaries: [] };
@@ -394,7 +422,7 @@ export async function runScan(opts = {}) {
   for (const job of jobs) {
     const res = await scanJob(job);
     summaries.push({ postcode: job.postcode, radiusMiles: job.radiusMiles, accepting: res.accepting.length, childOnly: res.childOnly.length });
-    await sleep(120);
+    await sleep(100);
   }
   console.log("[DONE]", summaries);
   return { jobs: jobs.length, summaries };
