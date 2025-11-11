@@ -1,9 +1,7 @@
 /**
- * DentistRadar — scanner.js (v11.2)
- * Focus: fix missed ACCEPTING matches on NHS appointments pages.
- *  - Stronger appointments URL resolution (more candidates + canonical/nav)
- *  - Wider text extraction (li/p/div/summary/visually-hidden/aria-live)
- *  - Sentence-level classifier with expanded positive variants; strict false-positive filters.
+ * DentistRadar — scanner.js (v11.2.1)
+ * Fix: removed TS generic (Set<string>) and tightened acceptance extraction.
+ * Focus: robust appointments resolution + wide text capture + safe classifier.
  */
 
 import axios from "axios";
@@ -268,7 +266,7 @@ async function resolveAppointmentsUrl(detailUrl) {
   const c = canonicalHref($);
   const base = c || detailUrl;
 
-  const cand = new Set<string>();
+  const cand = new Set();
   const navHref = findAppointmentsHref($);
   if (navHref) cand.add(absolutize(base, navHref));
   cand.add(absolutize(base, "./appointments"));
@@ -290,7 +288,7 @@ function extractAppointmentBlocks(html) {
   const $ = cheerio.load(html);
   const blocks = [];
 
-  // headings areas that usually contain the availability line
+  // under headings
   $("h1,h2,h3").each((_, h) => {
     const hd = clean($(h).text()).toLowerCase();
     if (/appointment|opening\s+times|new\s+nhs\s+patients|nhs\s+patients|registration/.test(hd)) {
@@ -309,7 +307,7 @@ function extractAppointmentBlocks(html) {
     }
   });
 
-  // generic containers – capture short actionable lines
+  // containers
   const containers = [
     "main",
     "#maincontent",
@@ -328,7 +326,7 @@ function extractAppointmentBlocks(html) {
       });
   });
 
-  // visually-hidden / live regions
+  // visually hidden / live regions
   $('[aria-live], .nhsuk-u-visually-hidden, .visually-hidden, [role="status"]').each((_, n) => {
     const t = clean($(n).text());
     if (t && t.length >= 10 && t.length <= 600) blocks.push(t);
@@ -356,7 +354,6 @@ const POSITIVE_PATTERNS = [
   /\bnow\s+accept(?:s|ing)\s+nhs\s+patients\b/iu,
   /\bable\s+to\s+register\s+(?:new\s+)?nhs\s+patients\b/iu,
   /\bnhs\s+(?:spaces|availability)\s+(?:available|open)\b/iu,
-  // generic: nhs + accept/register in same sentence
   /(?=.*\bnhs\b)(?=.*\b(accept|accepting|taking on|register|registering)\b).*/iu,
 ];
 
