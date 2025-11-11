@@ -1,106 +1,128 @@
-// emailTemplates.js
-// Clean, professional HTML for "welcome" and "availability" emails.
-// Renders per-practice cards with address, distance, phone, appointments link, map link.
+/**
+ * DentistRadar — emailTemplates.js (vS2)
+ * Exports: renderEmail(type, payload)
+ * Types:
+ *   - "welcome": { email, postcode, radius }
+ *   - "availability": { postcode, radius, practices:[{name,phone,appointmentUrl,detailUrl,source}], includeChildOnly, scannedAt }
+ */
 
-export function renderEmail(kind, data) {
-  if (kind === "welcome") {
-    const { postcode, radius } = data || {};
-    const subject = `Dentist Radar — your alert is active for ${safe(postcode)}`;
-    const html = `
-      <div style="font:14px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:#0b0c0c;-webkit-font-smoothing:antialiased">
-        <div style="max-width:640px;margin:0 auto;padding:18px">
-          <h1 style="font-size:20px;margin:0 0 8px">Your NHS dentist alert is live ✅</h1>
-          <p style="margin:8px 0">
-            We’ll email you when NHS practices within <b>${Number(radius) || 10} miles</b> of <b>${safe(
-              postcode || ""
-            )}</b> start accepting new patients.
-          </p>
-          <div style="background:#f5f7fa;border:1px solid #e3e8ef;border-radius:8px;padding:12px;margin:14px 0">
-            <div style="font-weight:600;margin-bottom:6px">What happens next</div>
-            <ul style="margin:0 0 0 20px;padding:0;line-height:1.5">
-              <li>We read the NHS <b>Appointments</b> page for nearby practices.</li>
-              <li>If we detect acceptance, you’ll receive an alert with practice details and links.</li>
-              <li>Please call the practice to confirm before travelling.</li>
-            </ul>
-          </div>
-          <p style="margin:14px 0 0;color:#6b7280;font-size:12px">
-            Tip: add this address to your contacts so alerts never land in spam.<br>
-            — Dentist Radar
-          </p>
-        </div>
-      </div>`;
-    return { subject, html };
-  }
-
-  if (kind === "availability") {
-    const { postcode, radius, practices = [], scannedAt } = data || {};
-    const subject = `NHS dentists near ${safe(postcode)} — ${practices.length} match${practices.length === 1 ? "" : "es"}`;
-
-    const cards = practices.map(cardHtml).join("");
-
-    const html = `
-      <div style="font:14px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:#0b0c0c;-webkit-font-smoothing:antialiased">
-        <div style="max-width:640px;margin:0 auto;padding:18px">
-          <h1 style="font-size:20px;margin:0 0 4px">Dentist availability near ${safe(postcode)}</h1>
-          <div style="color:#6b7280;margin:0 0 12px">Radius: ${Number(radius) || 10} miles • ${new Date(
-            scannedAt || Date.now()
-          ).toLocaleString()}</div>
-
-          ${cards || emptyState()}
-
-          <hr style="border:0;border-top:1px solid #e5e7eb;margin:16px 0">
-          <p style="margin:0;color:#6b7280;font-size:12px">
-            We read the NHS <b>Appointments</b> page to infer availability. Always call the practice to confirm before travelling.
-          </p>
-        </div>
-      </div>`;
-    return { subject, html };
-  }
-
-  return { subject: "Dentist Radar", html: "<div>OK</div>" };
-}
-
-/* helpers */
-function cardHtml(p) {
-  const name = p.name || "NHS dental practice";
-  const address = p.address ? row("📍", p.address) : "";
-  const distance = p.distanceText ? row("📏", p.distanceText) : "";
-  const phone = p.phone ? row("📞", p.phone) : "";
-
-  const apptBtn = p.appointmentUrl
-    ? `<a href="${attr(p.appointmentUrl)}" style="display:inline-block;background:#005eb8;color:#fff;padding:8px 12px;border-radius:8px;text-decoration:none;margin-right:8px">Appointments</a>`
-    : "";
-
-  const mapBtn = p.mapUrl
-    ? `<a href="${attr(p.mapUrl)}" style="display:inline-block;background:#eef5ff;color:#005eb8;padding:8px 12px;border:1px solid #cfe0ff;border-radius:8px;text-decoration:none">Open map</a>`
-    : "";
-
+function baseShell(inner) {
   return `
-    <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin:12px 0">
-      <div style="font-weight:600;font-size:15px;margin-bottom:6px">${safe(name)}</div>
-      ${address}
-      ${distance}
-      ${phone}
-      <div style="margin-top:8px">
-        ${apptBtn}
-        ${mapBtn}
+  <div style="font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; color:#111; line-height:1.5">
+    <div style="max-width:640px;margin:0 auto;padding:16px">
+      ${inner}
+      <hr style="border:0;border-top:1px solid #eee;margin:16px 0">
+      <div style="font-size:12px;color:#666">
+        DentistRadar scans the NHS website and reads the text on each practice’s <b>Appointments</b> or <b>Practice</b> page.
+        Always call the practice to confirm before travelling. This is not official NHS communication.
       </div>
+    </div>
+  </div>`;
+}
+
+function renderWelcome({ email, postcode, radius }) {
+  const body = `
+    <h2 style="margin:0 0 8px">Alert set for ${postcode} (${radius} miles)</h2>
+    <p style="margin:0 0 12px">
+      Thanks for using <b>DentistRadar</b>. We’ll scan local NHS practice pages and notify you when we
+      detect <b>clear wording</b> that they’re <b>accepting new NHS patients</b>.
+    </p>
+
+    <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin:12px 0">
+      <div style="font-weight:600;margin-bottom:6px">What we look for</div>
+      <ul style="margin:0 0 0 18px;padding:0">
+        <li>Explicit phrases like “Currently accepts new NHS patients”.</li>
+        <li>We <b>exclude</b> “not confirmed”, “waiting list”, and “private only”.</li>
+      </ul>
+    </div>
+
+    <p style="margin:12px 0 0">You can change your postcode/radius any time from the site.</p>
+  `;
+  return {
+    subject: `DentistRadar — alert active for ${postcode}`,
+    html: baseShell(body)
+  };
+}
+
+function practiceCard(p) {
+  const rows = [];
+
+  // Name (link to detail)
+  if (p.name || p.detailUrl) {
+    const title = p.name ? escapeHtml(p.name) : "View practice";
+    const href = p.detailUrl ? ` href="${p.detailUrl}"` : "";
+    rows.push(
+      `<div style="font-weight:600;font-size:16px;margin:0 0 4px"><a${href} style="color:#0b69c7;text-decoration:none">${title}</a></div>`
+    );
+  }
+
+  // Phone
+  if (p.phone) {
+    const tel = p.phone.replace(/\s+/g, "");
+    rows.push(`<div style="color:#111">📞 <a href="tel:${encodeHtml(tel)}" style="color:#111;text-decoration:none">${escapeHtml(p.phone)}</a></div>`);
+  }
+
+  // Links row
+  const links = [];
+  if (p.appointmentUrl) links.push(`<a href="${p.appointmentUrl}" style="color:#0b69c7;text-decoration:none">Appointments page</a>`);
+  if (p.detailUrl)     links.push(`<a href="${p.detailUrl}" style="color:#0b69c7;text-decoration:none">Practice page</a>`);
+  if (links.length) rows.push(`<div style="margin-top:6px">${links.join(' &nbsp;•&nbsp; ')}</div>`);
+
+  // Source tag
+  if (p.source) {
+    const label = p.source === "appointments" ? "Source: Appointments page" : "Source: Practice page";
+    rows.push(`<div style="font-size:12px;color:#666;margin-top:6px">${label}</div>`);
+  }
+
+  return `
+    <div style="border:1px solid #e5e7eb;border-radius:12px;padding:12px;margin:10px 0">
+      ${rows.join("")}
     </div>`;
 }
 
-function row(icon, text) {
-  return `<div style="margin:4px 0">${icon} ${safe(text)}</div>`;
+function renderAvailability({ postcode, radius, practices, includeChildOnly, scannedAt }) {
+  const header = `
+    <h2 style="margin:0 0 6px">NHS availability near ${postcode}</h2>
+    <div style="color:#555;margin:0 0 12px">
+      Radius: <b>${radius} miles</b> &nbsp;•&nbsp; Checked: ${new Date(scannedAt || Date.now()).toLocaleString("en-GB")}
+    </div>
+    <p style="margin:0 0 10px">We found the following practices explicitly stating they’re accepting new NHS patients:</p>
+  `;
+
+  const cards = practices.map(practiceCard).join("");
+
+  const footer = `
+    <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:10px;padding:10px;margin-top:10px">
+      <div style="font-weight:600;margin-bottom:6px">Tip</div>
+      <div>Call shortly after the practice opens. If phone lines are busy, ask when they last updated their NHS acceptance status.</div>
+    </div>
+  `;
+
+  return {
+    subject: `DentistRadar — ${postcode} (${radius} mi): ${practices.length} accepting`,
+    html: baseShell(header + cards + footer)
+  };
 }
-function emptyState() {
-  return `
-    <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:12px;margin:12px 0">
-      <div style="font-weight:600;margin-bottom:4px">No practices matched right now</div>
-      <div style="color:#6b7280">We’ll keep checking and email you as soon as we detect acceptance.</div>
-    </div>`;
+
+/* ───────── Utilities ───────── */
+function escapeHtml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
-function safe(s = "") {
-  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function encodeHtml(s) {
+  return escapeHtml(s);
 }
-function attr(s = "") {
-  return String(s).replace(/"/g, "&quot;");
+
+/* ───────── Export ───────── */
+export function renderEmail(type, payload) {
+  if (type === "welcome") return renderWelcome(payload || {});
+  if (type === "availability") return renderAvailability(payload || {});
+  // Fallback
+  return {
+    subject: "DentistRadar",
+    html: baseShell("<p>Notification</p>")
+  };
 }
+
+export default { renderEmail };
