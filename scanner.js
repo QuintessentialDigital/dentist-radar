@@ -1,26 +1,23 @@
 /**
- * DentistRadar — scanner.js (v10: explainable & robust)
- * ----------------------------------------------------
- * - HTML discovery (two NHS URL variants) with rel="next" pagination
- * - Appointments-first classify; fallback to detail page if thin
- * - Scored classifier aligned to NHS wording variations
- * - Evidence capture (verdict, reason, snippet) — own guarded model
- * - Enrichment (name/phone/address/distance) is optional and never blocks
+ * DentistRadar — scanner.js (v10.2: explainable, robust, no-headless requirement)
+ * -------------------------------------------------------------------------------
+ * - Discover NHS results pages (two known variants) + follow rel="next"
+ * - Resolve appointments page; fallback to detail page if thin/missing
+ * - Scored classifier tuned to NHS wording (positives/negatives/child-only)
+ * - Evidence capture per practice/day (verdict, reason, snippet)
+ * - Enrichment (name/phone/address/distance) is best-effort; never blocks
  *
- * Requires:
- *  - models.js exporting: connectMongo, Watch, EmailLog
- *  - emailTemplates.js exporting: renderEmail("availability", {...})
- *
- * Important ENV:
- *  MONGO_URI, EMAIL_FROM, POSTMARK_SERVER_TOKEN (or POSTMARK_TOKEN)
+ * ENV (common):
+ *  MONGO_URI
+ *  EMAIL_FROM
+ *  POSTMARK_SERVER_TOKEN or POSTMARK_TOKEN
  *  POSTMARK_MESSAGE_STREAM=outbound
  *  MAX_CONCURRENCY=6
  *  INCLUDE_CHILD_ONLY=false
- *  DISCOVERY_PROVIDER=direct|scrapingbee|browserless
- *  SCRAPINGBEE_KEY, BROWSERLESS_TOKEN
- *  DISCOVERY_REQUEST_TIMEOUT_MS=60000
- *  DISCOVERY_RETRY=3
  *  DEBUG_DISCOVERY=false
+ *
+ * Optional (for future rendered fallback; not required here):
+ *  DISCOVERY_PROVIDER=direct   (only 'direct' used in this file)
  */
 
 import axios from "axios";
@@ -44,13 +41,9 @@ const {
   POSTMARK_MESSAGE_STREAM = "outbound",
   MAX_CONCURRENCY = "6",
   INCLUDE_CHILD_ONLY = "false",
-
-  DISCOVERY_PROVIDER = "direct", // direct|scrapingbee|browserless
-  SCRAPINGBEE_KEY = "",
-  BROWSERLESS_TOKEN = "",
+  DEBUG_DISCOVERY = "false",
   DISCOVERY_REQUEST_TIMEOUT_MS = "60000",
   DISCOVERY_RETRY = "3",
-  DEBUG_DISCOVERY = "false",
 } = process.env;
 
 if (!MONGO_URI) throw new Error("MONGO_URI is required");
@@ -71,7 +64,7 @@ const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim
 const clean = (s) => String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
 
 /* ────────────────────────────────────────────────────────────────
-   Evidence model (guarded, no other file changes required)
+   Evidence model (guarded: no change to models.js required)
 ──────────────────────────────────────────────────────────────── */
 const PracticeEvidenceSchema =
   mongoose.models.PracticeEvidence?.schema ||
@@ -80,7 +73,7 @@ const PracticeEvidenceSchema =
       practiceUrl: { type: String, index: true },
       dateKey: { type: String, index: true },
       verdict: String, // ACCEPTING | CHILD_ONLY | NONE | UNKNOWN
-      reason: String, // MATCH | NO_APPT_PAGE | APPT_THIN | WAITLIST | PRIVATE_ONLY | CHILD_ONLY | NEGATED | NO_KEYWORDS | UNKNOWN
+      reason: String, // MATCH | NO_APPT_PAGE | APPT_THIN | WAITLIST | PRIVATE_ONLY | NEGATED | NO_KEYWORDS | UNKNOWN
       source: String, // appointments | detail
       snippet: String,
       scannedAt: { type: Date, default: Date.now },
@@ -92,7 +85,7 @@ const PracticeEvidence =
   mongoose.models.PracticeEvidence || mongoose.model("PracticeEvidence", PracticeEvidenceSchema);
 
 /* ────────────────────────────────────────────────────────────────
-   HTTP client with retry
+   HTTP client with retry/backoff
 ──────────────────────────────────────────────────────────────── */
 const client = axios.create({
   timeout: REQUEST_TIMEOUT,
@@ -121,69 +114,27 @@ axiosRetry(client, {
   },
 });
 
-/* ────────────────────────────────────────────────────────────────
-   Fetchers: direct / ScrapingBee / Browserless
-──────────────────────────────────────────────────────────────── */
-async function getDirect(url) {
-  const res = await client.get(url);
-  if (DEBUG) console.log(`[DIRECT] ${url} → ${res.status} len=${(res.data || "").length}`);
-  if (typeof res.data === "string") return res.data;
-  return "";
-}
-async function getViaScrapingBee(url) {
-  if (!SCRAPINGBEE_KEY) return "";
-  const api = "https://app.scrapingbee.com/api/v1";
-  const res = await client.get(api, {
-    params: {
-      api_key: SCRAPINGBEE_KEY,
-      url,
-      render_js: "true",
-      country_code: "gb",
-      premium_proxy: "true",
-    },
-  });
-  if (DEBUG) console.log(`[SCRAPINGBEE] ${url} → ${res.status} len=${(res.data || "").length}`);
-  if (typeof res.data === "string") return res.data;
-  return "";
-}
-async function getViaBrowserless(url) {
-  if (!BROWSERLESS_TOKEN) return "";
-  const api = `https://chrome.browserless.io/content?token=${encodeURIComponent(
-    BROWSERLESS_TOKEN
-  )}&url=${encodeURIComponent(url)}`;
-  const res = await client.get(api);
-  if (DEBUG) console.log(`[BROWSERLESS] ${url} → ${res.status} len=${(res.data || "").length}`);
-  if (typeof res.data === "string") return res.data;
-  return "";
-}
 async function fetchPage(url) {
-  const mode = (DISCOVERY_PROVIDER || "direct").toLowerCase();
-  let html = "";
   try {
-    if (mode === "scrapingbee") html = await getViaScrapingBee(url);
-    else if (mode === "browserless") html = await getViaBrowserless(url);
-    else html = await getDirect(url);
-
-    if (!html && mode !== "direct") html = await getDirect(url);
+    const res = await client.get(url);
+    if (DEBUG) console.log(`[GET] ${url} → ${res.status} len=${(res.data || "").length}`);
+    if (res.status >= 200 && res.status < 400 && typeof res.data === "string") return res.data;
+    return "";
   } catch (e) {
-    if (DEBUG) console.log(`[FETCH ERR] ${url} → ${e?.message}`);
+    if (DEBUG) console.log(`[GET ERR] ${url} → ${e?.message}`);
+    return "";
   }
-  if (DEBUG && html) {
-    const peek = html.replace(/\s+/g, " ").slice(0, 500);
-    console.log(`[PEEK] ${url} >> ${peek}`);
-  }
-  return html || "";
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Discovery: NHS results URL variants + pagination
+   Discovery: NHS results URLs (+ rel="next" pagination)
 ──────────────────────────────────────────────────────────────── */
 function resultsUrlVariants(postcode, radius) {
   const pc = encodeURIComponent(postcode);
   const base = "https://www.nhs.uk";
   return [
-    `${base}/service-search/find-a-dentist/results/${pc}&distance=${radius}`, // path+&distance
-    `${base}/service-search/find-a-dentist/results?postcode=${pc}&distance=${radius}`, // query
+    `${base}/service-search/find-a-dentist/results/${pc}&distance=${radius}`,
+    `${base}/service-search/find-a-dentist/results?postcode=${pc}&distance=${radius}`,
   ];
 }
 function absolutize(baseUrl, href) {
@@ -202,9 +153,6 @@ function relNext($) {
   return link ? String(link) : "";
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Helpers (names, address, distance)
-──────────────────────────────────────────────────────────────── */
 function sanitizeAddress(raw) {
   if (!raw) return raw;
   const parts = raw
@@ -228,9 +176,7 @@ function nameFromUrl(detailUrl) {
   }
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Extract practice objects from a results page
-──────────────────────────────────────────────────────────────── */
+/* Extract practice objects (detailUrl + best-effort metadata) from results HTML */
 function extractPracticesFromResults(html, baseUrl) {
   const $ = cheerio.load(html);
   const RX = /https:\/\/www\.nhs\.uk\/services\/dentist[s]?\/[A-Za-z0-9\-/%?_.#=]+/g;
@@ -298,16 +244,13 @@ function extractPracticesFromResults(html, baseUrl) {
   return Array.from(mapByUrl.values());
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Discover practices for a postcode/radius
-──────────────────────────────────────────────────────────────── */
+/* Crawl results, follow rel="next", collect unique practices */
 async function discoverPractices(postcode, radius) {
   const start = resultsUrlVariants(postcode, radius);
   const queue = [...start];
   const seenUrl = new Set();
   const mapByDetail = new Map();
 
-  // crawl up to 12 pages total across variants
   while (queue.length && seenUrl.size < 12) {
     const url = queue.shift();
     if (seenUrl.has(url)) continue;
@@ -337,7 +280,7 @@ async function discoverPractices(postcode, radius) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Appointments resolution and text extraction
+   Appointments resolution + text extraction
 ──────────────────────────────────────────────────────────────── */
 function findAppointmentsHref($) {
   let href =
@@ -358,6 +301,7 @@ function findAppointmentsHref($) {
   }
   return href || "";
 }
+
 async function resolveAppointmentsUrl(detailUrl) {
   const detailHtml = await fetchPage(detailUrl);
   if (!detailHtml) return "";
@@ -377,6 +321,7 @@ async function resolveAppointmentsUrl(detailUrl) {
   }
   return "";
 }
+
 function extractAppointmentsText(html) {
   const $ = cheerio.load(html);
   const buckets = [];
@@ -387,7 +332,7 @@ function extractAppointmentsText(html) {
       const buf = [];
       let cur = $(h).next(),
         hops = 0;
-      while (cur.length && hops < 30) {
+      while (cur.length && hops < 40) {
         const tag = (cur[0].tagName || "").toLowerCase();
         if (/^h[1-6]$/.test(tag)) break;
         if (["p", "div", "li", "ul", "ol", "section"].includes(tag)) {
@@ -397,7 +342,7 @@ function extractAppointmentsText(html) {
         hops++;
       }
       const joined = buf.join(" ").trim();
-      if (joined) buckets.push(joined);
+      if (joined.length > 60) buckets.push(joined);
     }
   });
 
@@ -405,13 +350,17 @@ function extractAppointmentsText(html) {
     const wrappers = ["main", "#maincontent", ".nhsuk-main-wrapper", ".nhsuk-width-container", ".nhsuk-u-reading-width"];
     for (const sel of wrappers) {
       const t = String($(sel).text() || "").replace(/\s+/g, " ").trim();
-      if (t.length > 120) buckets.push(t);
+      if (t.length > 200) buckets.push(t);
     }
   }
-  if (!buckets.length) buckets.push(String($.root().text() || "").replace(/\s+/g, " ").trim());
+
+  if (!buckets.length) {
+    const whole = String($.root().text() || "").replace(/\s+/g, " ").trim();
+    return whole.slice(0, 8000);
+  }
 
   buckets.sort((a, b) => b.length - a.length);
-  return buckets[0] || "";
+  return buckets[0];
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -422,24 +371,26 @@ function classifyAcceptanceScored(text) {
 
   // hard negatives / blockers
   const neg =
-    /(not (currently )?accept(?:ing)?|no longer accepting|cannot accept|we are not accepting|nhs not available|nhs list closed|private only|emergency only|urgent care only|walk-?in only|not taking (on )?nhs|no nhs spaces)/i;
+    /(not (currently )?accept(?:ing)?|no longer accepting|cannot accept|we are not accepting|nhs not available|nhs list closed|private only|emergency only|urgent care only|walk-?in only|not taking (on )?nhs|no nhs spaces|nhs capacity full|nhs closed)/i;
   if (neg.test(t)) return "NONE";
 
-  // child-only
+  // child-only signals
   const child = /(children only|only accept(?:ing)? children|under\s*18|aged\s*(1[0-7]|[1-9])\s*or\s*under)/i;
-  const childAccept = child.test(t) && /accept\w*/.test(t);
+  const childAccept = child.test(t) && /\b(accept|accepting|taking on|register|registering)\b/.test(t);
 
-  // strong positives (phrases frequently seen on NHS pages)
+  // strong positives frequently seen on NHS pages
   const strong =
-    /(this dentist currently accepts new nhs patients|currently accept\w*\s+new\s+nhs\s+patients|accept\w*\s+new\s+nhs\s+patients|taking\s+on\s+new\s+nhs\s+patients|now\s+accept\w*\s+nhs\s+patients|register\w*\s+new\s+nhs\s+patients)/i;
+    /(this dentist currently accepts new nhs patients|currently accept\w*\s+new\s+nhs\s+patients|accept\w*\s+new\s+nhs\s+patients|taking\s+on\s+new\s+nhs\s+patients|now\s+accept\w*\s+nhs\s+patients|register\w*\s+new\s+nhs\s+patients|now\s+register\w*\s+nhs\s+patients|we\s+can\s+accept\s+new\s+nhs\s+patients|limited\s+nhs\s+availability|we\s+are\s+able\s+to\s+register\s+nhs\s+patients)/i;
 
-  // generic positive: nhs + accept/taking/register
-  const generic = /(?=.*\bnhs\b)(?=.*\b(accept|accepting|taking on|registering)\b)/i;
+  // generic positive: nhs + accept/take/register words together
+  const generic = /(?=.*\bnhs\b)(?=.*\b(accept|accepting|taking on|registering|register)\b)/i;
 
   let score = 0;
   if (strong.test(t)) score += 3;
   if (generic.test(t)) score += 2;
-  if (childAccept) score -= 2; // route to CHILD_ONLY below
+
+  // waitlist / expression-of-interest is not an acceptance
+  if (/\b(waiting list|join (the )?waiting list|register your interest|expression of interest)\b/i.test(t)) score -= 3;
 
   if (childAccept) return "CHILD_ONLY";
   if (score >= 3) return "ACCEPTING";
@@ -447,22 +398,22 @@ function classifyAcceptanceScored(text) {
   return "UNKNOWN";
 }
 
-/* reason code inference for evidence */
+/* Reason code inference for evidence */
 function inferReason(text) {
   const t = String(text || "").toLowerCase();
   if (!t) return "APPT_THIN";
-  if (/waiting list|register your interest/.test(t)) return "WAITLIST";
+  if (/waiting list|register your interest|expression of interest/.test(t)) return "WAITLIST";
   if (/private only|nhs not available/.test(t)) return "PRIVATE_ONLY";
   if (/children only|only accept(?:ing)? children|under\s*18|aged\s*(1[0-7]|[1-9])\s*or\s*under/.test(t)) return "CHILD_ONLY";
-  if (/not accept|no longer accept|cannot accept|not taking|nhs list closed/.test(t)) return "NEGATED";
-  if (!/(nhs|accept|accepting|taking on|registering|patients)/.test(t)) return "NO_KEYWORDS";
+  if (/not accept|no longer accept|cannot accept|not taking|nhs list closed|nhs capacity full|nhs closed/.test(t)) return "NEGATED";
+  if (!/(nhs|accept|accepting|taking on|registering|register|patients)/.test(t)) return "NO_KEYWORDS";
   return "UNKNOWN";
 }
 
-/* compact snippet around keywords for evidence */
+/* Compact snippet around keywords for evidence */
 function extractSnippet(text, max = 420) {
   const t = String(text || "");
-  const rx = /(accept|accepting|taking on|register|nhs|waiting list)/i;
+  const rx = /(accept|accepting|taking on|register|nhs|waiting list|expression of interest)/i;
   const m = t.match(rx);
   if (!m) return t.slice(0, max).trim();
   const i = Math.max(0, t.toLowerCase().indexOf(m[0].toLowerCase()));
@@ -488,7 +439,7 @@ async function sendEmail(toList, subject, html) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Jobs
+   Job builder
 ──────────────────────────────────────────────────────────────── */
 async function buildJobs(filterPostcode) {
   const match = filterPostcode ? { postcode: normPc(filterPostcode) } : {};
@@ -505,7 +456,7 @@ async function buildJobs(filterPostcode) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Scan pipeline
+   Scan pipeline for a postcode group
 ──────────────────────────────────────────────────────────────── */
 async function scanJob({ postcode, radiusMiles, recipients }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
@@ -534,10 +485,11 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           const detailUrl = p.detailUrl;
           if (!detailUrl) return;
 
+          // day-level dedupe per practice
           const already = await EmailLog.findOne({ practiceUrl: detailUrl, dateKey }).lean();
           if (already) return;
 
-          // 1) Appointments first
+          // 1) Appointments page first
           let sourceHtml = null;
           const apptUrl = await resolveAppointmentsUrl(detailUrl);
           if (apptUrl) {
@@ -547,7 +499,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
             cApptFallback++;
           }
 
-          // 2) Fallback: detail page if thin/missing
+          // 2) Fallback to detail page if thin/missing
           let usedSource = apptUrl ? "appointments" : "detail";
           if (!sourceHtml || sourceHtml.length < 450) {
             const detailHtml = await fetchPage(detailUrl);
@@ -571,10 +523,9 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           // 3) Extract text & classify
           const text = extractAppointmentsText(sourceHtml);
           const verdict = classifyAcceptanceScored(text);
-
           if (verdict === "UNKNOWN") cUnknown++;
 
-          // 4) Evidence capture (snippet + reason)
+          // 4) Evidence capture
           const reason = verdict === "ACCEPTING" ? "MATCH" : inferReason(text);
           const snippet = extractSnippet(text);
 
@@ -587,7 +538,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
             snippet,
           });
 
-          // 5) Build card (safe/optional enrichment)
+          // 5) Build card (safe enrichment)
           const card = {
             name:
               p.name ||
@@ -602,7 +553,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
                 )}&destination=${encodeURIComponent(p.address)}`
               : undefined,
             appointmentUrl: apptUrl || undefined,
-            detailUrl, // not used in email template, kept for traceability
+            detailUrl, // kept for traceability; not used in email body
             checkedAt: new Date(),
           };
 
@@ -664,15 +615,13 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
 export async function runScan(opts = {}) {
   if (mongoose.connection.readyState !== 1) await connectMongo(MONGO_URI);
 
-  console.log(
-    `🦷 DentistRadar scanner — provider=${(DISCOVERY_PROVIDER || "direct")} timeout=${REQUEST_TIMEOUT}ms retries=${RETRIES}`
-  );
+  console.log(`🦷 DentistRadar scanner — direct HTML, timeout=${REQUEST_TIMEOUT}ms retries=${RETRIES}`);
 
   const jobs = await buildJobs(opts.postcode);
   if (!jobs.length) {
     console.log("[RESULT] No Watch entries.");
     return { jobs: 0, summaries: [] };
-    }
+  }
 
   const summaries = [];
   for (const job of jobs) {
