@@ -1,31 +1,29 @@
 // cron.scan-all.js
+// Purpose: run the NHS scanner on a schedule (Render Cron / any scheduler)
+// Notes:
+// - Respects optional POSTCODE env to scan a single postcode for testing.
+// - Clean exit codes for scheduler visibility.
+
+import dotenv from "dotenv";
+dotenv.config();
+
 import { runScan } from "./scanner.js";
-import { connectMongo } from "./models.js";
 
-const MONGO_URI = process.env.MONGO_URI || "";
-if (!MONGO_URI) throw new Error("MONGO_URI is required");
-
-(async () => {
+async function main() {
+  const postcode = process.env.POSTCODE?.trim();
+  const t0 = Date.now();
+  console.log("🕒 Cron start", new Date().toISOString(), postcode ? `(single: ${postcode})` : "(all groups)");
   try {
-    await connectMongo(MONGO_URI);
-    console.log("✅ MongoDB connected", new Date().toISOString());
-
-    const result = await runScan(); // { jobs, summaries, emailAttemptsTotal, scannedTotal }
-    const acceptingTotal = (result.summaries || []).reduce((a, s) => a + (s.accepting || 0), 0);
-    const childTotal = (result.summaries || []).reduce((a, s) => a + (s.childOnly || 0), 0);
-
-    if (acceptingTotal + childTotal > 0) {
-      console.log(
-        `✅ Finished — accepting found: ${acceptingTotal}, child-only: ${childTotal}, Email attempts: ${result.emailAttemptsTotal || 0}, Total practices scanned: ${result.scannedTotal || 0}`
-      );
-    } else {
-      console.log(
-        `• No accepting practices this round (child-only included: ${childTotal}), Email attempts: ${result.emailAttemptsTotal || 0}, Total practices scanned: ${result.scannedTotal || 0}`
-      );
-    }
+    const res = await runScan(postcode ? { postcode } : {});
+    const dt = ((Date.now() - t0) / 1000).toFixed(1);
+    console.log(
+      `✅ Cron finished in ${dt}s — jobs: ${res.jobs}, scanned: ${res.scannedTotal}, emails: ${res.emailAttemptsTotal}`
+    );
     process.exit(0);
   } catch (e) {
-    console.error("❌ Cron failed:", e?.message || e);
+    console.error("❌ Cron error:", e?.stack || e?.message || e);
     process.exit(1);
   }
-})();
+}
+
+main();
