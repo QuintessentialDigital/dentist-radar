@@ -49,9 +49,7 @@ function practiceCard(p) {
     ? `<a href="${p.detailUrl}" style="color:#0b69c7;text-decoration:none">${name}</a>`
     : name;
 
-  const lines = [
-    `<div style="font-weight:600;font-size:16px;margin:0 0 4px">${title}</div>`
-  ];
+  const lines = [`<div style="font-weight:600;font-size:16px;margin:0 0 4px">${title}</div>`];
 
   if (p.phone) {
     const tel = String(p.phone).replace(/\s+/g, "");
