@@ -1,6 +1,6 @@
 // emailTemplates.js
 // Clean, professional HTML for "welcome" and "availability" emails.
-// Uses simple CSS-inlined styles; renders per-practice cards with distance/phone/map/appointments.
+// Renders per-practice cards with address, distance, phone, appointments link, map link.
 
 export function renderEmail(kind, data) {
   if (kind === "welcome") {
@@ -15,16 +15,14 @@ export function renderEmail(kind, data) {
               postcode || ""
             )}</b> start accepting new patients.
           </p>
-
           <div style="background:#f5f7fa;border:1px solid #e3e8ef;border-radius:8px;padding:12px;margin:14px 0">
             <div style="font-weight:600;margin-bottom:6px">What happens next</div>
             <ul style="margin:0 0 0 20px;padding:0;line-height:1.5">
-              <li>We check the NHS <b>Appointments</b> page text for nearby practices.</li>
-              <li>If we detect acceptance, we’ll send you an alert with practice details and links.</li>
+              <li>We read the NHS <b>Appointments</b> page for nearby practices.</li>
+              <li>If we detect acceptance, you’ll receive an alert with practice details and links.</li>
               <li>Please call the practice to confirm before travelling.</li>
             </ul>
           </div>
-
           <p style="margin:14px 0 0;color:#6b7280;font-size:12px">
             Tip: add this address to your contacts so alerts never land in spam.<br>
             — Dentist Radar
@@ -59,12 +57,10 @@ export function renderEmail(kind, data) {
     return { subject, html };
   }
 
-  // fallback
   return { subject: "Dentist Radar", html: "<div>OK</div>" };
 }
 
-/* ---------- helpers ---------- */
-
+/* helpers */
 function cardHtml(p) {
   const name = p.name || "NHS dental practice";
   const address = p.address ? row("📍", p.address) : "";
@@ -95,7 +91,6 @@ function cardHtml(p) {
 function row(icon, text) {
   return `<div style="margin:4px 0">${icon} ${safe(text)}</div>`;
 }
-
 function emptyState() {
   return `
     <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:12px;margin:12px 0">
@@ -103,7 +98,6 @@ function emptyState() {
       <div style="color:#6b7280">We’ll keep checking and email you as soon as we detect acceptance.</div>
     </div>`;
 }
-
 function safe(s = "") {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
