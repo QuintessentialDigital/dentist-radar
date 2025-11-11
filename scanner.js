@@ -1,19 +1,12 @@
 /**
- * DentistRadar — scanner.js (LEGACY+, resilient discovery)
+ * DentistRadar — scanner.js (LEGACY+ enriched)
  * -------------------------------------------------------
- * Why previous runs returned 0:
- *  • NHS results can be JS-rendered / consent-gated / AB-tested for Render IPs
- *  • Plain axios GET sees only a shell → no /services/dentist... links
+ * - Resilient discovery (direct or rendered via ScrapingBee/Browserless)
+ * - Extracts practice metadata (name/phone/address/distance) from results HTML
+ * - Resolves appointments page and classifies acceptance
+ * - Sends polished email cards with tel/map/links via emailTemplates.js
  *
- * Fixes in this file:
- *  • Sends cookie consent + realistic headers on "direct"
- *  • Optional rendered HTML via DISCOVERY_PROVIDER = scrapingbee | browserless
- *  • Follows rel="next" pagination instead of guessing page numbers
- *  • Longer timeouts + retry backoff on slow/429/5xx
- *  • Broader link extraction (anchors, JSON blobs, raw HTML; dentist or dentists)
- *  • Robust appointments resolution and acceptance classification
- *
- * Env (set on BOTH web & cron in Render):
+ * ENV (set on BOTH web & cron):
  *  MONGO_URI
  *  EMAIL_FROM
  *  POSTMARK_SERVER_TOKEN (or POSTMARK_TOKEN)
@@ -21,8 +14,8 @@
  *  INCLUDE_CHILD_ONLY=false
  *  MAX_CONCURRENCY=6
  *  DISCOVERY_PROVIDER=direct | scrapingbee | browserless
- *  SCRAPINGBEE_KEY=...            (if provider=scrapingbee)
- *  BROWSERLESS_TOKEN=...          (if provider=browserless)
+ *  SCRAPINGBEE_KEY=...
+ *  BROWSERLESS_TOKEN=...
  *  DISCOVERY_REQUEST_TIMEOUT_MS=60000
  *  DISCOVERY_RETRY=3
  *  DEBUG_DISCOVERY=false
@@ -70,6 +63,11 @@ const DEBUG           = String(DEBUG_DISCOVERY).toLowerCase() === "true";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
+const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
+const clean = (s) => String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+
 /* ────────────────────────────────────────────────────────────────
    Axios client with retry/backoff
 ──────────────────────────────────────────────────────────────── */
@@ -84,7 +82,7 @@ const client = axios.create({
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Upgrade-Insecure-Requests": "1",
     "Cache-Control": "no-cache",
-    // Pre-accept cookies (bypass consent walls where possible)
+    // Cookie consent to avoid blank shells where possible
     Cookie: "nhsuk-cookie-consent=accepted; nhsuk-patient-preferences=accepted",
     Connection: "keep-alive",
   },
@@ -101,17 +99,12 @@ axiosRetry(client, {
   },
 });
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
-const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
-
 /* ────────────────────────────────────────────────────────────────
    Providers: direct | scrapingbee | browserless
 ──────────────────────────────────────────────────────────────── */
 async function getDirect(url) {
   const res = await client.get(url);
   if (DEBUG) console.log(`[DIRECT] ${url} → ${res.status} len=${(res.data || "").length}`);
-  // Even 404/410 can contain useful HTML; don’t drop it blindly.
   if (typeof res.data === "string") return res.data;
   return "";
 }
@@ -153,8 +146,7 @@ async function fetchPage(url) {
     else html = await getDirect(url);
 
     if (!html && mode !== "direct") {
-      // graceful fallback to direct
-      html = await getDirect(url);
+      html = await getDirect(url); // graceful fallback
     }
   } catch (e) {
     if (DEBUG) console.log(`[FETCH ERR] ${url} → ${e?.message}`);
@@ -173,17 +165,16 @@ function resultsUrlVariants(postcode, radius) {
   const pc = encodeURIComponent(postcode);
   const base = "https://www.nhs.uk";
   return [
-    // Path variant you’ve confirmed before
     `${base}/service-search/find-a-dentist/results/${pc}&distance=${radius}`,
-    // Query variant
     `${base}/service-search/find-a-dentist/results?postcode=${pc}&distance=${radius}`,
   ];
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Follow pagination via rel="next"
-──────────────────────────────────────────────────────────────── */
-function findNextLink($) {
+function absolutize(baseUrl, href) {
+  try { return new URL(href, baseUrl).toString(); } catch { return ""; }
+}
+
+function relNext($) {
   const link =
     $('a[rel="next"]').attr("href") ||
     $('link[rel="next"]').attr("href") ||
@@ -192,84 +183,127 @@ function findNextLink($) {
   return link ? String(link) : "";
 }
 
-function absolutize(baseUrl, href) {
-  try {
-    return new URL(href, baseUrl).toString();
-  } catch {
-    return "";
-  }
-}
-
 /* ────────────────────────────────────────────────────────────────
-   Extract detail links (anchors + JSON + raw)
+   Extract practice objects from results page
+   (detailUrl + name/phone/address/distance when visible)
 ──────────────────────────────────────────────────────────────── */
-function extractDetailUrlsFromResults(html) {
+function extractPracticesFromResults(html, baseUrl) {
   const $ = cheerio.load(html);
-  const out = new Set();
-
   const RX = /https:\/\/www\.nhs\.uk\/services\/dentist[s]?\/[A-Za-z0-9\-/%?_.#=]+/g;
+  const mapByUrl = new Map();
 
-  const pushAbs = (href) => {
-    if (!href) return;
-    const abs = href.startsWith("http")
-      ? href
-      : `https://www.nhs.uk${href.startsWith("/") ? "" : "/"}${href}`;
-    if (/^https:\/\/www\.nhs\.uk\/services\/dentist[s]?\//i.test(abs)) {
-      out.add(abs.split("#")[0]);
-    }
+  const push = (obj) => {
+    const key = obj.detailUrl?.split("#")[0];
+    if (!key) return;
+    const merged = { ...(mapByUrl.get(key) || {}), ...obj, detailUrl: key };
+    mapByUrl.set(key, merged);
   };
 
-  // A) Anchor tags
-  $('a[href^="/services/dentist"], a[href*="/services/dentist"]').each((_, a) =>
-    pushAbs($(a).attr("href"))
-  );
+  // A) Card-like blocks
+  // Try a few container patterns to be defensive.
+  const candidates = $(".nhsuk-card, .nhsuk-grid-row, li, article, .nhsuk-results__item");
+  candidates.each((_, el) => {
+    const scope = $(el);
+    // Find detail link within the block
+    let href =
+      scope.find('a[href^="/services/dentist"]').attr("href") ||
+      scope.find('a[href*="/services/dentist"]').attr("href") ||
+      scope.find('a.nhsuk-card__link').attr("href") ||
+      "";
 
-  // B) Hydration / inline JSON
+    if (!href) return; // skip blocks without detail link
+    const detailUrl = absolutize(baseUrl, href);
+
+    // Heuristics for fields
+    const name =
+      clean(scope.find("h2, h3, .nhsuk-card__heading, .nhsuk-heading-m").first().text()) || undefined;
+
+    const telHref =
+      scope.find('a[href^="tel:"]').first().attr("href") ||
+      scope.find('a:contains("Tel"), a:contains("Phone"), a:contains("Call")').attr("href") ||
+      "";
+    const phone = telHref ? clean(telHref.replace(/^tel:/i, "")) : undefined;
+
+    // Address often appears as a compact paragraph/list in result cards
+    let address =
+      clean(
+        scope
+          .find(".nhsuk-u-font-size-16, .nhsuk-body-s, address, .nhsuk-list li")
+          .map((i, n) => $(n).text())
+          .get()
+          .join(" ")
+      ) || undefined;
+
+    // Distance text (e.g., "2.3 miles")
+    let distanceText =
+      clean(
+        scope
+          .find(':contains("mile")')
+          .filter((i, n) => /mile/i.test($(n).text()))
+          .first()
+          .text()
+      ) || undefined;
+
+    // Avoid ridiculous long address strings
+    if (address && address.length > 200) address = undefined;
+
+    push({ detailUrl, name, phone, address, distanceText });
+  });
+
+  // B) Hydration / inline JSON: pull any raw detail URLs (we won’t get fields here, but we keep the URL)
   $("script").each((_, s) => {
     if (s.attribs?.src) return;
     const txt = $(s).text() || "";
     const m = txt.match(RX);
-    if (m) m.forEach((u) => out.add(u.split("#")[0]));
+    if (m) m.forEach((u) => push({ detailUrl: u }));
   });
 
-  // C) Raw HTML sweep
+  // C) Raw HTML sweep for any missed URLs
   const body = typeof html === "string" ? html : $.root().html() || "";
   const hits = body.match(RX);
-  if (hits) hits.forEach((u) => out.add(u.split("#")[0]));
+  if (hits) hits.forEach((u) => push({ detailUrl: u }));
 
-  return Array.from(out);
+  return Array.from(mapByUrl.values());
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Discover detail URLs (multi-variant + rel=next)
+   Discovery with pagination via rel="next"
 ──────────────────────────────────────────────────────────────── */
-async function discoverDetailUrls(postcode, radius) {
-  const seen = new Set();
-  const queue = [];
+async function discoverPractices(postcode, radius) {
   const start = resultsUrlVariants(postcode, radius);
-  start.forEach((u) => queue.push(u));
+  const queue = [...start];
+  const seenUrl = new Set();
+  const mapByDetail = new Map();
 
-  // Crawl up to 8 pages total across variants (polite)
-  while (queue.length && seen.size < 240 && queue.length < 12) {
+  // Crawl up to 10 pages total across variants (polite)
+  while (queue.length && seenUrl.size < 12) {
     const url = queue.shift();
+    if (seenUrl.has(url)) continue;
+    seenUrl.add(url);
+
     const html = await fetchPage(url);
     if (!html) continue;
 
-    // Extract details
-    const links = extractDetailUrlsFromResults(html);
-    links.forEach((u) => seen.add(u));
+    // Merge practices
+    const items = extractPracticesFromResults(html, url);
+    for (const p of items) {
+      const key = p.detailUrl;
+      const merged = { ...(mapByDetail.get(key) || {}), ...p };
+      mapByDetail.set(key, merged);
+    }
 
-    // Follow rel=next if present
+    // Follow rel=next
     const $ = cheerio.load(html);
-    const nextHref = findNextLink($);
+    const nextHref = relNext($);
     if (nextHref) {
       const abs = absolutize(url, nextHref);
-      if (abs && !queue.includes(abs)) queue.push(abs);
+      if (abs && !seenUrl.has(abs) && queue.length < 12) queue.push(abs);
     }
 
     await sleep(120); // polite pause
   }
-  return Array.from(seen);
+
+  return Array.from(mapByDetail.values());
 }
 
 /* ────────────────────────────────────────────────────────────────
@@ -320,7 +354,6 @@ function extractAppointmentsText(html) {
   const $ = cheerio.load(html);
   const buckets = [];
 
-  // Prefer sections near headings
   $("h1,h2,h3").each((_, h) => {
     const heading = String($(h).text() || "").toLowerCase();
     if (/appointment|opening\s+times/.test(heading)) {
@@ -340,7 +373,6 @@ function extractAppointmentsText(html) {
   });
 
   if (!buckets.length) {
-    // wider containers
     const wrappers = ["main", "#maincontent", ".nhsuk-main-wrapper", ".nhsuk-width-container", ".nhsuk-u-reading-width"];
     for (const sel of wrappers) {
       const t = String($(sel).text() || "").replace(/\s+/g," ").trim();
@@ -370,7 +402,6 @@ function classifyAcceptance(text) {
   if (childOnly) return "CHILD_ONLY";
   if (mentionsNhs && mentionsAccept && !t.includes("only")) return "ACCEPTING";
 
-  // Very explicit phrasing
   if (t.includes("this dentist currently accepts new nhs patients")) return "ACCEPTING";
   if (t.includes("currently accepting new nhs patients")) return "ACCEPTING";
   if (t.includes("accepting new nhs patients")) return "ACCEPTING";
@@ -418,24 +449,27 @@ async function buildJobs(filterPostcode) {
 ──────────────────────────────────────────────────────────────── */
 async function scanJob({ postcode, radiusMiles, recipients }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
-  const detailUrls = await discoverDetailUrls(postcode, radiusMiles);
-  console.log(`[DISCOVERY] detail URLs = ${detailUrls.length}`);
 
-  if (!detailUrls.length) {
+  const practices = await discoverPractices(postcode, radiusMiles);
+  console.log(`[DISCOVERY] collected = ${practices.length} (with metadata where available)`);
+  if (!practices.length) {
     console.log("[INFO] No practice detail URLs discovered for this query.");
     return { accepting: [], childOnly: [] };
   }
 
   const limit = pLimit(CONCURRENCY);
   const dateKey = dayjs().format("YYYY-MM-DD");
+
   const acceptingDetails = [];
   const childOnlyDetails = [];
 
   await Promise.all(
-    detailUrls.map((detailUrl) =>
+    practices.map((p) =>
       limit(async () => {
         try {
-          // per-practice daily dedupe to avoid spamming
+          const detailUrl = p.detailUrl;
+          if (!detailUrl) return;
+
           const already = await EmailLog.findOne({ practiceUrl: detailUrl, dateKey }).lean();
           if (already) return;
 
@@ -448,14 +482,13 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           const verdict = classifyAcceptance(extractAppointmentsText(apptHtml));
 
           const card = {
-            name: undefined,
-            address: undefined,
+            name: p.name,
+            address: p.address,
+            phone: p.phone,
+            distanceText: p.distanceText,
+            mapUrl: p.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.address)}` : undefined,
             appointmentUrl: apptUrl,
             detailUrl,
-            phone: undefined,
-            distanceMiles: undefined,
-            lat: undefined,
-            lon: undefined,
             checkedAt: new Date(),
           };
 
@@ -467,7 +500,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
             await EmailLog.create({ type: "availability", practiceUrl: detailUrl, dateKey, status: "CHILD_ONLY", sentAt: new Date() });
           }
         } catch {
-          // ignore individual page failures
+          /* ignore single practice failures */
         }
       })
     )
@@ -483,13 +516,13 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
     return { accepting: acceptingDetails, childOnly: childOnlyDetails };
   }
 
-  // Improved availability email (uses your template file)
-  const practices = [...acceptingDetails, ...childOnlyDetails];
+  const all = [...acceptingDetails, ...(INCLUDE_CHILD ? childOnlyDetails : [])];
   const { subject, html } = renderEmail("availability", {
     postcode,
     radius: radiusMiles,
-    practices,
+    practices: all,
     includeChildOnly: INCLUDE_CHILD,
+    scannedAt: new Date(),
   });
   await sendEmail(recipients, subject, html);
   return { accepting: acceptingDetails, childOnly: childOnlyDetails };
