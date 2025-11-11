@@ -1,112 +1,87 @@
-/**
- * DentistRadar — emailTemplates.js
- * Exposes: renderEmail(type, data)
- *  - type: "welcome" | "availability"
- */
+// emailTemplates.js — exports renderEmail()
+// Availability cards show per-practice distance/phone; no global/duplicate distance.
 
-import dayjs from "dayjs";
+export function renderEmail(kind, data) {
+  if (kind === "availability") {
+    const { postcode, radius, practices, includeChildOnly = false, scannedAt } = data;
 
-const BRAND = {
-  name: "DentistRadar",
-  accent: "#0078d4",
-  text: "#1f2937",
-  subtext: "#6b7280",
-  border: "#e5e7eb",
-  bg: "#ffffff",
-};
+    const cards = (practices || [])
+      .map((p) => {
+        const name = p.name || "NHS dental practice";
+        const phone = p.phone ? row("📞", esc(p.phone)) : "";
+        const distance = p.distanceText ? row("📏", esc(p.distanceText)) : "";
+        const address = p.address ? row("📍", esc(p.address)) : "";
 
-function esc(s = "") {
-  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] || c));
-}
+        const apptBtn = p.appointmentUrl
+          ? `<a href="${attr(p.appointmentUrl)}" style="display:inline-block;background:#005eb8;color:#fff;padding:8px 10px;border-radius:6px;text-decoration:none;margin-right:8px">Appointments</a>`
+          : "";
 
-function card(pr) {
-  const name = pr.name ? esc(pr.name) : "NHS Dental Practice";
-  const addr = pr.address ? esc(pr.address) : null;
-  const phone = pr.phone ? esc(pr.phone) : null;
-  const dist = pr.distanceText ? esc(pr.distanceText.replace(/^this organisation is\s*/i, "")) : null;
-  const appt = pr.appointmentUrl ? esc(pr.appointmentUrl) : "#";
-  const map = pr.mapUrl ? esc(pr.mapUrl) : null;
+        const mapBtn = p.mapUrl
+          ? `<a href="${attr(p.mapUrl)}" style="display:inline-block;background:#e8f1fb;color:#005eb8;padding:8px 10px;border-radius:6px;text-decoration:none;border:1px solid #cfe0f5">Open map</a>`
+          : "";
 
-  return `
-  <div style="margin:0 0 14px;padding:14px;border:1px solid ${BRAND.border};border-radius:10px;background:${BRAND.bg}">
-    <h3 style="margin:0 0 6px;color:${BRAND.accent};font:600 16px/1.2 system-ui">${name}</h3>
-    <p style="margin:0 0 8px;color:${BRAND.text};font:14px/1.45 system-ui">
-      ${addr ? `📍 ${addr}<br>` : ""}
-      ${phone ? `📞 <a href="tel:${encodeURIComponent(pr.phone)}" style="color:${BRAND.accent};text-decoration:none">${esc(pr.phone)}</a><br>` : ""}
-      ${dist ? `📏 ${dist}<br>` : ""}
-    </p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <a href="${appt}" style="display:inline-block;padding:8px 12px;background:${BRAND.accent};color:#fff;border-radius:6px;text-decoration:none;font:600 14px system-ui">Appointments page →</a>
-      ${map ? `<a href="${map}" style="display:inline-block;padding:8px 12px;background:#111827;color:#fff;border-radius:6px;text-decoration:none;font:600 14px system-ui">Open map →</a>` : ""}
-    </div>
-  </div>`;
-}
+        return `
+          <div style="border:1px solid #e8e8e8;border-radius:10px;padding:12px;margin:10px 0">
+            <div style="font-weight:600;font-size:15px;margin-bottom:6px">${esc(name)}</div>
+            ${address}
+            ${distance}
+            ${phone}
+            <div style="margin-top:8px">
+              ${apptBtn}
+              ${mapBtn}
+            </div>
+          </div>`;
+      })
+      .join("");
 
-function wrap(bodyHtml, heading, subheading) {
-  return `
-  <div style="background:#f8fafc;padding:20px 0">
-    <div style="max-width:620px;margin:0 auto;padding:16px">
-      <div style="padding:16px 14px;border:1px solid ${BRAND.border};border-radius:12px;background:${BRAND.bg}">
-        <h2 style="margin:4px 0 6px;color:${BRAND.text};font:700 18px/1.2 system-ui">${esc(heading)}</h2>
-        ${subheading ? `<div style="margin:0 0 10px;color:${BRAND.subtext};font:13px system-ui">${esc(subheading)}</div>` : ""}
-        ${bodyHtml}
-        <hr style="border:0;border-top:1px solid ${BRAND.border};margin:12px 0">
-        <p style="margin:10px 0 0;color:${BRAND.subtext};font:12px system-ui">
-          We monitor official NHS listings hourly. Please call the practice to confirm availability before travelling.
-        </p>
-        <p style="margin:6px 0 0;color:${BRAND.subtext};font:12px system-ui">
-          Manage your alerts anytime from the website.
-        </p>
+    const subject = `NHS dentists near ${postcode} — ${practices.length} match${practices.length === 1 ? "" : "es"}`;
+    const html = `
+      <div style="font:14px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:#111;-webkit-font-smoothing:antialiased">
+        <h2 style="margin:0 0 6px">Dentist availability near ${esc(postcode)}</h2>
+        <div style="color:#555;margin:0 0 12px">Radius: ${radius} miles • ${new Date(
+      scannedAt || Date.now()
+    ).toLocaleString()}</div>
+
+        ${cards || "<div>No practices matched right now.</div>"}
+
+        <hr style="border:0;border-top:1px solid #eee;margin:14px 0">
+        <div style="font-size:12px;color:#666">
+          We read the NHS <b>Appointments</b> page to infer availability. Always call the practice to confirm before travelling.
+        </div>
       </div>
-      <div style="text-align:center;margin:12px 0 0;color:${BRAND.subtext};font:11px system-ui">
-        © ${new Date().getFullYear()} ${BRAND.name}
-      </div>
-    </div>
-  </div>`;
-}
-
-/** Public API */
-export function renderEmail(type, data) {
-  if (type === "welcome") {
-    const { postcode, radius, includeChildOnly } = data || {};
-    const heading = `Alert set for ${postcode} (${radius} miles)`;
-    const sub = `We’ll email you as soon as we detect NHS practices accepting new patients within your chosen radius.`;
-    const body = `
-      <p style="margin:0 0 10px;color:${BRAND.text};font:14px/1.6 system-ui">
-        Thanks for using ${BRAND.name}! We read the NHS “Appointments” pages directly and only alert when a practice is
-        clearly listed as accepting new NHS patients${includeChildOnly ? " (or children only, if enabled)" : ""}.
-      </p>
-      <ul style="margin:0 0 12px 18px;color:${BRAND.text};font:14px/1.6 system-ui">
-        <li>Hourly checks</li>
-        <li>Direct links to each practice</li>
-        <li>Phone number and map in every alert</li>
-      </ul>
     `;
-    return { subject: `${BRAND.name} — alert active for ${postcode}`, html: wrap(body, heading, sub) };
+    return { subject, html };
   }
 
-  if (type === "availability") {
-    const { postcode, radius, practices = [], includeChildOnly = false, scannedAt } = data || {};
-    const ts = scannedAt ? dayjs(scannedAt).format("DD MMM YYYY HH:mm") : dayjs().format("DD MMM YYYY HH:mm");
-    const acceptingCount = practices.length;
-
-    const heading = acceptingCount
-      ? `🎉 ${acceptingCount} practice${acceptingCount > 1 ? "s" : ""} accepting near ${postcode}`
-      : `Update for ${postcode}`;
-
-    const sub = `${ts} • Radius: ${radius} miles${includeChildOnly ? " • includes children-only" : ""}`;
-    const cards = practices.map(card).join("");
-
-    const body =
-      cards ||
-      `<p style="margin:0;color:${BRAND.text};font:14px/1.6 system-ui">
-        No accepting practices found this round. We’ll keep watching and notify you as soon as something changes.
-      </p>`;
-
-    return { subject: `${BRAND.name} — ${acceptingCount} accepting near ${postcode}`, html: wrap(body, heading, sub) };
+  // Default / welcome template (keep minimal; customize as you like)
+  if (kind === "welcome") {
+    const { postcode, radius } = data || {};
+    return {
+      subject: `DentistRadar — alert active for ${postcode}`,
+      html: `
+        <div style="font:14px system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:#111">
+          <h2 style="margin:0 0 6px">You're set!</h2>
+          <p>We’ll email you when NHS practices within <b>${radius} miles</b> of <b>${esc(
+        postcode || ""
+      )}</b> start accepting new patients.</p>
+          <p style="color:#666">Tip: add this address to your contacts so alerts never land in spam.</p>
+        </div>`,
+    };
   }
 
-  return { subject: `${BRAND.name}`, html: wrap("<p style='margin:0'>Hello!</p>", BRAND.name, "") };
+  // Fallback
+  return { subject: "DentistRadar", html: "<div>OK</div>" };
+}
+
+/* helpers */
+function esc(s = "") {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function attr(s = "") {
+  return String(s).replace(/"/g, "&quot;");
+}
+function row(emoji, text) {
+  return `<div style="margin:4px 0"><b>${emoji}</b> ${text}</div>`;
 }
 
 export default { renderEmail };
