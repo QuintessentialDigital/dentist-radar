@@ -22,7 +22,7 @@ export async function connectMongo() {
 
 // ----- Schemas -----
 
-// Watches — use physical collection name 'watches'
+// Watches — physical collection name 'watches'
 const WatchSchema =
   mongoose.models.Watch?.schema ||
   new mongoose.Schema(
@@ -35,7 +35,7 @@ const WatchSchema =
   );
 WatchSchema.index({ email: 1, postcode: 1 }, { unique: true });
 
-// Users — optional, but exported so server.js can import it safely
+// Users — optional, used by server
 const UserSchema =
   mongoose.models.User?.schema ||
   new mongoose.Schema(
@@ -66,9 +66,9 @@ const EmailLogSchema =
 EmailLogSchema.index({ practiceUrl: 1, dateKey: 1 }, { unique: true, sparse: true });
 
 // ----- Models -----
-export const Watch   = mongoose.models.Watch   || mongoose.model("Watch", WatchSchema);
-export const User    = mongoose.models.User    || mongoose.model("User", UserSchema);
-export const EmailLog= mongoose.models.EmailLog|| mongoose.model("EmailLog", EmailLogSchema);
+export const Watch    = mongoose.models.Watch    || mongoose.model("Watch", WatchSchema);
+export const User     = mongoose.models.User     || mongoose.model("User", UserSchema);
+export const EmailLog = mongoose.models.EmailLog || mongoose.model("EmailLog", EmailLogSchema);
 
 // Tiny helper for quick, pretty logs
 export const peek = (o, n = 1) => JSON.stringify(o, null, n);
