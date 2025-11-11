@@ -1,8 +1,8 @@
 /**
  * DentistRadar — scanner.js (v10.3.1)
  * Minimal change to v10.3:
- *  - Exclude "not confirmed" wording from being treated as accepting.
- *  - Everything else remains identical to your v10.3.
+ *  - Exclude “not confirmed” wording from being treated as accepting.
+ *  - Fix typo: `const slug` (was `the slug`).
  */
 
 import axios from "axios";
@@ -137,7 +137,7 @@ function nameFromUrl(detailUrl) {
   try {
     const u = new URL(detailUrl);
     const segs = u.pathname.split("/").filter(Boolean);
-    the slug = segs[segs.length - 1] || "";
+    const slug = segs[segs.length - 1] || "";   // ← fixed line
     const cleaned = slug.replace(/\d+/g, "").replace(/[-_]+/g, " ").trim();
     if (!cleaned) return undefined;
     return cleaned.replace(/\b\w/g, (c) => c.toUpperCase());
@@ -498,7 +498,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           }
 
           const text = extractAppointmentsText(sourceHtml);
-          const verdict = classifyAcceptanceScored(text); // ⟵ same v10.3 scoring + new NOT_CONFIRMED guard
+          const verdict = classifyAcceptanceScored(text); // v10.3 scoring + NOT_CONFIRMED guard
           if (verdict === "UNKNOWN") cUnknown++;
 
           const reason = verdict === "ACCEPTING" ? "MATCH" : inferReason(text);
