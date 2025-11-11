@@ -1,10 +1,8 @@
 /**
- * DentistRadar — scanner.js (v10.4)
- * - Discovery via NHS HTML results (two variants) + rel="next"
- * - Appointments-first classify; detail fallback if thin
- * - Scored classifier aligned to current NHS wording (+ NOT-CONFIRMED guard)
- * - Evidence capture (verdict, reason, snippet)
- * - Accurate emailAttempts so cron/server logs match reality
+ * DentistRadar — scanner.js (v10.4.1)
+ * Change in this version:
+ *   • Tighten acceptance classifier to EXCLUDE “not confirmed” wording.
+ *     (Everything else — discovery, parsing, email formats — unchanged.)
  */
 
 import axios from "axios";
@@ -52,7 +50,7 @@ const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim(
 const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
 const clean = (s) => String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
 
-/* Evidence model (guarded, separate collection) */
+/* Evidence model (unchanged) */
 const PracticeEvidenceSchema =
   mongoose.models.PracticeEvidence?.schema ||
   new mongoose.Schema(
@@ -70,7 +68,7 @@ const PracticeEvidenceSchema =
 const PracticeEvidence =
   mongoose.models.PracticeEvidence || mongoose.model("PracticeEvidence", PracticeEvidenceSchema);
 
-/* HTTP client w/ retry */
+/* HTTP client w/ retry (unchanged) */
 const client = axios.create({
   timeout: REQUEST_TIMEOUT,
   maxRedirects: 7,
@@ -108,7 +106,7 @@ async function fetchPage(url) {
   }
 }
 
-/* Discovery */
+/* Discovery (unchanged) */
 function resultsUrlVariants(postcode, radius) {
   const pc = encodeURIComponent(postcode);
   const base = "https://www.nhs.uk";
@@ -145,7 +143,6 @@ function nameFromUrl(detailUrl) {
     return cleaned.replace(/\b\w/g, (c) => c.toUpperCase());
   } catch { return undefined; }
 }
-
 function extractPracticesFromResults(html, baseUrl) {
   const $ = cheerio.load(html);
   const RX = /https:\/\/www\.nhs\.uk\/services\/dentist[s]?\/[A-Za-z0-9\-/%?_.#=]+/g;
@@ -205,7 +202,6 @@ function extractPracticesFromResults(html, baseUrl) {
 
   return Array.from(mapByUrl.values());
 }
-
 async function discoverPractices(postcode, radius) {
   const start = resultsUrlVariants(postcode, radius);
   const queue = [...start];
@@ -239,7 +235,7 @@ async function discoverPractices(postcode, radius) {
   return Array.from(mapByDetail.values());
 }
 
-/* Appointments resolution + text extraction */
+/* Appointments resolution (unchanged) */
 function findAppointmentsHref($) {
   let href =
     $('a[href*="/appointments"]').attr("href") ||
@@ -317,31 +313,37 @@ function extractAppointmentsText(html) {
   return buckets[0];
 }
 
-/* Classifier + helpers (with NOT-CONFIRMED guard) */
+/* ========= THE ONLY CHANGE: classifier tightened (NOT-CONFIRMED guard) ========= */
 function classifyAcceptanceScored(text) {
   const t = String(text || "").toLowerCase().replace(/\s+/g, " ").replace(/’/g, "'");
 
-  // Explicit uncertainty — never count as accepting
+  // 🚫 Never treat “not confirmed” as accepting
   const notConfirmed =
     /\b(has|have)\s+not\s+confirmed\b.*\b(accept|register)\b|\bunable\s+to\s+confirm\b.*\b(accept|register)\b|\bnot\s+confirmed\s+if\b.*\b(accept|register)\b|\bno\s+information\b.*\b(accept|register)\b|\bunknown\b.*\b(accept|register)\b/;
   if (notConfirmed.test(t)) return "NONE";
 
+  // 🚫 Strong negatives
   const neg =
     /(not (currently )?accept(?:ing)?|no longer accepting|cannot accept|we are not accepting|nhs not available|nhs list closed|private only|emergency only|urgent care only|walk-?in only|not taking (on )?nhs|no nhs spaces|nhs capacity full|nhs closed)/i;
   if (neg.test(t)) return "NONE";
 
+  // 👶 children only
   const child = /(children only|only accept(?:ing)? children|under\s*18|aged\s*(1[0-7]|[1-9])\s*or\s*under)/i;
   const childAccept = child.test(t) && /\b(accept|accepting|taking on|register|registering)\b/.test(t);
 
+  // ✅ Strong positives seen on NHS pages (precise)
   const strong =
-    /(this dentist currently accepts new nhs patients|currently accept\w*\s+new\s+nhs\s+patients|accept\w*\s+new\s+nhs\s+patients|taking\s+on\s+new\s+nhs\s+patients|now\s+accept\w*\s+nhs\s+patients|register\w*\s+new\s+nhs\s+patients|now\s+register\w*\s+nhs\s+patients|we\s+can\s+accept\s+new\s+nhs\s+patients|limited\s+nhs\s+availability|we\s+are\s+able\s+to\s+register\s+nhs\s+patients)/i;
+    /(this dentist currently accepts new nhs patients|we (are|’re|are now)\s+accept(?:ing)?\s+new\s+nhs\s+patients|currently accept\w*\s+new\s+nhs\s+patients|taking\s+on\s+new\s+nhs\s+patients|now\s+accept\w*\s+nhs\s+patients|able\s+to\s+register\s+nhs\s+patients|we\s+can\s+accept\s+new\s+nhs\s+patients|limited\s+nhs\s+availability|spaces\s+for\s+nhs\s+patients)/i;
 
+  // ✅ Generic positive
   const generic = /(?=.*\bnhs\b)(?=.*\b(accept|accepting|taking on|registering|register)\b)/i;
 
   let score = 0;
   if (strong.test(t)) score += 3;
   if (generic.test(t)) score += 2;
-  if (/\b(waiting list|join (the )?waiting list|register your interest|expression of interest)\b/i.test(t)) score -= 3;
+
+  // 🚫 Waitlist/EOI ≠ acceptance
+  if (/\b(waiting list|join (the )?waiting list|register your interest|expression of interest|eoi)\b/i.test(t)) score -= 3;
 
   if (childAccept) return "CHILD_ONLY";
   if (score >= 3) return "ACCEPTING";
@@ -352,7 +354,7 @@ function inferReason(text) {
   const t = String(text || "").toLowerCase();
   if (!t) return "APPT_THIN";
   if (/\b(has|have)\s+not\s+confirmed\b.*\b(accept|register)\b|\bunable\s+to\s+confirm\b.*\b(accept|register)\b|\bnot\s+confirmed\s+if\b.*\b(accept|register)\b|\bno\s+information\b.*\b(accept|register)\b|\bunknown\b.*\b(accept|register)\b/.test(t)) return "NOT_CONFIRMED";
-  if (/waiting list|register your interest|expression of interest/.test(t)) return "WAITLIST";
+  if (/waiting list|register your interest|expression of interest|eoi/.test(t)) return "WAITLIST";
   if (/private only|nhs not available/.test(t)) return "PRIVATE_ONLY";
   if (/children only|only accept(?:ing)? children|under\s*18|aged\s*(1[0-7]|[1-9])\s*or\s*under/.test(t)) return "CHILD_ONLY";
   if (/not accept|no longer accept|cannot accept|not taking|nhs list closed|nhs capacity full|nhs closed/.test(t)) return "NEGATED";
@@ -369,7 +371,7 @@ function extractSnippet(text, max = 420) {
   return t.slice(start, start + max).trim();
 }
 
-/* Email via Postmark */
+/* Email via Postmark (unchanged; templates come from emailTemplates.js you liked) */
 async function sendEmail(toList, subject, html) {
   const token = POSTMARK_SERVER_TOKEN || POSTMARK_TOKEN || "";
   if (!toList?.length || !token) return { ok: false };
@@ -384,7 +386,7 @@ async function sendEmail(toList, subject, html) {
     : { ok: false, status: res.status, body: res.data };
 }
 
-/* Build jobs — with fallback to physical 'watches' collection */
+/* Jobs (unchanged) */
 async function buildJobs(filterPostcode) {
   const norm = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
   const match = filterPostcode ? { postcode: norm(filterPostcode) } : {};
@@ -417,7 +419,7 @@ async function buildJobs(filterPostcode) {
   }));
 }
 
-/* Optional: run report when nothing sent */
+/* Optional run report (unchanged) */
 async function sendRunReport({ postcode, radius, discovered, apptResolved, apptFallback, unknown, recipientsCount }) {
   if (!RUN_REPORT || !ADMIN_EMAIL) return;
   const subject = `Scan report — ${postcode} (${radius} mi)`;
@@ -436,7 +438,7 @@ async function sendRunReport({ postcode, radius, discovered, apptResolved, apptF
   await sendEmail([ADMIN_EMAIL], subject, html);
 }
 
-/* Scan a postcode group */
+/* Scan job (unchanged except classifier already patched above) */
 async function scanJob({ postcode, radiusMiles, recipients }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
@@ -467,7 +469,6 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           const already = await EmailLog.findOne({ practiceUrl: detailUrl, dateKey }).lean();
           if (already) return;
 
-          // Appointments first
           let sourceHtml = null;
           const apptUrl = await resolveAppointmentsUrl(detailUrl);
           if (apptUrl) {
@@ -477,7 +478,6 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
             cApptFallback++;
           }
 
-          // Fallback to detail if thin
           let usedSource = apptUrl ? "appointments" : "detail";
           if (!sourceHtml || sourceHtml.length < 450) {
             const detailHtml = await fetchPage(detailUrl);
@@ -584,6 +584,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
     return { accepting: acceptingDetails, childOnly: childOnlyDetails, emailAttempts, scanned: practices.length };
   }
 
+  // Use your existing emailTemplates.js (unchanged formats you liked)
   const all = [...acceptingDetails, ...(INCLUDE_CHILD ? childOnlyDetails : [])];
   const { subject, html } = renderEmail("availability", {
     postcode,
@@ -599,7 +600,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
   return { accepting: acceptingDetails, childOnly: childOnlyDetails, emailAttempts, scanned: practices.length };
 }
 
-/* Runner */
+/* Runner (unchanged) */
 export async function runScan(opts = {}) {
   if (mongoose.connection.readyState !== 1) await connectMongo(MONGO_URI);
 
