@@ -1,39 +1,34 @@
 /**
- * DentistRadar — scanner.js (v11.3)
- * Purpose: fix acceptance detection on NHS appointments pages.
- * Changes vs 11.2.1:
- *  • Wider text capture (span/strong + visually-hidden/aria-live + details/summary)
- *  • More robust appointments URL resolution (services/information + canonical)
- *  • Expanded positive patterns reflecting current NHS phrasings
- *  • Safer false-positive blocks (not confirmed / waiting list / private only)
+ * DentistRadar — scanner.js (v10.3.1)
+ * Minimal change to v10.3:
+ *  - Exclude "not confirmed" wording from being treated as accepting.
+ *  - Everything else remains identical to your v10.3.
  */
 
 import axios from "axios";
 import axiosRetry from "axios-retry";
 import * as cheerio from "cheerio";
+import mongoose from "mongoose";
 import pLimit from "p-limit";
 import dayjs from "dayjs";
-import mongoose from "mongoose";
 
 import { connectMongo, Watch, EmailLog } from "./models.js";
 import { renderEmail } from "./emailTemplates.js";
 
-/* ─────────────── ENV ─────────────── */
+/* ENV */
 const {
   MONGO_URI,
   EMAIL_FROM,
   POSTMARK_SERVER_TOKEN,
   POSTMARK_TOKEN,
   POSTMARK_MESSAGE_STREAM = "outbound",
-
   MAX_CONCURRENCY = "6",
-  DISCOVERY_PAGES = "10",
+  INCLUDE_CHILD_ONLY = "false",
+  DEBUG_DISCOVERY = "false",
   DISCOVERY_REQUEST_TIMEOUT_MS = "60000",
   DISCOVERY_RETRY = "3",
-  INCLUDE_CHILD_ONLY = "false",
-
-  DEBUG_DISCOVERY = "false",
-  DEBUG_CLASSIFIER = "false",
+  DEBUG_RUN_REPORT = "false",
+  DEBUG_ADMIN_EMAIL = "",
 } = process.env;
 
 if (!MONGO_URI) throw new Error("MONGO_URI is required");
@@ -41,12 +36,11 @@ if (!EMAIL_FROM) throw new Error("EMAIL_FROM is required");
 
 const INCLUDE_CHILD = String(INCLUDE_CHILD_ONLY).toLowerCase() === "true";
 const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 6);
-const PAGE_LIMIT = Math.max(1, Number(DISCOVERY_PAGES) || 10);
-const REQUEST_TIMEOUT = Math.max(15000, Number(DISCOVERY_REQUEST_TIMEOUT_MS) || 60000);
+const REQUEST_TIMEOUT = Math.max(10000, Number(DISCOVERY_REQUEST_TIMEOUT_MS) || 60000);
 const RETRIES = Math.max(0, Number(DISCOVERY_RETRY) || 3);
-
 const DEBUG = String(DEBUG_DISCOVERY).toLowerCase() === "true";
-const DEBUGC = String(DEBUG_CLASSIFIER).toLowerCase() === "true";
+const RUN_REPORT = String(DEBUG_RUN_REPORT).toLowerCase() === "true";
+const ADMIN_EMAIL = (DEBUG_ADMIN_EMAIL || "").trim();
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
@@ -54,14 +48,27 @@ const UA =
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
 const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
-const clean = (s) =>
-  String(s || "")
-    .replace(/\s+/g, " ")
-    .replace(/[\u200B-\u200D\uFEFF]/g, "")
-    .replace(/\u00A0/g, " ")
-    .trim();
+const clean = (s) => String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
 
-/* ───────── HTTP client ───────── */
+/* Evidence model (guarded, separate collection) */
+const PracticeEvidenceSchema =
+  mongoose.models.PracticeEvidence?.schema ||
+  new mongoose.Schema(
+    {
+      practiceUrl: { type: String, index: true },
+      dateKey: { type: String, index: true },
+      verdict: String,
+      reason: String,
+      source: String,
+      snippet: String,
+      scannedAt: { type: Date, default: Date.now },
+    },
+    { versionKey: false, collection: "PracticeEvidence" }
+  );
+const PracticeEvidence =
+  mongoose.models.PracticeEvidence || mongoose.model("PracticeEvidence", PracticeEvidenceSchema);
+
+/* HTTP client w/ retry */
 const client = axios.create({
   timeout: REQUEST_TIMEOUT,
   maxRedirects: 7,
@@ -87,7 +94,6 @@ axiosRetry(client, {
     return s === 408 || s === 429 || (s >= 500 && s < 600);
   },
 });
-
 async function fetchPage(url) {
   try {
     const res = await client.get(url);
@@ -99,15 +105,8 @@ async function fetchPage(url) {
     return "";
   }
 }
-function absolutize(baseUrl, href) {
-  try {
-    return new URL(href, baseUrl).toString();
-  } catch {
-    return "";
-  }
-}
 
-/* ───────── Discovery (results pages) ───────── */
+/* Discovery */
 function resultsUrlVariants(postcode, radius) {
   const pc = encodeURIComponent(postcode);
   const base = "https://www.nhs.uk";
@@ -116,7 +115,10 @@ function resultsUrlVariants(postcode, radius) {
     `${base}/service-search/find-a-dentist/results?postcode=${pc}&distance=${radius}`,
   ];
 }
-function nextLink($) {
+function absolutize(baseUrl, href) {
+  try { return new URL(href, baseUrl).toString(); } catch { return ""; }
+}
+function relNext($) {
   const link =
     $('a[rel="next"]').attr("href") ||
     $('link[rel="next"]').attr("href") ||
@@ -126,8 +128,8 @@ function nextLink($) {
 }
 function sanitizeAddress(raw) {
   if (!raw) return raw;
-  const parts = raw.split(/[\n\r]+| {2,}/).map((s) => s.trim()).filter(Boolean);
-  const filtered = parts.filter((line) => !/mile/i.test(line) && !/^this organisation is/i.test(line));
+  const parts = raw.split(/[\n\r]+| {2,}/).map(s=>s.trim()).filter(Boolean);
+  const filtered = parts.filter((line)=> !/mile/i.test(line) && !/^this organisation is/i.test(line));
   const addr = filtered.join(", ").replace(/,\s*,/g, ", ").replace(/\s+,/g, ",").trim();
   return addr || undefined;
 }
@@ -135,43 +137,39 @@ function nameFromUrl(detailUrl) {
   try {
     const u = new URL(detailUrl);
     const segs = u.pathname.split("/").filter(Boolean);
-    const slug = segs[segs.length - 1] || "";
+    the slug = segs[segs.length - 1] || "";
     const cleaned = slug.replace(/\d+/g, "").replace(/[-_]+/g, " ").trim();
     if (!cleaned) return undefined;
     return cleaned.replace(/\b\w/g, (c) => c.toUpperCase());
-  } catch {
-    return undefined;
-  }
+  } catch { return undefined; }
 }
+
 function extractPracticesFromResults(html, baseUrl) {
   const $ = cheerio.load(html);
   const RX = /https:\/\/www\.nhs\.uk\/services\/dentist[s]?\/[A-Za-z0-9\-/%?_.#=]+/g;
-  const byUrl = new Map();
+  const mapByUrl = new Map();
   const push = (obj) => {
     const key = obj.detailUrl?.split("#")[0];
     if (!key) return;
-    const merged = { ...(byUrl.get(key) || {}), ...obj, detailUrl: key };
-    byUrl.set(key, merged);
+    const merged = { ...(mapByUrl.get(key) || {}), ...obj, detailUrl: key };
+    mapByUrl.set(key, merged);
   };
 
-  const cards = $(".nhsuk-card, .nhsuk-grid-row, li, article, .nhsuk-results__item, .nhsuk-panel");
+  const cards = $(".nhsuk-card, .nhsuk-grid-row, li, article, .nhsuk-results__item");
   cards.each((_, el) => {
     const scope = $(el);
     const href =
       scope.find('a[href^="/services/dentist"]').attr("href") ||
       scope.find('a[href*="/services/dentist"]').attr("href") ||
-      scope.find("a.nhsuk-card__link").attr("href") ||
-      "";
+      scope.find("a.nhsuk-card__link").attr("href") || "";
     if (!href) return;
     const detailUrl = absolutize(baseUrl, href);
 
-    const nameRaw =
-      clean(scope.find("h2, h3, .nhsuk-card__heading, .nhsuk-heading-m").first().text()) || undefined;
+    const nameRaw = clean(scope.find("h2, h3, .nhsuk-card__heading, .nhsuk-heading-m").first().text()) || undefined;
 
     const telHref =
       scope.find('a[href^="tel:"]').first().attr("href") ||
-      scope.find('a:contains("Tel"), a:contains("Phone"), a:contains("Call")').attr("href") ||
-      "";
+      scope.find('a:contains("Tel"), a:contains("Phone"), a:contains("Call")').attr("href") || "";
     const phone = telHref ? clean(telHref.replace(/^tel:/i, "")) : undefined;
 
     let addressRaw = clean(
@@ -185,7 +183,7 @@ function extractPracticesFromResults(html, baseUrl) {
     const address = sanitizeAddress(addressRaw);
 
     let distanceText = clean(
-      scope.find(':contains("mile")').filter((i, n) => /mile/i.test($(n).text())).first().text()
+      scope.find(':contains("mile")').filter((i,n)=>/mile/i.test($(n).text())).first().text()
     );
     if (!distanceText) distanceText = undefined;
 
@@ -199,22 +197,23 @@ function extractPracticesFromResults(html, baseUrl) {
     if (m) m.forEach((u) => push({ detailUrl: u }));
   });
 
-  const whole = typeof html === "string" ? html : $.root().html() || "";
-  const hits = whole.match(RX);
+  const body = typeof html === "string" ? html : $.root().html() || "";
+  const hits = body.match(RX);
   if (hits) hits.forEach((u) => push({ detailUrl: u }));
 
-  return Array.from(byUrl.values());
+  return Array.from(mapByUrl.values());
 }
-async function discoverPractices(postcode, radius) {
-  const seeds = resultsUrlVariants(postcode, radius);
-  const queue = [...seeds];
-  const seen = new Set();
-  const byDetail = new Map();
 
-  while (queue.length && seen.size < PAGE_LIMIT) {
+async function discoverPractices(postcode, radius) {
+  const start = resultsUrlVariants(postcode, radius);
+  const queue = [...start];
+  const seenUrl = new Set();
+  const mapByDetail = new Map();
+
+  while (queue.length && seenUrl.size < 12) {
     const url = queue.shift();
-    if (seen.has(url)) continue;
-    seen.add(url);
+    if (seenUrl.has(url)) continue;
+    seenUrl.add(url);
 
     const html = await fetchPage(url);
     if (!html) continue;
@@ -222,199 +221,154 @@ async function discoverPractices(postcode, radius) {
     const items = extractPracticesFromResults(html, url);
     for (const p of items) {
       const key = p.detailUrl;
-      const merged = { ...(byDetail.get(key) || {}), ...p };
-      byDetail.set(key, merged);
+      const merged = { ...(mapByDetail.get(key) || {}), ...p };
+      mapByDetail.set(key, merged);
     }
 
     const $ = cheerio.load(html);
-    const next = nextLink($);
-    if (next) {
-      const abs = absolutize(url, next);
-      if (abs && !seen.has(abs) && queue.length < PAGE_LIMIT) queue.push(abs);
+    const nextHref = relNext($);
+    if (nextHref) {
+      const abs = absolutize(url, nextHref);
+      if (abs && !seenUrl.has(abs) && queue.length < 12) queue.push(abs);
     }
     await sleep(120);
   }
 
-  return Array.from(byDetail.values());
+  return Array.from(mapByDetail.values());
 }
 
-/* ───────── Appointments resolution (stronger) ───────── */
+/* Appointments resolution + text extraction */
 function findAppointmentsHref($) {
   let href =
     $('a[href*="/appointments"]').attr("href") ||
     $('a[href*="appointments-and-opening-times"]').attr("href") ||
     $('a[href*="opening-times"]').attr("href") ||
-    $('a[href*="/services"]').attr("href") ||
-    $('a[href*="/information"]').attr("href") ||
     $('a:contains("Appointments")').attr("href") ||
     $('a:contains("appointments")').attr("href") ||
     $('a:contains("Opening times")').attr("href") ||
     $('a:contains("opening times")').attr("href");
+
   if (!href) {
-    $('header a, nav a, [role="navigation"] a, .nhsuk-navigation a, .nhsuk-list a').each((_, a) => {
+    $('nav a, [role="navigation"] a, .nhsuk-navigation a, .nhsuk-list a').each((_, a) => {
       const t = String($(a).text() || "").toLowerCase();
       const h = $(a).attr("href") || "";
-      if (!href && (t.includes("appointment") || t.includes("opening") || t.includes("information"))) href = h;
+      if (!href && (t.includes("appointment") || t.includes("opening"))) href = h;
     });
   }
   return href || "";
 }
-function canonicalHref($) {
-  return $('link[rel="canonical"]').attr("href") || "";
-}
 async function resolveAppointmentsUrl(detailUrl) {
   const detailHtml = await fetchPage(detailUrl);
   if (!detailHtml) return "";
-
   const $ = cheerio.load(detailHtml);
-  const c = canonicalHref($);
-  const base = c || detailUrl;
+  let href = findAppointmentsHref($);
 
-  const cand = new Set();
-  const navHref = findAppointmentsHref($);
-  if (navHref) cand.add(absolutize(base, navHref));
-  cand.add(absolutize(base, "./appointments"));
-  cand.add(absolutize(base, "./appointments-and-opening-times"));
-  cand.add(absolutize(base, "./opening-times"));
-  cand.add(absolutize(base, "./services"));
-  cand.add(absolutize(base, "./information"));
+  const candidates = new Set();
+  if (href) candidates.add(absolutize(detailUrl, href));
+  candidates.add(absolutize(detailUrl, "./appointments"));
+  candidates.add(absolutize(detailUrl, "./appointments-and-opening-times"));
+  candidates.add(absolutize(detailUrl, "./opening-times"));
 
-  for (const u of cand) {
+  for (const u of candidates) {
     if (!u) continue;
     const html = await fetchPage(u);
-    if (html && html.length > 300) return u;
+    if (html && html.length > 200) return u;
   }
   return "";
 }
-
-/* ───────── Appointments text blocks (wider) ───────── */
-function extractAppointmentBlocks(html) {
+function extractAppointmentsText(html) {
   const $ = cheerio.load(html);
-  const blocks = [];
+  const buckets = [];
 
-  // Under relevant headings
-  $("h1,h2,h3,h4").each((_, h) => {
-    const hd = clean($(h).text()).toLowerCase();
-    if (/appointment|opening\s+times|new\s+nhs\s+patients|nhs\s+patients|registration/.test(hd)) {
-      let cur = $(h).next(),
-        hops = 0;
-      while (cur.length && hops < 80) {
+  $("h1,h2,h3").each((_, h) => {
+    const heading = String($(h).text() || "").toLowerCase();
+    if (/appointment|opening\s+times|patients|registration/.test(heading)) {
+      const buf = [];
+      let cur = $(h).next(), hops = 0;
+      while (cur.length && hops < 40) {
         const tag = (cur[0].tagName || "").toLowerCase();
         if (/^h[1-6]$/.test(tag)) break;
-        if (["p", "li", "div", "section", "details", "summary", "span", "strong"].includes(tag)) {
-          const t = clean($(cur).text());
-          if (t && t.length >= 10 && t.length <= 700) blocks.push(t);
+        if (["p","div","li","ul","ol","section"].includes(tag)) {
+          buf.push(String(cur.text() || "").replace(/\s+/g, " ").trim());
         }
-        cur = cur.next();
-        hops++;
+        cur = cur.next(); hops++;
       }
+      const joined = buf.join(" ").trim();
+      if (joined.length > 60) buckets.push(joined);
     }
   });
 
-  // Containers
-  const containers = [
-    "main",
-    "#maincontent",
-    ".nhsuk-main-wrapper",
-    ".nhsuk-width-container",
-    ".nhsuk-u-reading-width",
-    ".nhsuk-list",
-    "ul,ol",
-  ];
-  containers.forEach((sel) => {
-    $(sel)
-      .find("li,p,div,summary,details,span,strong")
-      .each((_, n) => {
-        const t = clean($(n).text());
-        if (t && t.length >= 10 && t.length <= 700) blocks.push(t);
-      });
-  });
-
-  // Visually hidden / live regions
-  $('[aria-live], .nhsuk-u-visually-hidden, .visually-hidden, [role="status"]').each((_, n) => {
-    const t = clean($(n).text());
-    if (t && t.length >= 10 && t.length <= 700) blocks.push(t);
-  });
-
-  const uniq = Array.from(new Set(blocks));
-  return uniq.slice(0, 500);
-}
-
-/* ───────── Classifier (sentence-level) ───────── */
-const RX_NEGATIVE =
-  /\b(?:not\s+(?:currently\s+)?accept(?:ing)?\b|no\s+longer\s+accept(?:ing)?\b|cannot\s+accept\b|nhs\s+not\s+available\b|nhs\s+(?:list|register)\s+closed\b|private\s+only\b|emergency\s+only\b|urgent\s+care\s+only\b|not\s+taking\s+(?:on\s+)?nhs\b|no\s+nhs\s+spaces\b|nhs\s+capacity\s+full\b|nhs\s+closed\b|waiting\s+list)/i;
-
-const RX_NOT_CONFIRMED =
-  /\b(?:has|have)\s+not\s+confirmed\b.*\b(?:accept|register)\b|\bunable\s+to\s+confirm\b.*\b(?:accept|register)\b|\bnot\s+confirmed\s+if\b.*\b(?:accept|register)\b|\bno\s+information\b.*\b(?:accept|register)\b|\bunknown\b.*\b(?:accept|register)\b/i;
-
-const RX_CHILD_ONLY =
-  /\b(?:children\s+only|only\s+accept(?:ing)?\s+children|under\s*18|aged\s*(?:1[0-7]|[1-9])\s*or\s*under)\b/iu;
-
-const POSITIVE_PATTERNS = [
-  /this\s+dentist\s+currently\s+accepts\s+new\s+nhs\s+patients(?:\s+for\s+routine\s+dental\s+care)?/iu,
-  /this\s+practice\s+currently\s+accepts\s+new\s+nhs\s+patients/iu,
-  /\bcurrently\s+accept(?:s|ing)\s+(?:new\s+)?nhs\s+patients\b/iu,
-  /\btaking\s+on\s+(?:new\s+)?nhs\s+patients\b/iu,
-  /\bnow\s+accept(?:s|ing)\s+nhs\s+patients\b/iu,
-  /\bwe\s+are\s+accepting\s+(?:new\s+)?nhs\s+(?:adult\s+)?patients\b/iu,
-  /\bable\s+to\s+register\s+(?:new\s+)?nhs\s+patients\b/iu,
-  /\bnhs\s+(?:spaces|availability|places|capacity)\s+(?:available|open|now)\b/iu,
-  // generic: must include "nhs" and an accept/register verb
-  /(?=.*\bnhs\b)(?=.*\b(accept|accepting|taking on|register|registering)\b).*/iu,
-];
-
-function splitSentences(t) {
-  return String(t)
-    .replace(/[\r\n]+/g, " ")
-    .split(/(?<=[.!?])\s+|•\s+|-\s+|·\s+|;\s+|:\s+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
-function classifyBlocks(blocks) {
-  let best = { verdict: "NONE", snippet: "" };
-
-  for (const block of blocks) {
-    const sents = splitSentences(block).slice(0, 12);
-    for (const s of sents) {
-      const t = s.toLowerCase();
-
-      if (RX_NOT_CONFIRMED.test(t)) {
-        if (DEBUGC) console.log("→ NONE (not confirmed):", s);
-        continue;
-      }
-      if (RX_NEGATIVE.test(t)) {
-        if (DEBUGC) console.log("→ NONE (negative/waiting):", s);
-        continue;
-      }
-      if (RX_CHILD_ONLY.test(t) && /\b(accept|accepting|taking on|register|registering)\b/i.test(t)) {
-        if (DEBUGC) console.log("→ CHILD_ONLY:", s);
-        return { verdict: "CHILD_ONLY", snippet: s };
-      }
-
-      let positive = false;
-      for (const rx of POSITIVE_PATTERNS) {
-        if (rx.test(s)) {
-          positive = true;
-          break;
-        }
-      }
-      if (positive) {
-        if (DEBUGC) console.log("→ ACCEPTING:", s);
-        return { verdict: "ACCEPTING", snippet: s };
-      }
-    }
-
-    if (best.verdict === "NONE") {
-      const maybe = sents.find((ss) => /\bnhs\b/i.test(ss));
-      if (maybe) best = { verdict: "UNKNOWN", snippet: maybe };
+  if (!buckets.length) {
+    const wrappers = ["main","#maincontent",".nhsuk-main-wrapper",".nhsuk-width-container",".nhsuk-u-reading-width"];
+    for (const sel of wrappers) {
+      const t = String($(sel).text() || "").replace(/\s+/g," ").trim();
+      if (t.length > 200) buckets.push(t);
     }
   }
 
-  return best;
+  if (!buckets.length) {
+    const whole = String($.root().text() || "").replace(/\s+/g, " ").trim();
+    return whole.slice(0, 8000);
+  }
+
+  buckets.sort((a,b)=> b.length - a.length);
+  return buckets[0];
 }
 
-/* ───────── Email (Postmark) ───────── */
+/* Classifier + helpers */
+/* NEW: “not confirmed” guard to drop those results */
+const RX_NOT_CONFIRMED =
+  /\b(?:has|have)\s+not\s+confirmed\b.*\b(?:accept|register)\b|\bnot\s+confirmed\s+if\b.*\b(?:accept|register)\b|\bunable\s+to\s+confirm\b.*\b(?:accept|register)\b|\bno\s+confirmation\b.*\b(?:accept|register)\b/i;
+
+function classifyAcceptanceScored(text) {
+  const t = String(text || "").toLowerCase().replace(/\s+/g, " ").replace(/’/g, "'");
+
+  // NEW: drop “not confirmed” phrasings
+  if (RX_NOT_CONFIRMED.test(t)) return "NONE";
+
+  const neg =
+    /(not (currently )?accept(?:ing)?|no longer accepting|cannot accept|we are not accepting|nhs not available|nhs list closed|private only|emergency only|urgent care only|walk-?in only|not taking (on )?nhs|no nhs spaces|nhs capacity full|nhs closed)/i;
+  if (neg.test(t)) return "NONE";
+
+  const child = /(children only|only accept(?:ing)? children|under\s*18|aged\s*(1[0-7]|[1-9])\s*or\s*under)/i;
+  const childAccept = child.test(t) && /\b(accept|accepting|taking on|register|registering)\b/.test(t);
+
+  const strong =
+    /(this dentist currently accepts new nhs patients|currently accept\w*\s+new\s+nhs\s+patients|accept\w*\s+new\s+nhs\s+patients|taking\s+on\s+new\s+nhs\s+patients|now\s+accept\w*\s+nhs\s+patients|register\w*\s+new\s+nhs\s+patients|now\s+register\w*\s+nhs\s+patients|we\s+can\s+accept\s+new\s+nhs\s+patients|limited\s+nhs\s+availability|we\s+are\s+able\s+to\s+register\s+nhs\s+patients)/i;
+
+  const generic = /(?=.*\bnhs\b)(?=.*\b(accept|accepting|taking on|registering|register)\b)/i;
+
+  let score = 0;
+  if (strong.test(t)) score += 3;
+  if (generic.test(t)) score += 2;
+  if (/\b(waiting list|join (the )?waiting list|register your interest|expression of interest)\b/i.test(t)) score -= 3;
+
+  if (childAccept) return "CHILD_ONLY";
+  if (score >= 3) return "ACCEPTING";
+  if (score <= -2) return "NONE";
+  return "UNKNOWN";
+}
+function inferReason(text) {
+  const t = String(text || "").toLowerCase();
+  if (!t) return "APPT_THIN";
+  if (/waiting list|register your interest|expression of interest/.test(t)) return "WAITLIST";
+  if (/private only|nhs not available/.test(t)) return "PRIVATE_ONLY";
+  if (/children only|only accept(?:ing)? children|under\s*18|aged\s*(1[0-7]|[1-9])\s*or\s*under/.test(t)) return "CHILD_ONLY";
+  if (/not accept|no longer accept|cannot accept|not taking|nhs list closed|nhs capacity full|nhs closed/.test(t)) return "NEGATED";
+  if (!/(nhs|accept|accepting|taking on|registering|register|patients)/.test(t)) return "NO_KEYWORDS";
+  return "UNKNOWN";
+}
+function extractSnippet(text, max = 420) {
+  const t = String(text || "");
+  const rx = /(accept|accepting|taking on|register|nhs|waiting list|expression of interest)/i;
+  const m = t.match(rx);
+  if (!m) return t.slice(0, max).trim();
+  const i = Math.max(0, t.toLowerCase().indexOf(m[0].toLowerCase()));
+  const start = Math.max(0, i - Math.floor(max / 2));
+  return t.slice(start, start + max).trim();
+}
+
+/* Email via Postmark */
 async function sendEmail(toList, subject, html) {
   const token = POSTMARK_SERVER_TOKEN || POSTMARK_TOKEN || "";
   if (!toList?.length || !token) return { ok: false };
@@ -429,9 +383,10 @@ async function sendEmail(toList, subject, html) {
     : { ok: false, status: res.status, body: res.data };
 }
 
-/* ───────── Build jobs (Watch + watches fallback) ───────── */
+/* Build jobs — with fallback to physical 'watches' collection */
 async function buildJobs(filterPostcode) {
-  const match = filterPostcode ? { postcode: normPc(filterPostcode) } : {};
+  const norm = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
+  const match = filterPostcode ? { postcode: norm(filterPostcode) } : {};
 
   let rows = await Watch.aggregate([
     { $match: match },
@@ -449,19 +404,38 @@ async function buildJobs(filterPostcode) {
           { $project: { _id: 0, postcode: "$_id", radius: 1, emails: 1 } },
         ])
         .toArray();
-    } catch {
-      // ignore
+    } catch (e) {
+      console.log("[WARN] Fallback aggregate on 'watches' failed:", e?.message);
     }
   }
 
   return (rows || []).map((r) => ({
-    postcode: normPc(r.postcode),
+    postcode: norm(r.postcode),
     radiusMiles: Math.max(1, Math.min(30, Number(r.radius) || 10)),
     recipients: (r.emails || []).map((e) => String(e).trim().toLowerCase()).filter(validEmail),
   }));
 }
 
-/* ───────── Scan job ───────── */
+/* Optional: run report when nothing sent */
+async function sendRunReport({ postcode, radius, discovered, apptResolved, apptFallback, unknown, recipientsCount }) {
+  if (!RUN_REPORT || !ADMIN_EMAIL) return;
+  const subject = `Scan report — ${postcode} (${radius} mi)`;
+  const html = `
+    <div style="font:14px system-ui;color:#111">
+      <h3 style="margin:0 0 8px">DentistRadar — Run report</h3>
+      <div>Postcode: <b>${postcode}</b> • Radius: <b>${radius} miles</b></div>
+      <ul>
+        <li>Discovered practices: <b>${discovered}</b></li>
+        <li>Appointments resolved: <b>${apptResolved}</b></li>
+        <li>Fallback to detail: <b>${apptFallback}</b></li>
+        <li>Unknown verdicts: <b>${unknown}</b></li>
+        <li>Recipients in group: <b>${recipientsCount}</b></li>
+      </ul>
+    </div>`;
+  await sendEmail([ADMIN_EMAIL], subject, html);
+}
+
+/* Scan a postcode group */
 async function scanJob({ postcode, radiusMiles, recipients }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
@@ -475,12 +449,12 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
   const limit = pLimit(CONCURRENCY);
   const dateKey = dayjs().format("YYYY-MM-DD");
 
-  const accepting = [];
-  const childOnly = [];
+  const acceptingDetails = [];
+  const childOnlyDetails = [];
 
-  let resolvedAppt = 0,
-    fallbackDetail = 0,
-    unknownCount = 0;
+  let cApptResolved = 0,
+    cApptFallback = 0,
+    cUnknown = 0;
 
   await Promise.all(
     practices.map((p) =>
@@ -492,30 +466,57 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           const already = await EmailLog.findOne({ practiceUrl: detailUrl, dateKey }).lean();
           if (already) return;
 
+          // Appointments first
+          let sourceHtml = null;
           const apptUrl = await resolveAppointmentsUrl(detailUrl);
-          let sourceHtml = "";
           if (apptUrl) {
             sourceHtml = await fetchPage(apptUrl);
-            resolvedAppt++;
+            cApptResolved++;
+          } else {
+            cApptFallback++;
           }
-          if (!sourceHtml || sourceHtml.length < 300) {
-            const d = await fetchPage(detailUrl);
-            if (d && d.length > 300) {
-              sourceHtml = d;
-              fallbackDetail++;
+
+          // Fallback to detail if thin
+          let usedSource = apptUrl ? "appointments" : "detail";
+          if (!sourceHtml || sourceHtml.length < 450) {
+            const detailHtml = await fetchPage(detailUrl);
+            if (detailHtml && detailHtml.length > 450) {
+              sourceHtml = detailHtml;
+              usedSource = "detail";
             }
           }
-          if (!sourceHtml) return;
+          if (!sourceHtml) {
+            await PracticeEvidence.create({
+              practiceUrl: detailUrl,
+              dateKey,
+              verdict: "UNKNOWN",
+              reason: "NO_APPT_PAGE",
+              source: apptUrl ? "appointments" : "detail",
+              snippet: "",
+            });
+            return;
+          }
 
-          const blocks = extractAppointmentBlocks(sourceHtml);
-          const { verdict, snippet } = classifyBlocks(blocks);
-          if (verdict === "UNKNOWN") unknownCount++;
-          if (DEBUGC && snippet) console.log("  ↳ match:", snippet);
+          const text = extractAppointmentsText(sourceHtml);
+          const verdict = classifyAcceptanceScored(text); // ⟵ same v10.3 scoring + new NOT_CONFIRMED guard
+          if (verdict === "UNKNOWN") cUnknown++;
+
+          const reason = verdict === "ACCEPTING" ? "MATCH" : inferReason(text);
+          const snippet = extractSnippet(text);
+
+          await PracticeEvidence.create({
+            practiceUrl: detailUrl,
+            dateKey,
+            verdict,
+            reason,
+            source: usedSource,
+            snippet,
+          });
 
           const card = {
             name:
               p.name ||
-              (fallbackDetail ? (cheerio.load(sourceHtml)("h1").first().text().trim() || undefined) : undefined) ||
+              (usedSource === "detail" ? (cheerio.load(sourceHtml)("h1").first().text().trim() || undefined) : undefined) ||
               nameFromUrl(detailUrl),
             address: p.address || undefined,
             phone: p.phone || undefined,
@@ -531,7 +532,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           };
 
           if (verdict === "ACCEPTING") {
-            accepting.push(card);
+            acceptingDetails.push(card);
             await EmailLog.create({
               type: "availability",
               practiceUrl: detailUrl,
@@ -540,7 +541,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
               sentAt: new Date(),
             });
           } else if (verdict === "CHILD_ONLY" && INCLUDE_CHILD) {
-            childOnly.push(card);
+            childOnlyDetails.push(card);
             await EmailLog.create({
               type: "availability",
               practiceUrl: detailUrl,
@@ -550,44 +551,54 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
             });
           }
         } catch (e) {
-          if (DEBUG) console.log("[ITEM ERR]", e?.message);
+          if (DEBUG) console.log("[SCAN ITEM ERR]", e?.message);
         }
       })
     )
   );
 
   console.log(
-    `  • Resolved appt pages: ${resolvedAppt}, Fallback-to-detail: ${fallbackDetail}, Unknown verdicts: ${unknownCount}`
+    `  • Resolved appt pages: ${cApptResolved}, Fallback-to-detail: ${cApptFallback}, Unknown verdicts: ${cUnknown}`
   );
 
-  const anySend = accepting.length > 0 || (INCLUDE_CHILD && childOnly.length > 0);
+  const hasAccepting = acceptingDetails.length > 0 || (INCLUDE_CHILD && childOnlyDetails.length > 0);
   let emailAttempts = 0;
 
-  if (!anySend) {
+  if (!hasAccepting) {
     console.log("No accepting/eligible results; skipping email.");
+    await sendRunReport({
+      postcode,
+      radius: radiusMiles,
+      discovered: practices.length,
+      apptResolved: cApptResolved,
+      apptFallback: cApptFallback,
+      unknown: cUnknown,
+      recipientsCount: recipients?.length || 0,
+    });
     return { accepting: [], childOnly: [], emailAttempts, scanned: practices.length };
   }
 
   if (!recipients?.length) {
-    console.log(`Found ${accepting.length + childOnly.length} results but no recipients; not emailing.`);
-    return { accepting, childOnly, emailAttempts, scanned: practices.length };
+    console.log(`Found ${acceptingDetails.length + childOnlyDetails.length} results but no recipients; not emailing.`);
+    return { accepting: acceptingDetails, childOnly: childOnlyDetails, emailAttempts, scanned: practices.length };
   }
 
-  const all = [...accepting, ...(INCLUDE_CHILD ? childOnly : [])];
+  const all = [...acceptingDetails, ...(INCLUDE_CHILD ? childOnlyDetails : [])];
   const { subject, html } = renderEmail("availability", {
     postcode,
     radius: radiusMiles,
     practices: all,
+    includeChildOnly: INCLUDE_CHILD,
     scannedAt: new Date(),
   });
 
   const sendRes = await sendEmail(recipients, subject, html);
   if (sendRes.ok) emailAttempts += 1;
 
-  return { accepting, childOnly, emailAttempts, scanned: practices.length };
+  return { accepting: acceptingDetails, childOnly: childOnlyDetails, emailAttempts, scanned: practices.length };
 }
 
-/* ───────── Runner ───────── */
+/* Runner */
 export async function runScan(opts = {}) {
   if (mongoose.connection.readyState !== 1) await connectMongo(MONGO_URI);
 
@@ -616,7 +627,6 @@ export async function runScan(opts = {}) {
     scannedTotal += res.scanned || 0;
     await sleep(120);
   }
-
   console.log("[DONE]", summaries);
   return { jobs: jobs.length, summaries, emailAttemptsTotal, scannedTotal };
 }
