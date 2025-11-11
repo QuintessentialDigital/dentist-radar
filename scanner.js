@@ -1,7 +1,11 @@
 /**
- * DentistRadar — scanner.js (v11.2.1)
- * Fix: removed TS generic (Set<string>) and tightened acceptance extraction.
- * Focus: robust appointments resolution + wide text capture + safe classifier.
+ * DentistRadar — scanner.js (v11.3)
+ * Purpose: fix acceptance detection on NHS appointments pages.
+ * Changes vs 11.2.1:
+ *  • Wider text capture (span/strong + visually-hidden/aria-live + details/summary)
+ *  • More robust appointments URL resolution (services/information + canonical)
+ *  • Expanded positive patterns reflecting current NHS phrasings
+ *  • Safer false-positive blocks (not confirmed / waiting list / private only)
  */
 
 import axios from "axios";
@@ -288,18 +292,18 @@ function extractAppointmentBlocks(html) {
   const $ = cheerio.load(html);
   const blocks = [];
 
-  // under headings
-  $("h1,h2,h3").each((_, h) => {
+  // Under relevant headings
+  $("h1,h2,h3,h4").each((_, h) => {
     const hd = clean($(h).text()).toLowerCase();
     if (/appointment|opening\s+times|new\s+nhs\s+patients|nhs\s+patients|registration/.test(hd)) {
       let cur = $(h).next(),
         hops = 0;
-      while (cur.length && hops < 60) {
+      while (cur.length && hops < 80) {
         const tag = (cur[0].tagName || "").toLowerCase();
         if (/^h[1-6]$/.test(tag)) break;
-        if (["p", "li", "div", "section", "details", "summary"].includes(tag)) {
+        if (["p", "li", "div", "section", "details", "summary", "span", "strong"].includes(tag)) {
           const t = clean($(cur).text());
-          if (t && t.length >= 10 && t.length <= 600) blocks.push(t);
+          if (t && t.length >= 10 && t.length <= 700) blocks.push(t);
         }
         cur = cur.next();
         hops++;
@@ -307,7 +311,7 @@ function extractAppointmentBlocks(html) {
     }
   });
 
-  // containers
+  // Containers
   const containers = [
     "main",
     "#maincontent",
@@ -319,26 +323,26 @@ function extractAppointmentBlocks(html) {
   ];
   containers.forEach((sel) => {
     $(sel)
-      .find("li,p,div,summary,details")
+      .find("li,p,div,summary,details,span,strong")
       .each((_, n) => {
         const t = clean($(n).text());
-        if (t && t.length >= 10 && t.length <= 600) blocks.push(t);
+        if (t && t.length >= 10 && t.length <= 700) blocks.push(t);
       });
   });
 
-  // visually hidden / live regions
+  // Visually hidden / live regions
   $('[aria-live], .nhsuk-u-visually-hidden, .visually-hidden, [role="status"]').each((_, n) => {
     const t = clean($(n).text());
-    if (t && t.length >= 10 && t.length <= 600) blocks.push(t);
+    if (t && t.length >= 10 && t.length <= 700) blocks.push(t);
   });
 
   const uniq = Array.from(new Set(blocks));
-  return uniq.slice(0, 400);
+  return uniq.slice(0, 500);
 }
 
 /* ───────── Classifier (sentence-level) ───────── */
 const RX_NEGATIVE =
-  /\b(?:not\s+(?:currently\s+)?accept(?:ing)?\b|no\s+longer\s+accept(?:ing)?\b|cannot\s+accept\b|nhs\s+not\s+available\b|nhs\s+(?:list|register)\s+closed\b|private\s+only\b|emergency\s+only\b|urgent\s+care\s+only\b|not\s+taking\s+(?:on\s+)?nhs\b|no\s+nhs\s+spaces\b|nhs\s+capacity\s+full\b|nhs\s+closed\b)/i;
+  /\b(?:not\s+(?:currently\s+)?accept(?:ing)?\b|no\s+longer\s+accept(?:ing)?\b|cannot\s+accept\b|nhs\s+not\s+available\b|nhs\s+(?:list|register)\s+closed\b|private\s+only\b|emergency\s+only\b|urgent\s+care\s+only\b|not\s+taking\s+(?:on\s+)?nhs\b|no\s+nhs\s+spaces\b|nhs\s+capacity\s+full\b|nhs\s+closed\b|waiting\s+list)/i;
 
 const RX_NOT_CONFIRMED =
   /\b(?:has|have)\s+not\s+confirmed\b.*\b(?:accept|register)\b|\bunable\s+to\s+confirm\b.*\b(?:accept|register)\b|\bnot\s+confirmed\s+if\b.*\b(?:accept|register)\b|\bno\s+information\b.*\b(?:accept|register)\b|\bunknown\b.*\b(?:accept|register)\b/i;
@@ -347,20 +351,22 @@ const RX_CHILD_ONLY =
   /\b(?:children\s+only|only\s+accept(?:ing)?\s+children|under\s*18|aged\s*(?:1[0-7]|[1-9])\s*or\s*under)\b/iu;
 
 const POSITIVE_PATTERNS = [
-  /this\s+dentist\s+currently\s+accepts\s+new\s+nhs\s+patients\s+(?:for\s+routine\s+dental\s+care)?/iu,
-  /\b(?:we|i|practice)\s+(?:are|’re|are now)\s+(?:able\s+to\s+)?(?:accept|register)\s+(?:new\s+)?nhs\s+patients\b/iu,
+  /this\s+dentist\s+currently\s+accepts\s+new\s+nhs\s+patients(?:\s+for\s+routine\s+dental\s+care)?/iu,
+  /this\s+practice\s+currently\s+accepts\s+new\s+nhs\s+patients/iu,
   /\bcurrently\s+accept(?:s|ing)\s+(?:new\s+)?nhs\s+patients\b/iu,
   /\btaking\s+on\s+(?:new\s+)?nhs\s+patients\b/iu,
   /\bnow\s+accept(?:s|ing)\s+nhs\s+patients\b/iu,
+  /\bwe\s+are\s+accepting\s+(?:new\s+)?nhs\s+(?:adult\s+)?patients\b/iu,
   /\bable\s+to\s+register\s+(?:new\s+)?nhs\s+patients\b/iu,
-  /\bnhs\s+(?:spaces|availability)\s+(?:available|open)\b/iu,
+  /\bnhs\s+(?:spaces|availability|places|capacity)\s+(?:available|open|now)\b/iu,
+  // generic: must include "nhs" and an accept/register verb
   /(?=.*\bnhs\b)(?=.*\b(accept|accepting|taking on|register|registering)\b).*/iu,
 ];
 
 function splitSentences(t) {
   return String(t)
     .replace(/[\r\n]+/g, " ")
-    .split(/(?<=[.!?])\s+|•\s+|-\s+|·\s+|;\s+/)
+    .split(/(?<=[.!?])\s+|•\s+|-\s+|·\s+|;\s+|:\s+/)
     .map((s) => s.trim())
     .filter(Boolean);
 }
@@ -369,7 +375,7 @@ function classifyBlocks(blocks) {
   let best = { verdict: "NONE", snippet: "" };
 
   for (const block of blocks) {
-    const sents = splitSentences(block).slice(0, 10);
+    const sents = splitSentences(block).slice(0, 12);
     for (const s of sents) {
       const t = s.toLowerCase();
 
@@ -378,7 +384,7 @@ function classifyBlocks(blocks) {
         continue;
       }
       if (RX_NEGATIVE.test(t)) {
-        if (DEBUGC) console.log("→ NONE (negative):", s);
+        if (DEBUGC) console.log("→ NONE (negative/waiting):", s);
         continue;
       }
       if (RX_CHILD_ONLY.test(t) && /\b(accept|accepting|taking on|register|registering)\b/i.test(t)) {
