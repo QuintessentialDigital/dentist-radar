@@ -1,23 +1,10 @@
 /**
- * DentistRadar — scanner.js (v10.2: explainable, robust, no-headless requirement)
- * -------------------------------------------------------------------------------
- * - Discover NHS results pages (two known variants) + follow rel="next"
- * - Resolve appointments page; fallback to detail page if thin/missing
- * - Scored classifier tuned to NHS wording (positives/negatives/child-only)
- * - Evidence capture per practice/day (verdict, reason, snippet)
- * - Enrichment (name/phone/address/distance) is best-effort; never blocks
- *
- * ENV (common):
- *  MONGO_URI
- *  EMAIL_FROM
- *  POSTMARK_SERVER_TOKEN or POSTMARK_TOKEN
- *  POSTMARK_MESSAGE_STREAM=outbound
- *  MAX_CONCURRENCY=6
- *  INCLUDE_CHILD_ONLY=false
- *  DEBUG_DISCOVERY=false
- *
- * Optional (for future rendered fallback; not required here):
- *  DISCOVERY_PROVIDER=direct   (only 'direct' used in this file)
+ * DentistRadar — scanner.js (v10.3)
+ * - Discovery via NHS HTML results (two variants) + rel="next"
+ * - Appointments-first classify; detail fallback if thin
+ * - Scored classifier aligned to current NHS wording
+ * - Evidence capture (verdict, reason, snippet)
+ * - Returns emailAttempts so cron can log correctly
  */
 
 import axios from "axios";
@@ -30,9 +17,7 @@ import dayjs from "dayjs";
 import { connectMongo, Watch, EmailLog } from "./models.js";
 import { renderEmail } from "./emailTemplates.js";
 
-/* ────────────────────────────────────────────────────────────────
-   ENV / constants
-──────────────────────────────────────────────────────────────── */
+/* ENV */
 const {
   MONGO_URI,
   EMAIL_FROM,
@@ -44,6 +29,8 @@ const {
   DEBUG_DISCOVERY = "false",
   DISCOVERY_REQUEST_TIMEOUT_MS = "60000",
   DISCOVERY_RETRY = "3",
+  DEBUG_RUN_REPORT = "false",
+  DEBUG_ADMIN_EMAIL = "",
 } = process.env;
 
 if (!MONGO_URI) throw new Error("MONGO_URI is required");
@@ -54,6 +41,8 @@ const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 6);
 const REQUEST_TIMEOUT = Math.max(10000, Number(DISCOVERY_REQUEST_TIMEOUT_MS) || 60000);
 const RETRIES = Math.max(0, Number(DISCOVERY_RETRY) || 3);
 const DEBUG = String(DEBUG_DISCOVERY).toLowerCase() === "true";
+const RUN_REPORT = String(DEBUG_RUN_REPORT).toLowerCase() === "true";
+const ADMIN_EMAIL = (DEBUG_ADMIN_EMAIL || "").trim();
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
@@ -63,30 +52,25 @@ const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim(
 const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
 const clean = (s) => String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
 
-/* ────────────────────────────────────────────────────────────────
-   Evidence model (guarded: no change to models.js required)
-──────────────────────────────────────────────────────────────── */
+/* Evidence model (guarded, separate collection) */
 const PracticeEvidenceSchema =
   mongoose.models.PracticeEvidence?.schema ||
   new mongoose.Schema(
     {
       practiceUrl: { type: String, index: true },
       dateKey: { type: String, index: true },
-      verdict: String, // ACCEPTING | CHILD_ONLY | NONE | UNKNOWN
-      reason: String, // MATCH | NO_APPT_PAGE | APPT_THIN | WAITLIST | PRIVATE_ONLY | NEGATED | NO_KEYWORDS | UNKNOWN
-      source: String, // appointments | detail
+      verdict: String,
+      reason: String,
+      source: String,
       snippet: String,
       scannedAt: { type: Date, default: Date.now },
     },
     { versionKey: false, collection: "PracticeEvidence" }
   );
-
 const PracticeEvidence =
   mongoose.models.PracticeEvidence || mongoose.model("PracticeEvidence", PracticeEvidenceSchema);
 
-/* ────────────────────────────────────────────────────────────────
-   HTTP client with retry/backoff
-──────────────────────────────────────────────────────────────── */
+/* HTTP client w/ retry */
 const client = axios.create({
   timeout: REQUEST_TIMEOUT,
   maxRedirects: 7,
@@ -102,7 +86,6 @@ const client = axios.create({
     Connection: "keep-alive",
   },
 });
-
 axiosRetry(client, {
   retries: RETRIES,
   retryDelay: axiosRetry.exponentialDelay,
@@ -113,7 +96,6 @@ axiosRetry(client, {
     return s === 408 || s === 429 || (s >= 500 && s < 600);
   },
 });
-
 async function fetchPage(url) {
   try {
     const res = await client.get(url);
@@ -126,9 +108,7 @@ async function fetchPage(url) {
   }
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Discovery: NHS results URLs (+ rel="next" pagination)
-──────────────────────────────────────────────────────────────── */
+/* Discovery */
 function resultsUrlVariants(postcode, radius) {
   const pc = encodeURIComponent(postcode);
   const base = "https://www.nhs.uk";
@@ -138,11 +118,7 @@ function resultsUrlVariants(postcode, radius) {
   ];
 }
 function absolutize(baseUrl, href) {
-  try {
-    return new URL(href, baseUrl).toString();
-  } catch {
-    return "";
-  }
+  try { return new URL(href, baseUrl).toString(); } catch { return ""; }
 }
 function relNext($) {
   const link =
@@ -152,14 +128,10 @@ function relNext($) {
     $('a.nhsuk-pagination__link[aria-label*="Next"]').attr("href");
   return link ? String(link) : "";
 }
-
 function sanitizeAddress(raw) {
   if (!raw) return raw;
-  const parts = raw
-    .split(/[\n\r]+| {2,}/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  const filtered = parts.filter((line) => !/mile/i.test(line) && !/^this organisation is/i.test(line));
+  const parts = raw.split(/[\n\r]+| {2,}/).map(s=>s.trim()).filter(Boolean);
+  const filtered = parts.filter((line)=> !/mile/i.test(line) && !/^this organisation is/i.test(line));
   const addr = filtered.join(", ").replace(/,\s*,/g, ", ").replace(/\s+,/g, ",").trim();
   return addr || undefined;
 }
@@ -171,17 +143,13 @@ function nameFromUrl(detailUrl) {
     const cleaned = slug.replace(/\d+/g, "").replace(/[-_]+/g, " ").trim();
     if (!cleaned) return undefined;
     return cleaned.replace(/\b\w/g, (c) => c.toUpperCase());
-  } catch {
-    return undefined;
-  }
+  } catch { return undefined; }
 }
 
-/* Extract practice objects (detailUrl + best-effort metadata) from results HTML */
 function extractPracticesFromResults(html, baseUrl) {
   const $ = cheerio.load(html);
   const RX = /https:\/\/www\.nhs\.uk\/services\/dentist[s]?\/[A-Za-z0-9\-/%?_.#=]+/g;
   const mapByUrl = new Map();
-
   const push = (obj) => {
     const key = obj.detailUrl?.split("#")[0];
     if (!key) return;
@@ -189,14 +157,13 @@ function extractPracticesFromResults(html, baseUrl) {
     mapByUrl.set(key, merged);
   };
 
-  const candidates = $(".nhsuk-card, .nhsuk-grid-row, li, article, .nhsuk-results__item");
-  candidates.each((_, el) => {
+  const cards = $(".nhsuk-card, .nhsuk-grid-row, li, article, .nhsuk-results__item");
+  cards.each((_, el) => {
     const scope = $(el);
-    let href =
+    const href =
       scope.find('a[href^="/services/dentist"]').attr("href") ||
       scope.find('a[href*="/services/dentist"]').attr("href") ||
-      scope.find("a.nhsuk-card__link").attr("href") ||
-      "";
+      scope.find("a.nhsuk-card__link").attr("href") || "";
     if (!href) return;
     const detailUrl = absolutize(baseUrl, href);
 
@@ -204,8 +171,7 @@ function extractPracticesFromResults(html, baseUrl) {
 
     const telHref =
       scope.find('a[href^="tel:"]').first().attr("href") ||
-      scope.find('a:contains("Tel"), a:contains("Phone"), a:contains("Call")').attr("href") ||
-      "";
+      scope.find('a:contains("Tel"), a:contains("Phone"), a:contains("Call")').attr("href") || "";
     const phone = telHref ? clean(telHref.replace(/^tel:/i, "")) : undefined;
 
     let addressRaw = clean(
@@ -219,11 +185,7 @@ function extractPracticesFromResults(html, baseUrl) {
     const address = sanitizeAddress(addressRaw);
 
     let distanceText = clean(
-      scope
-        .find(':contains("mile")')
-        .filter((i, n) => /mile/i.test($(n).text()))
-        .first()
-        .text()
+      scope.find(':contains("mile")').filter((i,n)=>/mile/i.test($(n).text())).first().text()
     );
     if (!distanceText) distanceText = undefined;
 
@@ -244,7 +206,6 @@ function extractPracticesFromResults(html, baseUrl) {
   return Array.from(mapByUrl.values());
 }
 
-/* Crawl results, follow rel="next", collect unique practices */
 async function discoverPractices(postcode, radius) {
   const start = resultsUrlVariants(postcode, radius);
   const queue = [...start];
@@ -272,16 +233,13 @@ async function discoverPractices(postcode, radius) {
       const abs = absolutize(url, nextHref);
       if (abs && !seenUrl.has(abs) && queue.length < 12) queue.push(abs);
     }
-
     await sleep(120);
   }
 
   return Array.from(mapByDetail.values());
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Appointments resolution + text extraction
-──────────────────────────────────────────────────────────────── */
+/* Appointments resolution + text extraction */
 function findAppointmentsHref($) {
   let href =
     $('a[href*="/appointments"]').attr("href") ||
@@ -301,7 +259,6 @@ function findAppointmentsHref($) {
   }
   return href || "";
 }
-
 async function resolveAppointmentsUrl(detailUrl) {
   const detailHtml = await fetchPage(detailUrl);
   if (!detailHtml) return "";
@@ -321,7 +278,6 @@ async function resolveAppointmentsUrl(detailUrl) {
   }
   return "";
 }
-
 function extractAppointmentsText(html) {
   const $ = cheerio.load(html);
   const buckets = [];
@@ -330,16 +286,14 @@ function extractAppointmentsText(html) {
     const heading = String($(h).text() || "").toLowerCase();
     if (/appointment|opening\s+times|patients|registration/.test(heading)) {
       const buf = [];
-      let cur = $(h).next(),
-        hops = 0;
+      let cur = $(h).next(), hops = 0;
       while (cur.length && hops < 40) {
         const tag = (cur[0].tagName || "").toLowerCase();
         if (/^h[1-6]$/.test(tag)) break;
-        if (["p", "div", "li", "ul", "ol", "section"].includes(tag)) {
+        if (["p","div","li","ul","ol","section"].includes(tag)) {
           buf.push(String(cur.text() || "").replace(/\s+/g, " ").trim());
         }
-        cur = cur.next();
-        hops++;
+        cur = cur.next(); hops++;
       }
       const joined = buf.join(" ").trim();
       if (joined.length > 60) buckets.push(joined);
@@ -347,9 +301,9 @@ function extractAppointmentsText(html) {
   });
 
   if (!buckets.length) {
-    const wrappers = ["main", "#maincontent", ".nhsuk-main-wrapper", ".nhsuk-width-container", ".nhsuk-u-reading-width"];
+    const wrappers = ["main","#maincontent",".nhsuk-main-wrapper",".nhsuk-width-container",".nhsuk-u-reading-width"];
     for (const sel of wrappers) {
-      const t = String($(sel).text() || "").replace(/\s+/g, " ").trim();
+      const t = String($(sel).text() || "").replace(/\s+/g," ").trim();
       if (t.length > 200) buckets.push(t);
     }
   }
@@ -359,37 +313,29 @@ function extractAppointmentsText(html) {
     return whole.slice(0, 8000);
   }
 
-  buckets.sort((a, b) => b.length - a.length);
+  buckets.sort((a,b)=> b.length - a.length);
   return buckets[0];
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Scored classifier aligned with current NHS wording
-──────────────────────────────────────────────────────────────── */
+/* Classifier + helpers */
 function classifyAcceptanceScored(text) {
   const t = String(text || "").toLowerCase().replace(/\s+/g, " ").replace(/’/g, "'");
 
-  // hard negatives / blockers
   const neg =
     /(not (currently )?accept(?:ing)?|no longer accepting|cannot accept|we are not accepting|nhs not available|nhs list closed|private only|emergency only|urgent care only|walk-?in only|not taking (on )?nhs|no nhs spaces|nhs capacity full|nhs closed)/i;
   if (neg.test(t)) return "NONE";
 
-  // child-only signals
   const child = /(children only|only accept(?:ing)? children|under\s*18|aged\s*(1[0-7]|[1-9])\s*or\s*under)/i;
   const childAccept = child.test(t) && /\b(accept|accepting|taking on|register|registering)\b/.test(t);
 
-  // strong positives frequently seen on NHS pages
   const strong =
     /(this dentist currently accepts new nhs patients|currently accept\w*\s+new\s+nhs\s+patients|accept\w*\s+new\s+nhs\s+patients|taking\s+on\s+new\s+nhs\s+patients|now\s+accept\w*\s+nhs\s+patients|register\w*\s+new\s+nhs\s+patients|now\s+register\w*\s+nhs\s+patients|we\s+can\s+accept\s+new\s+nhs\s+patients|limited\s+nhs\s+availability|we\s+are\s+able\s+to\s+register\s+nhs\s+patients)/i;
 
-  // generic positive: nhs + accept/take/register words together
   const generic = /(?=.*\bnhs\b)(?=.*\b(accept|accepting|taking on|registering|register)\b)/i;
 
   let score = 0;
   if (strong.test(t)) score += 3;
   if (generic.test(t)) score += 2;
-
-  // waitlist / expression-of-interest is not an acceptance
   if (/\b(waiting list|join (the )?waiting list|register your interest|expression of interest)\b/i.test(t)) score -= 3;
 
   if (childAccept) return "CHILD_ONLY";
@@ -397,8 +343,6 @@ function classifyAcceptanceScored(text) {
   if (score <= -2) return "NONE";
   return "UNKNOWN";
 }
-
-/* Reason code inference for evidence */
 function inferReason(text) {
   const t = String(text || "").toLowerCase();
   if (!t) return "APPT_THIN";
@@ -409,8 +353,6 @@ function inferReason(text) {
   if (!/(nhs|accept|accepting|taking on|registering|register|patients)/.test(t)) return "NO_KEYWORDS";
   return "UNKNOWN";
 }
-
-/* Compact snippet around keywords for evidence */
 function extractSnippet(text, max = 420) {
   const t = String(text || "");
   const rx = /(accept|accepting|taking on|register|nhs|waiting list|expression of interest)/i;
@@ -421,9 +363,7 @@ function extractSnippet(text, max = 420) {
   return t.slice(start, start + max).trim();
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Email (Postmark)
-──────────────────────────────────────────────────────────────── */
+/* Email via Postmark */
 async function sendEmail(toList, subject, html) {
   const token = POSTMARK_SERVER_TOKEN || POSTMARK_TOKEN || "";
   if (!toList?.length || !token) return { ok: false };
@@ -438,26 +378,59 @@ async function sendEmail(toList, subject, html) {
     : { ok: false, status: res.status, body: res.data };
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Job builder
-──────────────────────────────────────────────────────────────── */
+/* Build jobs — with fallback to physical 'watches' collection */
 async function buildJobs(filterPostcode) {
-  const match = filterPostcode ? { postcode: normPc(filterPostcode) } : {};
-  const rows = await Watch.aggregate([
+  const norm = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
+  const match = filterPostcode ? { postcode: norm(filterPostcode) } : {};
+
+  let rows = await Watch.aggregate([
     { $match: match },
     { $group: { _id: "$postcode", radius: { $first: "$radius" }, emails: { $addToSet: "$email" } } },
     { $project: { _id: 0, postcode: "$_id", radius: 1, emails: 1 } },
   ]);
-  return rows.map((r) => ({
-    postcode: normPc(r.postcode),
+
+  if (!rows || rows.length === 0) {
+    try {
+      const coll = mongoose.connection.db.collection("watches");
+      rows = await coll
+        .aggregate([
+          { $match: match },
+          { $group: { _id: "$postcode", radius: { $first: "$radius" }, emails: { $addToSet: "$email" } } },
+          { $project: { _id: 0, postcode: "$_id", radius: 1, emails: 1 } },
+        ])
+        .toArray();
+    } catch (e) {
+      console.log("[WARN] Fallback aggregate on 'watches' failed:", e?.message);
+    }
+  }
+
+  return (rows || []).map((r) => ({
+    postcode: norm(r.postcode),
     radiusMiles: Math.max(1, Math.min(30, Number(r.radius) || 10)),
     recipients: (r.emails || []).map((e) => String(e).trim().toLowerCase()).filter(validEmail),
   }));
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Scan pipeline for a postcode group
-──────────────────────────────────────────────────────────────── */
+/* Optional: run report when nothing sent */
+async function sendRunReport({ postcode, radius, discovered, apptResolved, apptFallback, unknown, recipientsCount }) {
+  if (!RUN_REPORT || !ADMIN_EMAIL) return;
+  const subject = `Scan report — ${postcode} (${radius} mi)`;
+  const html = `
+    <div style="font:14px system-ui;color:#111">
+      <h3 style="margin:0 0 8px">DentistRadar — Run report</h3>
+      <div>Postcode: <b>${postcode}</b> • Radius: <b>${radius} miles</b></div>
+      <ul>
+        <li>Discovered practices: <b>${discovered}</b></li>
+        <li>Appointments resolved: <b>${apptResolved}</b></li>
+        <li>Fallback to detail: <b>${apptFallback}</b></li>
+        <li>Unknown verdicts: <b>${unknown}</b></li>
+        <li>Recipients in group: <b>${recipientsCount}</b></li>
+      </ul>
+    </div>`;
+  await sendEmail([ADMIN_EMAIL], subject, html);
+}
+
+/* Scan a postcode group */
 async function scanJob({ postcode, radiusMiles, recipients }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
@@ -465,7 +438,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
   console.log(`[DISCOVERY] collected = ${practices.length} (with metadata where available)`);
   if (!practices.length) {
     console.log("[INFO] No practice detail URLs discovered for this query.");
-    return { accepting: [], childOnly: [] };
+    return { accepting: [], childOnly: [], emailAttempts: 0, scanned: 0 };
   }
 
   const limit = pLimit(CONCURRENCY);
@@ -485,11 +458,10 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           const detailUrl = p.detailUrl;
           if (!detailUrl) return;
 
-          // day-level dedupe per practice
           const already = await EmailLog.findOne({ practiceUrl: detailUrl, dateKey }).lean();
           if (already) return;
 
-          // 1) Appointments page first
+          // Appointments first
           let sourceHtml = null;
           const apptUrl = await resolveAppointmentsUrl(detailUrl);
           if (apptUrl) {
@@ -499,7 +471,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
             cApptFallback++;
           }
 
-          // 2) Fallback to detail page if thin/missing
+          // Fallback to detail if thin
           let usedSource = apptUrl ? "appointments" : "detail";
           if (!sourceHtml || sourceHtml.length < 450) {
             const detailHtml = await fetchPage(detailUrl);
@@ -520,12 +492,10 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
             return;
           }
 
-          // 3) Extract text & classify
           const text = extractAppointmentsText(sourceHtml);
           const verdict = classifyAcceptanceScored(text);
           if (verdict === "UNKNOWN") cUnknown++;
 
-          // 4) Evidence capture
           const reason = verdict === "ACCEPTING" ? "MATCH" : inferReason(text);
           const snippet = extractSnippet(text);
 
@@ -538,7 +508,6 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
             snippet,
           });
 
-          // 5) Build card (safe enrichment)
           const card = {
             name:
               p.name ||
@@ -553,7 +522,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
                 )}&destination=${encodeURIComponent(p.address)}`
               : undefined,
             appointmentUrl: apptUrl || undefined,
-            detailUrl, // kept for traceability; not used in email body
+            detailUrl,
             checkedAt: new Date(),
           };
 
@@ -587,14 +556,26 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
     `  • Resolved appt pages: ${cApptResolved}, Fallback-to-detail: ${cApptFallback}, Unknown verdicts: ${cUnknown}`
   );
 
-  const shouldSend = acceptingDetails.length > 0 || (INCLUDE_CHILD && childOnlyDetails.length > 0);
-  if (!shouldSend) {
+  const hasAccepting = acceptingDetails.length > 0 || (INCLUDE_CHILD && childOnlyDetails.length > 0);
+  let emailAttempts = 0;
+
+  if (!hasAccepting) {
     console.log("No accepting/eligible results; skipping email.");
-    return { accepting: [], childOnly: [] };
+    await sendRunReport({
+      postcode,
+      radius: radiusMiles,
+      discovered: practices.length,
+      apptResolved: cApptResolved,
+      apptFallback: cApptFallback,
+      unknown: cUnknown,
+      recipientsCount: recipients?.length || 0,
+    });
+    return { accepting: [], childOnly: [], emailAttempts, scanned: practices.length };
   }
+
   if (!recipients?.length) {
-    console.log("Recipients empty; not emailing.");
-    return { accepting: acceptingDetails, childOnly: childOnlyDetails };
+    console.log(`Found ${acceptingDetails.length + childOnlyDetails.length} results but no recipients; not emailing.`);
+    return { accepting: acceptingDetails, childOnly: childOnlyDetails, emailAttempts, scanned: practices.length };
   }
 
   const all = [...acceptingDetails, ...(INCLUDE_CHILD ? childOnlyDetails : [])];
@@ -605,13 +586,14 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
     includeChildOnly: INCLUDE_CHILD,
     scannedAt: new Date(),
   });
-  await sendEmail(recipients, subject, html);
-  return { accepting: acceptingDetails, childOnly: childOnlyDetails };
+
+  const sendRes = await sendEmail(recipients, subject, html);
+  if (sendRes.ok) emailAttempts += 1;
+
+  return { accepting: acceptingDetails, childOnly: childOnlyDetails, emailAttempts, scanned: practices.length };
 }
 
-/* ────────────────────────────────────────────────────────────────
-   Runner
-──────────────────────────────────────────────────────────────── */
+/* Runner */
 export async function runScan(opts = {}) {
   if (mongoose.connection.readyState !== 1) await connectMongo(MONGO_URI);
 
@@ -620,10 +602,13 @@ export async function runScan(opts = {}) {
   const jobs = await buildJobs(opts.postcode);
   if (!jobs.length) {
     console.log("[RESULT] No Watch entries.");
-    return { jobs: 0, summaries: [] };
+    return { jobs: 0, summaries: [], emailAttemptsTotal: 0, scannedTotal: 0 };
   }
 
   const summaries = [];
+  let emailAttemptsTotal = 0;
+  let scannedTotal = 0;
+
   for (const job of jobs) {
     console.log(`🔎 Scan ${job.postcode} (${job.radiusMiles} miles) → recipients: ${job.recipients.length}`);
     const res = await scanJob(job);
@@ -633,10 +618,12 @@ export async function runScan(opts = {}) {
       accepting: res.accepting.length,
       childOnly: res.childOnly.length,
     });
+    emailAttemptsTotal += res.emailAttempts || 0;
+    scannedTotal += res.scanned || 0;
     await sleep(120);
   }
   console.log("[DONE]", summaries);
-  return { jobs: jobs.length, summaries };
+  return { jobs: jobs.length, summaries, emailAttemptsTotal, scannedTotal };
 }
 
 export default { runScan };
