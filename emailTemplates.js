@@ -1,18 +1,17 @@
 /**
- * DentistRadar — emailTemplates.js
- * Renders polished HTML emails:
- *  - welcome
- *  - availability (with name, phone, address, distance, map + links)
+ * DentistRadar — emailTemplates.js (clean card, no duplicate distance)
+ * - Availability email shows: Name, Address, Phone, Distance, Appointments button, Map button
+ * - Removed NHS detail button by request
  */
 
 import dayjs from "dayjs";
 
 const BRAND = {
   name: "DentistRadar",
-  accent: "#0078d4",     // NHS-ish blue tone
-  text: "#1f2937",       // slate-800
-  subtext: "#6b7280",    // slate-500
-  border: "#e5e7eb",     // gray-200
+  accent: "#0078d4",
+  text: "#1f2937",
+  subtext: "#6b7280",
+  border: "#e5e7eb",
   bg: "#ffffff",
 };
 
@@ -24,10 +23,9 @@ function card(pr) {
   const name = pr.name ? esc(pr.name) : "NHS Dental Practice";
   const addr = pr.address ? esc(pr.address) : null;
   const phone = pr.phone ? esc(pr.phone) : null;
-  const dist = pr.distanceText ? esc(pr.distanceText) : null;
-  const nhs = pr.detailUrl ? esc(pr.detailUrl) : "#";
-  const appt = pr.appointmentUrl ? esc(pr.appointmentUrl) : nhs;
-  const map = pr.mapUrl ? esc(pr.mapUrl) : (addr ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(pr.address)}` : null);
+  const dist = pr.distanceText ? esc(pr.distanceText.replace(/^this organisation is\s*/i, "")) : null;
+  const appt = pr.appointmentUrl ? esc(pr.appointmentUrl) : "#";
+  const map = pr.mapUrl ? esc(pr.mapUrl) : null;
 
   return `
   <div style="margin:0 0 14px;padding:14px;border:1px solid ${BRAND.border};border-radius:10px;background:${BRAND.bg}">
@@ -39,7 +37,6 @@ function card(pr) {
     </p>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
       <a href="${appt}" style="display:inline-block;padding:8px 12px;background:${BRAND.accent};color:#fff;border-radius:6px;text-decoration:none;font:600 14px system-ui">Appointments page →</a>
-      <a href="${nhs}" style="display:inline-block;padding:8px 12px;background:#0b6aa6;color:#fff;border-radius:6px;text-decoration:none;font:600 14px system-ui">NHS detail →</a>
       ${map ? `<a href="${map}" style="display:inline-block;padding:8px 12px;background:#111827;color:#fff;border-radius:6px;text-decoration:none;font:600 14px system-ui">Open map →</a>` : ""}
     </div>
   </div>`;
@@ -111,7 +108,6 @@ export function renderEmail(type, data) {
     return { subject: `${BRAND.name} — ${acceptingCount} accepting near ${postcode}`, html: wrap(body, heading, sub) };
   }
 
-  // fallback
   return { subject: `${BRAND.name}`, html: wrap("<p style='margin:0'>Hello!</p>", BRAND.name, "") };
 }
 
