@@ -12,8 +12,8 @@ export function renderEmail(kind, data) {
           <h1 style="font-size:20px;margin:0 0 8px">Your NHS dentist alert is live ✅</h1>
           <p style="margin:8px 0">
             We’ll email you when NHS practices within <b>${Number(radius) || 10} miles</b> of <b>${safe(
-      postcode || ""
-    )}</b> start accepting new patients.
+              postcode || ""
+            )}</b> start accepting new patients.
           </p>
 
           <div style="background:#f5f7fa;border:1px solid #e3e8ef;border-radius:8px;padding:12px;margin:14px 0">
@@ -45,8 +45,8 @@ export function renderEmail(kind, data) {
         <div style="max-width:640px;margin:0 auto;padding:18px">
           <h1 style="font-size:20px;margin:0 0 4px">Dentist availability near ${safe(postcode)}</h1>
           <div style="color:#6b7280;margin:0 0 12px">Radius: ${Number(radius) || 10} miles • ${new Date(
-      scannedAt || Date.now()
-    ).toLocaleString()}</div>
+            scannedAt || Date.now()
+          ).toLocaleString()}</div>
 
           ${cards || emptyState()}
 
@@ -110,6 +110,3 @@ function safe(s = "") {
 function attr(s = "") {
   return String(s).replace(/"/g, "&quot;");
 }
-
-export default { renderEmail };
-export { renderEmail };
