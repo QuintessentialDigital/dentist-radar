@@ -1,10 +1,10 @@
 /**
- * DentistRadar — scanner.js (banner-aware strict)
- * - Discovery: two NHS results variants + rel="next"
+ * DentistRadar — scanner.js (strict, banner-aware)
+ * - Discovery: NHS results variants + rel="next"
  * - Appointments-first; fallback to practice page
  * - Extracts banner/panel/alert text (where NHS puts acceptance)
  * - Strict positives; hard negatives for “not confirmed / waiting list / private only / not accepting”
- * - Per-day de-dupe with EmailLog
+ * - Per-day de-dupe with EmailLog (bypass with EMAILLOG_BYPASS=1 for testing)
  */
 
 import axios from "axios";
@@ -28,7 +28,8 @@ const {
   INCLUDE_CHILD_ONLY = "false",
   DISCOVERY_REQUEST_TIMEOUT_MS = "60000",
   DISCOVERY_RETRY = "2",
-  DEBUG_DISCOVERY = "false"
+  DEBUG_DISCOVERY = "false",
+  EMAILLOG_BYPASS = "0"
 } = process.env;
 
 if (!MONGO_URI) throw new Error("MONGO_URI is required");
@@ -39,6 +40,7 @@ const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 6);
 const TIMEOUT = Math.max(12000, Number(DISCOVERY_REQUEST_TIMEOUT_MS) || 60000);
 const RETRIES = Math.max(0, Number(DISCOVERY_RETRY) || 2);
 const DEBUG = String(DEBUG_DISCOVERY).toLowerCase() === "true";
+const BYPASS_LOG = String(EMAILLOG_BYPASS) === "1";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
 
@@ -162,7 +164,9 @@ const APPT_SLUGS = [
   "/patients",
   "/registration",
   "/registering",
-  "/who-we-can-accept"
+  "/who-we-can-accept",
+  "/information-for-patients",
+  "/about-our-services"
 ];
 function findAppointmentsHref($) {
   let href =
@@ -202,12 +206,17 @@ async function resolveAppointmentsUrl(detailUrl) {
 
   const candidates = new Set();
   if (href) candidates.add(absolutize(detailUrl, href));
-  APPT_SLUGS.forEach((slug) => candidates.add(absolutize(detailUrl, `.${slug}`)));
+  APPT_SLUGS.forEach((slug) => {
+    candidates.add(absolutize(detailUrl, `.${slug}`));
+    candidates.add(absolutize(detailUrl, slug));
+  });
 
   for (const u of candidates) {
     if (!u) continue;
     const html = await fetchPage(u);
-    if (html && html.length > 200) return { apptUrl: u, fallbackHtml: "" };
+    if (html && html.length > 200) {
+      return { apptUrl: u, fallbackHtml: "" };
+    }
   }
   return { apptUrl: "", fallbackHtml: detailHtml }; // no appt page → scan practice page
 }
@@ -215,12 +224,16 @@ async function resolveAppointmentsUrl(detailUrl) {
 /* Banner-aware extraction */
 function extractFromPanels($) {
   const SELS = [
+    ".nhsuk-notification-banner",
     ".nhsuk-warning-callout",
     ".nhsuk-inset-text",
     ".nhsuk-panel",
     ".nhsuk-card",
     "[role='alert']",
-    "[aria-live]"
+    "[role='status']",
+    "[aria-live]",
+    ".acceptance-status",
+    ".nhsuk-message"
   ];
   const chunks = [];
   for (const sel of SELS) {
@@ -239,7 +252,7 @@ function extractScanText(html) {
   parts.push(...extractFromPanels($));
 
   // Headings & nearby blocks
-  const rx = /(nhs|appointment|opening\s+times|patients|registration|register|who\s+we\s+can\s+accept)/i;
+  const rx = /(nhs|accept|appointment|opening\s+times|patients|registration|register|who\s+we\s+can\s+accept)/i;
   $("h1,h2,h3").each((_, h) => {
     const head = clean($(h).text()).toLowerCase();
     if (rx.test(head)) {
@@ -284,13 +297,18 @@ const POS_STRICT = [
   "this dentist currently accepts new nhs patients",
   "currently accepts new nhs patients",
   "accepts new nhs patients",
+  "we are accepting new nhs patients",
+  "we are currently accepting new nhs patients",
   "taking on new nhs patients",
   "now accepting nhs patients",
   "now registering nhs patients",
   "currently registering nhs patients",
   "we are able to register nhs patients",
   "we can accept new nhs patients",
-  "limited nhs availability"
+  "limited nhs availability",
+  "accepting new nhs adult patients",
+  "accepting new nhs patients (limited)",
+  "space for new nhs patients"
 ];
 
 function classifyStrict(text) {
@@ -369,9 +387,11 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
     detailUrls.map((detailUrl) =>
       limit(async () => {
         try {
-          // Per-day dedupe
-          const already = await EmailLog.findOne({ practiceUrl: detailUrl, dateKey }).lean();
-          if (already) return;
+          // Per-day de-dupe (can bypass for testing)
+          if (!BYPASS_LOG) {
+            const already = await EmailLog.findOne({ practiceUrl: detailUrl, dateKey }).lean();
+            if (already) return;
+          }
 
           const { apptUrl, fallbackHtml } = await resolveAppointmentsUrl(detailUrl);
 
@@ -386,6 +406,10 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
 
           const text = extractScanText(html);
           const verdict = classifyStrict(text);
+
+          if (DEBUG && (verdict === "ACCEPTING" || verdict === "UNKNOWN")) {
+            console.log(`[DEBUG] ${verdict} @ ${detailUrl} src=${source} →`, text.slice(0, 240));
+          }
 
           if (verdict === "ACCEPTING" || (verdict === "CHILD_ONLY" && INCLUDE_CHILD)) {
             const $ = cheerio.load(html);
