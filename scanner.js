@@ -1,10 +1,11 @@
 /**
- * DentistRadar — scanner.js (Strict vS2)
+ * DentistRadar — scanner.js (Strict vS3, banner-aware)
  * Simple flow:
- *   1) Discover detail URLs from NHS results pages (two stable variants + rel="next").
+ *   1) Discover detail URLs from NHS results pages (two variants + rel="next").
  *   2) For each practice: resolve /appointments page; if missing, scan detail page.
- *   3) Classify STRICTLY (explicit accepting phrases only; exclude “not confirmed / waiting list / private only / not accepting”).
- *   4) Build clean cards (name, phone, links) → send professional email (emailTemplates.js).
+ *   3) Extract text from headings + NHS panels/banners/alerts.
+ *   4) Classify with strict positives; exclude "not confirmed / waiting list / private only / not accepting".
+ *   5) Email via existing renderEmail template if any positives found.
  */
 
 import axios from "axios";
@@ -39,6 +40,7 @@ const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 6);
 const TIMEOUT = Math.max(12000, Number(DISCOVERY_REQUEST_TIMEOUT_MS) || 60000);
 const RETRIES = Math.max(0, Number(DISCOVERY_RETRY) || 2);
 const DEBUG = String(DEBUG_DISCOVERY).toLowerCase() === "true";
+
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
 
@@ -217,12 +219,37 @@ async function resolveAppointmentsUrl(detailUrl) {
   return { apptUrl: "", fallbackHtml: detailHtml }; // no appt page → scan detail
 }
 
-/* ───────── Text extraction ───────── */
+/* ───────── Text extraction (banner-aware) ───────── */
+function extractFromPanels($) {
+  // NHS often uses these containers for the acceptance banner/status.
+  const SELS = [
+    ".nhsuk-warning-callout",
+    ".nhsuk-inset-text",
+    ".nhsuk-panel",
+    ".nhsuk-card",
+    "[role='alert']",
+    "[aria-live]"
+  ];
+  const chunks = [];
+  for (const sel of SELS) {
+    $(sel).each((_, el) => {
+      const t = clean($(el).text());
+      if (t && t.length > 20) chunks.push(t);
+    });
+  }
+  return chunks;
+}
+
 function extractScanText(html) {
   const $ = cheerio.load(html);
   const parts = [];
-  const rx = /(appointment|opening\s+times|patients|registration|register|who\s+we\s+can\s+accept|nhs)/i;
 
+  // 1) Panels / alerts first (often contain the exact banner wording)
+  const panelText = extractFromPanels($);
+  parts.push(...panelText);
+
+  // 2) Headings → nearby blocks
+  const rx = /(nhs|appointment|opening\s+times|patients|registration|register|who\s+we\s+can\s+accept)/i;
   $("h1,h2,h3").each((_, h) => {
     const head = clean($(h).text()).toLowerCase();
     if (rx.test(head)) {
@@ -242,6 +269,7 @@ function extractScanText(html) {
     }
   });
 
+  // 3) Main content fallbacks
   if (!parts.length) {
     const wrappers = ["main","#maincontent",".nhsuk-main-wrapper",".nhsuk-width-container",".nhsuk-u-reading-width"];
     for (const sel of wrappers) {
@@ -250,15 +278,18 @@ function extractScanText(html) {
     }
   }
 
+  // 4) Absolute fallback – whole text
   if (!parts.length) parts.push(clean($.root().text()).slice(0, 8000));
+
+  // Longest first
   parts.sort((a,b)=> b.length - a.length);
   return parts[0] || "";
 }
 
-/* ───────── STRICT classifier ─────────
-   Only strong/explicit accepting phrases pass.
-   Exclude clearly negative/ambiguous signals.
--------------------------------------- */
+/* ───────── STRICT classifier (updated phrases) ─────────
+   - Explicit positives aligned to current NHS banners.
+   - Hard excludes for "not confirmed", waiting list, private only, not accepting.
+-------------------------------------------------------- */
 const RX_NOT_CONFIRMED =
   /\b(not\s+confirmed|has\s+not\s+confirmed|have\s+not\s+confirmed|unable\s+to\s+confirm)\b.*\b(accept|register)\b/i;
 const RX_NEGATIVE =
@@ -266,6 +297,8 @@ const RX_NEGATIVE =
 const RX_WAITLIST = /\b(waiting list|register your interest|expression of interest)\b/i;
 
 const POS_STRICT = [
+  // Exact/near-exact banners (include your earlier example)
+  "this dentist currently accepts new nhs patients for routine dental care",
   "this dentist currently accepts new nhs patients",
   "currently accepts new nhs patients",
   "accepts new nhs patients",
@@ -281,23 +314,21 @@ const POS_STRICT = [
 function classifyStrict(text) {
   const t = clean(text).toLowerCase();
 
-  // hard excludes
   if (RX_NOT_CONFIRMED.test(t)) return "NONE";
   if (RX_NEGATIVE.test(t)) return "NONE";
   if (RX_WAITLIST.test(t)) return "NONE";
 
-  // child-only
+  // Child-only
   if (/\b(children only|only accept(?:ing)? children|under\s*18|aged\s*(1[0-7]|[1-9])\s*or\s*under)\b/i.test(t) &&
       /\b(accept|accepting|taking on|register|registering)\b/i.test(t)) {
     return "CHILD_ONLY";
   }
 
-  // strict positives (explicit)
   for (const p of POS_STRICT) {
     if (t.includes(p)) return "ACCEPTING";
   }
 
-  return "UNKNOWN"; // no soft positives
+  return "UNKNOWN";
 }
 
 /* ───────── Email (Postmark) ───────── */
@@ -358,24 +389,25 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
   const accepting = [];
   const childOnly = [];
 
+  let apptResolved = 0;
+  let usedDetail = 0;
+
   await Promise.all(
     detailUrls.map((detailUrl) =>
       limit(async () => {
         try {
-          // De-dupe per day
           const already = await EmailLog.findOne({ practiceUrl: detailUrl, dateKey }).lean();
           if (already) return;
 
-          // Prefer appointments page
           const { apptUrl, fallbackHtml } = await resolveAppointmentsUrl(detailUrl);
 
           let html = "";
           let source = "detail";
           if (apptUrl) {
             const h = await fetchPage(apptUrl);
-            if (h && h.length > 200) { html = h; source = "appointments"; }
+            if (h && h.length > 200) { html = h; source = "appointments"; apptResolved++; }
           }
-          if (!html && fallbackHtml) { html = fallbackHtml; source = "detail"; }
+          if (!html && fallbackHtml) { html = fallbackHtml; source = "detail"; usedDetail++; }
           if (!html) return;
 
           const text = extractScanText(html);
@@ -407,6 +439,8 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
       })
     )
   );
+
+  console.log(`  • Resolved appt pages: ${apptResolved}, Fallback-to-detail: ${usedDetail}`);
 
   let attempts = 0;
   const any = accepting.length > 0 || (INCLUDE_CHILD && childOnly.length > 0);
