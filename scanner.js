@@ -1,12 +1,12 @@
 /**
- * DentistRadar — scanner.js (LEGACY+ enriched & resilient)
+ * DentistRadar — scanner.js (LEGACY+ enriched & resilient, FP fixes)
  * --------------------------------------------------------
- * - Resilient discovery (direct or rendered via ScrapingBee/Browserless)
+ * - Discovery (direct / ScrapingBee / Browserless)
  * - Extracts practice metadata (name/phone/address/distance) from results HTML (best-effort)
- * - Resolves appointments page and classifies acceptance (with fallback to detail page)
- * - Sends polished email cards (via emailTemplates.js)
+ * - Resolves appointments page and classifies acceptance (fallback to detail page)
+ * - Emails polished cards (via emailTemplates.js)
  *
- * ENV (set on BOTH web & cron):
+ * ENV:
  *  MONGO_URI
  *  EMAIL_FROM
  *  POSTMARK_SERVER_TOKEN (or POSTMARK_TOKEN)
@@ -82,7 +82,6 @@ const client = axios.create({
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Upgrade-Insecure-Requests": "1",
     "Cache-Control": "no-cache",
-    // Cookie consent to avoid blank shells where possible
     Cookie: "nhsuk-cookie-consent=accepted; nhsuk-patient-preferences=accepted",
     Connection: "keep-alive",
   },
@@ -100,7 +99,7 @@ axiosRetry(client, {
 });
 
 /* ────────────────────────────────────────────────────────────────
-   Providers: direct | scrapingbee | browserless
+   Providers
 ──────────────────────────────────────────────────────────────── */
 async function getDirect(url) {
   const res = await client.get(url);
@@ -145,9 +144,7 @@ async function fetchPage(url) {
     else if (mode === "browserless") html = await getViaBrowserless(url);
     else html = await getDirect(url);
 
-    if (!html && mode !== "direct") {
-      html = await getDirect(url); // graceful fallback
-    }
+    if (!html && mode !== "direct") html = await getDirect(url);
   } catch (e) {
     if (DEBUG) console.log(`[FETCH ERR] ${url} → ${e?.message}`);
   }
@@ -159,7 +156,7 @@ async function fetchPage(url) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   NHS results URLs (two legacy shapes)
+   NHS results URLs
 ──────────────────────────────────────────────────────────────── */
 function resultsUrlVariants(postcode, radius) {
   const pc = encodeURIComponent(postcode);
@@ -184,8 +181,30 @@ function relNext($) {
 }
 
 /* ────────────────────────────────────────────────────────────────
+   Helpers for address & name
+──────────────────────────────────────────────────────────────── */
+function sanitizeAddress(raw) {
+  if (!raw) return raw;
+  // Remove distance lines the NHS sometimes places inside the same container
+  const parts = raw.split(/[\n\r]+| {2,}/).map((s) => s.trim()).filter(Boolean);
+  const filtered = parts.filter((line) => !/mile/i.test(line) && !/^this organisation is/i.test(line));
+  const addr = filtered.join(", ").replace(/,\s*,/g, ", ").replace(/\s+,/g, ",").trim();
+  return addr || undefined;
+}
+
+function nameFromUrl(detailUrl) {
+  try {
+    const u = new URL(detailUrl);
+    const segs = u.pathname.split("/").filter(Boolean);
+    const slug = segs[segs.length - 1] || "";
+    const cleaned = slug.replace(/\d+/g, "").replace(/[-_]+/g, " ").trim();
+    if (!cleaned) return undefined;
+    return cleaned.replace(/\b\w/g, (c) => c.toUpperCase());
+  } catch { return undefined; }
+}
+
+/* ────────────────────────────────────────────────────────────────
    Extract practice objects from results page
-   (detailUrl + name/phone/address/distance when visible)
 ──────────────────────────────────────────────────────────────── */
 function extractPracticesFromResults(html, baseUrl) {
   const $ = cheerio.load(html);
@@ -199,7 +218,6 @@ function extractPracticesFromResults(html, baseUrl) {
     mapByUrl.set(key, merged);
   };
 
-  // A) Card-like blocks
   const candidates = $(".nhsuk-card, .nhsuk-grid-row, li, article, .nhsuk-results__item");
   candidates.each((_, el) => {
     const scope = $(el);
@@ -212,7 +230,7 @@ function extractPracticesFromResults(html, baseUrl) {
     if (!href) return;
     const detailUrl = absolutize(baseUrl, href);
 
-    const name =
+    const nameRaw =
       clean(scope.find("h2, h3, .nhsuk-card__heading, .nhsuk-heading-m").first().text()) || undefined;
 
     const telHref =
@@ -221,7 +239,7 @@ function extractPracticesFromResults(html, baseUrl) {
       "";
     const phone = telHref ? clean(telHref.replace(/^tel:/i, "")) : undefined;
 
-    let address =
+    let addressRaw =
       clean(
         scope
           .find(".nhsuk-u-font-size-16, .nhsuk-body-s, address, .nhsuk-list li")
@@ -230,6 +248,10 @@ function extractPracticesFromResults(html, baseUrl) {
           .join(" ")
       ) || undefined;
 
+    // Remove embedded distance lines from address
+    const address = sanitizeAddress(addressRaw);
+
+    // Extract a friendly distance line (e.g., "0.6 miles")
     let distanceText =
       clean(
         scope
@@ -241,10 +263,9 @@ function extractPracticesFromResults(html, baseUrl) {
 
     if (address && address.length > 200) address = undefined;
 
-    push({ detailUrl, name, phone, address, distanceText });
+    push({ detailUrl, name: nameRaw, phone, address, distanceText });
   });
 
-  // B) Hydration / inline JSON
   $("script").each((_, s) => {
     if (s.attribs?.src) return;
     const txt = $(s).text() || "";
@@ -252,7 +273,6 @@ function extractPracticesFromResults(html, baseUrl) {
     if (m) m.forEach((u) => push({ detailUrl: u }));
   });
 
-  // C) Raw HTML sweep
   const body = typeof html === "string" ? html : $.root().html() || "";
   const hits = body.match(RX);
   if (hits) hits.forEach((u) => push({ detailUrl: u }));
@@ -269,7 +289,6 @@ async function discoverPractices(postcode, radius) {
   const seenUrl = new Set();
   const mapByDetail = new Map();
 
-  // Crawl up to 10 pages total across variants (polite)
   while (queue.length && seenUrl.size < 12) {
     const url = queue.shift();
     if (seenUrl.has(url)) continue;
@@ -378,7 +397,7 @@ function extractAppointmentsText(html) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Classifier (expanded phrases; tolerant to wording changes)
+   Classifier — stricter to avoid false positives
 ──────────────────────────────────────────────────────────────── */
 function classifyAcceptance(text) {
   const t = String(text || "").toLowerCase().replace(/\s+/g," ").replace(/’/g,"'");
@@ -388,31 +407,33 @@ function classifyAcceptance(text) {
     "not accepting", "no longer accepting", "not currently accepting",
     "unable to accept", "cannot accept", "we are not accepting",
     "no nhs spaces", "not taking new nhs", "not taking on nhs",
-    "we do not accept nhs", "we don't accept nhs"
+    "we do not accept nhs", "we don't accept nhs",
+    "private only", "we only provide private", "nhs not available",
+    "currently not taking nhs", "not taking nhs patients", "nhs list closed",
+    "emergency only", "urgent care only", "walk-in only"
   ];
   if (neg.some(p => t.includes(p))) return "NONE";
 
-  // Child-only
-  const isChild =
-    t.includes("children only") || t.includes("only accepts children") || t.includes("only accepting children") ||
-    /under\s*18/.test(t) || /aged\s*(1[0-7]|[1-9])\s*or\s*under/.test(t);
-
-  // Strong positives + generic accept pattern
-  const pos = [
-    "this dentist currently accepts new nhs patients",
-    "currently accepting new nhs patients",
-    "accepting new nhs patients",
-    "taking on new nhs patients",
-    "now accepting nhs patients",
-    "registering new nhs patients",
-    "we are accepting nhs patients",
-    "we're accepting nhs patients",
-    "accepting nhs patients"
+  // Must mention NHS + one of our positive patterns (proximity match)
+  const POS_RX = [
+    /currently\s+accept\w*\s+new\s+nhs\s+patients/,
+    /accept\w*\s+new\s+nhs\s+patients/,
+    /taking\s+on\s+new\s+nhs\s+patients/,
+    /now\s+accept\w*\s+nhs\s+patients/,
+    /register\w*\s+new\s+nhs\s+patients/,
   ];
-  const genericAccept = (t.includes("accept") || t.includes("taking on") || t.includes("registering")) && t.includes("nhs");
+  const strongPos = POS_RX.some((rx) => rx.test(t));
 
-  if (pos.some(p => t.includes(p)) || (genericAccept && !t.includes("only"))) return "ACCEPTING";
-  if (isChild) return "CHILD_ONLY";
+  // Child-only signals
+  const childOnly =
+    t.includes("children only") ||
+    t.includes("only accepts children") ||
+    t.includes("only accepting children") ||
+    /under\s*18/.test(t) ||
+    /aged\s*(1[0-7]|[1-9])\s*or\s*under/.test(t);
+
+  if (strongPos && !childOnly) return "ACCEPTING";
+  if (childOnly && t.includes("accept")) return "CHILD_ONLY";
 
   // Soft negatives
   if (t.includes("waiting list") || t.includes("register your interest")) return "NONE";
@@ -421,7 +442,7 @@ function classifyAcceptance(text) {
 }
 
 /* ────────────────────────────────────────────────────────────────
-   Email via Postmark (HTML templates)
+   Email via Postmark
 ──────────────────────────────────────────────────────────────── */
 async function sendEmail(toList, subject, html) {
   const token = POSTMARK_SERVER_TOKEN || POSTMARK_TOKEN || "";
@@ -497,8 +518,9 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           }
 
           // 2) Fallback: detail page if appointments thin/missing
+          let detailHtml;
           if (!sourceHtml || sourceHtml.length < 400) {
-            const detailHtml = await fetchPage(detailUrl);
+            detailHtml = await fetchPage(detailUrl);
             if (detailHtml && detailHtml.length > 400) sourceHtml = detailHtml;
           }
           if (!sourceHtml) return;
@@ -512,14 +534,21 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           }
 
           // 4) Build card — enrichment is optional and safe
+          const displayName = p.name || (detailHtml ? cheerio.load(detailHtml)("h1").first().text().trim() : "") || nameFromUrl(detailUrl);
+
           const card = {
-            name: p.name || undefined,
+            name: displayName || undefined,
             address: p.address || undefined,
             phone: p.phone || undefined,
             distanceText: p.distanceText || undefined,
-            mapUrl: p.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.address)}` : undefined,
+            mapUrl:
+              (p.address
+                ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(postcode)}&destination=${encodeURIComponent(
+                    p.address
+                  )}`
+                : undefined),
             appointmentUrl: apptUrl || undefined,
-            detailUrl,
+            detailUrl, // kept for internal reference (not shown in email)
             checkedAt: new Date(),
           };
 
