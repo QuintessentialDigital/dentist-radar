@@ -1,10 +1,10 @@
 /**
- * DentistRadar — scanner.js (v10.3)
+ * DentistRadar — scanner.js (v10.4)
  * - Discovery via NHS HTML results (two variants) + rel="next"
  * - Appointments-first classify; detail fallback if thin
- * - Scored classifier aligned to current NHS wording
+ * - Scored classifier aligned to current NHS wording (+ NOT-CONFIRMED guard)
  * - Evidence capture (verdict, reason, snippet)
- * - Returns emailAttempts so cron can log correctly
+ * - Accurate emailAttempts so cron/server logs match reality
  */
 
 import axios from "axios";
@@ -61,7 +61,7 @@ const PracticeEvidenceSchema =
       dateKey: { type: String, index: true },
       verdict: String,
       reason: String,
-      source: String,
+      source: String, // appointments | detail
       snippet: String,
       scannedAt: { type: Date, default: Date.now },
     },
@@ -317,9 +317,14 @@ function extractAppointmentsText(html) {
   return buckets[0];
 }
 
-/* Classifier + helpers */
+/* Classifier + helpers (with NOT-CONFIRMED guard) */
 function classifyAcceptanceScored(text) {
   const t = String(text || "").toLowerCase().replace(/\s+/g, " ").replace(/’/g, "'");
+
+  // Explicit uncertainty — never count as accepting
+  const notConfirmed =
+    /\b(has|have)\s+not\s+confirmed\b.*\b(accept|register)\b|\bunable\s+to\s+confirm\b.*\b(accept|register)\b|\bnot\s+confirmed\s+if\b.*\b(accept|register)\b|\bno\s+information\b.*\b(accept|register)\b|\bunknown\b.*\b(accept|register)\b/;
+  if (notConfirmed.test(t)) return "NONE";
 
   const neg =
     /(not (currently )?accept(?:ing)?|no longer accepting|cannot accept|we are not accepting|nhs not available|nhs list closed|private only|emergency only|urgent care only|walk-?in only|not taking (on )?nhs|no nhs spaces|nhs capacity full|nhs closed)/i;
@@ -346,6 +351,7 @@ function classifyAcceptanceScored(text) {
 function inferReason(text) {
   const t = String(text || "").toLowerCase();
   if (!t) return "APPT_THIN";
+  if (/\b(has|have)\s+not\s+confirmed\b.*\b(accept|register)\b|\bunable\s+to\s+confirm\b.*\b(accept|register)\b|\bnot\s+confirmed\s+if\b.*\b(accept|register)\b|\bno\s+information\b.*\b(accept|register)\b|\bunknown\b.*\b(accept|register)\b/.test(t)) return "NOT_CONFIRMED";
   if (/waiting list|register your interest|expression of interest/.test(t)) return "WAITLIST";
   if (/private only|nhs not available/.test(t)) return "PRIVATE_ONLY";
   if (/children only|only accept(?:ing)? children|under\s*18|aged\s*(1[0-7]|[1-9])\s*or\s*under/.test(t)) return "CHILD_ONLY";
