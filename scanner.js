@@ -1,10 +1,10 @@
 /**
- * DentistRadar — scanner.js (LEGACY+ enriched)
- * -------------------------------------------------------
+ * DentistRadar — scanner.js (LEGACY+ enriched & resilient)
+ * --------------------------------------------------------
  * - Resilient discovery (direct or rendered via ScrapingBee/Browserless)
- * - Extracts practice metadata (name/phone/address/distance) from results HTML
- * - Resolves appointments page and classifies acceptance
- * - Sends polished email cards with tel/map/links via emailTemplates.js
+ * - Extracts practice metadata (name/phone/address/distance) from results HTML (best-effort)
+ * - Resolves appointments page and classifies acceptance (with fallback to detail page)
+ * - Sends polished email cards (via emailTemplates.js)
  *
  * ENV (set on BOTH web & cron):
  *  MONGO_URI
@@ -200,21 +200,18 @@ function extractPracticesFromResults(html, baseUrl) {
   };
 
   // A) Card-like blocks
-  // Try a few container patterns to be defensive.
   const candidates = $(".nhsuk-card, .nhsuk-grid-row, li, article, .nhsuk-results__item");
   candidates.each((_, el) => {
     const scope = $(el);
-    // Find detail link within the block
     let href =
       scope.find('a[href^="/services/dentist"]').attr("href") ||
       scope.find('a[href*="/services/dentist"]').attr("href") ||
       scope.find('a.nhsuk-card__link').attr("href") ||
       "";
 
-    if (!href) return; // skip blocks without detail link
+    if (!href) return;
     const detailUrl = absolutize(baseUrl, href);
 
-    // Heuristics for fields
     const name =
       clean(scope.find("h2, h3, .nhsuk-card__heading, .nhsuk-heading-m").first().text()) || undefined;
 
@@ -224,7 +221,6 @@ function extractPracticesFromResults(html, baseUrl) {
       "";
     const phone = telHref ? clean(telHref.replace(/^tel:/i, "")) : undefined;
 
-    // Address often appears as a compact paragraph/list in result cards
     let address =
       clean(
         scope
@@ -234,7 +230,6 @@ function extractPracticesFromResults(html, baseUrl) {
           .join(" ")
       ) || undefined;
 
-    // Distance text (e.g., "2.3 miles")
     let distanceText =
       clean(
         scope
@@ -244,13 +239,12 @@ function extractPracticesFromResults(html, baseUrl) {
           .text()
       ) || undefined;
 
-    // Avoid ridiculous long address strings
     if (address && address.length > 200) address = undefined;
 
     push({ detailUrl, name, phone, address, distanceText });
   });
 
-  // B) Hydration / inline JSON: pull any raw detail URLs (we won’t get fields here, but we keep the URL)
+  // B) Hydration / inline JSON
   $("script").each((_, s) => {
     if (s.attribs?.src) return;
     const txt = $(s).text() || "";
@@ -258,7 +252,7 @@ function extractPracticesFromResults(html, baseUrl) {
     if (m) m.forEach((u) => push({ detailUrl: u }));
   });
 
-  // C) Raw HTML sweep for any missed URLs
+  // C) Raw HTML sweep
   const body = typeof html === "string" ? html : $.root().html() || "";
   const hits = body.match(RX);
   if (hits) hits.forEach((u) => push({ detailUrl: u }));
@@ -284,7 +278,6 @@ async function discoverPractices(postcode, radius) {
     const html = await fetchPage(url);
     if (!html) continue;
 
-    // Merge practices
     const items = extractPracticesFromResults(html, url);
     for (const p of items) {
       const key = p.detailUrl;
@@ -292,7 +285,6 @@ async function discoverPractices(postcode, radius) {
       mapByDetail.set(key, merged);
     }
 
-    // Follow rel=next
     const $ = cheerio.load(html);
     const nextHref = relNext($);
     if (nextHref) {
@@ -300,7 +292,7 @@ async function discoverPractices(postcode, radius) {
       if (abs && !seenUrl.has(abs) && queue.length < 12) queue.push(abs);
     }
 
-    await sleep(120); // polite pause
+    await sleep(120);
   }
 
   return Array.from(mapByDetail.values());
@@ -385,28 +377,46 @@ function extractAppointmentsText(html) {
   return buckets[0] || "";
 }
 
+/* ────────────────────────────────────────────────────────────────
+   Classifier (expanded phrases; tolerant to wording changes)
+──────────────────────────────────────────────────────────────── */
 function classifyAcceptance(text) {
   const t = String(text || "").toLowerCase().replace(/\s+/g," ").replace(/’/g,"'");
 
-  const mentionsNhs = t.includes("nhs") || t.includes("nhs patient") || t.includes("nhs patients");
-  const mentionsAccept =
-    t.includes("accepts") || t.includes("accepting") || t.includes("registering") || t.includes("taking on");
-  const notAccept =
-    t.includes("not accepting") || t.includes("no longer accepting") || t.includes("not currently accepting");
+  // Hard negatives
+  const neg = [
+    "not accepting", "no longer accepting", "not currently accepting",
+    "unable to accept", "cannot accept", "we are not accepting",
+    "no nhs spaces", "not taking new nhs", "not taking on nhs",
+    "we do not accept nhs", "we don't accept nhs"
+  ];
+  if (neg.some(p => t.includes(p))) return "NONE";
 
-  const childOnly =
-    (t.includes("only accepts") || t.includes("only accepting") || t.includes("children only")) &&
-    (t.includes("children") || /under\s*18/.test(t) || /aged\s*(1[0-7]|[1-9])\s*or\s*under/.test(t));
+  // Child-only
+  const isChild =
+    t.includes("children only") || t.includes("only accepts children") || t.includes("only accepting children") ||
+    /under\s*18/.test(t) || /aged\s*(1[0-7]|[1-9])\s*or\s*under/.test(t);
 
-  if (notAccept) return "NONE";
-  if (childOnly) return "CHILD_ONLY";
-  if (mentionsNhs && mentionsAccept && !t.includes("only")) return "ACCEPTING";
+  // Strong positives + generic accept pattern
+  const pos = [
+    "this dentist currently accepts new nhs patients",
+    "currently accepting new nhs patients",
+    "accepting new nhs patients",
+    "taking on new nhs patients",
+    "now accepting nhs patients",
+    "registering new nhs patients",
+    "we are accepting nhs patients",
+    "we're accepting nhs patients",
+    "accepting nhs patients"
+  ];
+  const genericAccept = (t.includes("accept") || t.includes("taking on") || t.includes("registering")) && t.includes("nhs");
 
-  if (t.includes("this dentist currently accepts new nhs patients")) return "ACCEPTING";
-  if (t.includes("currently accepting new nhs patients")) return "ACCEPTING";
-  if (t.includes("accepting new nhs patients")) return "ACCEPTING";
+  if (pos.some(p => t.includes(p)) || (genericAccept && !t.includes("only"))) return "ACCEPTING";
+  if (isChild) return "CHILD_ONLY";
 
+  // Soft negatives
   if (t.includes("waiting list") || t.includes("register your interest")) return "NONE";
+
   return "UNKNOWN";
 }
 
@@ -463,6 +473,9 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
   const acceptingDetails = [];
   const childOnlyDetails = [];
 
+  // debug counters
+  let cApptResolved = 0, cApptFallback = 0, cUnknown = 0;
+
   await Promise.all(
     practices.map((p) =>
       limit(async () => {
@@ -473,21 +486,39 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
           const already = await EmailLog.findOne({ practiceUrl: detailUrl, dateKey }).lean();
           if (already) return;
 
+          // 1) Try appointments page
+          let sourceHtml = null;
           const apptUrl = await resolveAppointmentsUrl(detailUrl);
-          if (!apptUrl) return;
+          if (apptUrl) {
+            sourceHtml = await fetchPage(apptUrl);
+            cApptResolved++;
+          } else {
+            cApptFallback++;
+          }
 
-          const apptHtml = await fetchPage(apptUrl);
-          if (!apptHtml) return;
+          // 2) Fallback: detail page if appointments thin/missing
+          if (!sourceHtml || sourceHtml.length < 400) {
+            const detailHtml = await fetchPage(detailUrl);
+            if (detailHtml && detailHtml.length > 400) sourceHtml = detailHtml;
+          }
+          if (!sourceHtml) return;
 
-          const verdict = classifyAcceptance(extractAppointmentsText(apptHtml));
+          // 3) Classify
+          const text = extractAppointmentsText(sourceHtml);
+          const verdict = classifyAcceptance(text);
+          if (verdict === "UNKNOWN") {
+            cUnknown++;
+            if (Math.random() < 0.05) console.log("[DEBUG:UNKNOWN]", detailUrl, (text || "").slice(0, 180));
+          }
 
+          // 4) Build card — enrichment is optional and safe
           const card = {
-            name: p.name,
-            address: p.address,
-            phone: p.phone,
-            distanceText: p.distanceText,
+            name: p.name || undefined,
+            address: p.address || undefined,
+            phone: p.phone || undefined,
+            distanceText: p.distanceText || undefined,
             mapUrl: p.address ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.address)}` : undefined,
-            appointmentUrl: apptUrl,
+            appointmentUrl: apptUrl || undefined,
             detailUrl,
             checkedAt: new Date(),
           };
@@ -505,6 +536,8 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
       })
     )
   );
+
+  console.log(`  • Resolved appt pages: ${cApptResolved}, Fallback-to-detail: ${cApptFallback}, Unknown verdicts: ${cUnknown}`);
 
   const shouldSend = acceptingDetails.length > 0 || (INCLUDE_CHILD && childOnlyDetails.length > 0);
   if (!shouldSend) {
