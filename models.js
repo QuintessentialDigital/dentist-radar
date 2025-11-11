@@ -1,4 +1,4 @@
-// models.js — single source of truth for DB & models
+// models.js — single source of truth for DB & models (with User)
 
 import mongoose from "mongoose";
 
@@ -20,31 +20,55 @@ export async function connectMongo() {
   console.log("✅ Mongo connected DB:", mongoose.connection.name);
 }
 
-// Watches: we will always use the physical collection name 'watches'
+// ----- Schemas -----
+
+// Watches — use physical collection name 'watches'
 const WatchSchema =
   mongoose.models.Watch?.schema ||
   new mongoose.Schema(
-    { email: { type: String, index: true }, postcode: { type: String, index: true }, radius: Number },
+    {
+      email: { type: String, index: true },
+      postcode: { type: String, index: true },
+      radius: Number
+    },
     { collection: "watches", timestamps: true, versionKey: false }
   );
 WatchSchema.index({ email: 1, postcode: 1 }, { unique: true });
 
+// Users — optional, but exported so server.js can import it safely
+const UserSchema =
+  mongoose.models.User?.schema ||
+  new mongoose.Schema(
+    {
+      email: { type: String, unique: true, index: true },
+      plan: { type: String, default: "free" },          // free | pro | family
+      postcode_limit: { type: Number, default: 1 },
+      status: { type: String, default: "active" }       // active | paused | canceled
+    },
+    { collection: "users", timestamps: true, versionKey: false }
+  );
+
+// EmailLog — daily de-dupe and provider metadata
 const EmailLogSchema =
   mongoose.models.EmailLog?.schema ||
   new mongoose.Schema(
     {
-      type: { type: String, default: "availability" }, // 'availability' | 'welcome' | ...
+      type: { type: String, default: "availability" },  // availability | welcome | other
       practiceUrl: { type: String, index: true },
-      dateKey: { type: String, index: true }, // YYYY-MM-DD
-      status: String, // ACCEPTING | CHILD_ONLY
+      dateKey: { type: String, index: true },           // YYYY-MM-DD
+      status: String,                                   // ACCEPTING | CHILD_ONLY
+      provider: { type: String, default: "postmark" },
+      providerId: String,
       sentAt: { type: Date, default: Date.now }
     },
     { collection: "EmailLog", versionKey: false }
   );
 EmailLogSchema.index({ practiceUrl: 1, dateKey: 1 }, { unique: true, sparse: true });
 
-export const Watch = mongoose.models.Watch || mongoose.model("Watch", WatchSchema);
-export const EmailLog = mongoose.models.EmailLog || mongoose.model("EmailLog", EmailLogSchema);
+// ----- Models -----
+export const Watch   = mongoose.models.Watch   || mongoose.model("Watch", WatchSchema);
+export const User    = mongoose.models.User    || mongoose.model("User", UserSchema);
+export const EmailLog= mongoose.models.EmailLog|| mongoose.model("EmailLog", EmailLogSchema);
 
-// Tiny helper for quick peeks in logs
+// Tiny helper for quick, pretty logs
 export const peek = (o, n = 1) => JSON.stringify(o, null, n);
