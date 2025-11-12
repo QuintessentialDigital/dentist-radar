@@ -1,27 +1,26 @@
 /**
- * DentistRadar — scanner.js (v10.3.3)
- * - HTML discovery (NHS results variants) + rel="next"
- * - Appointments-first, detail fallback
- * - Broadened acceptance phrases (practice/dentist + “list is open”, “able to register”, etc.)
- * - Hard negatives: “not confirmed”, waiting list, private only, etc.
- * - Optional diagnostics: dump first 10 snippets when accepting=0
+ * DentistRadar — scanner.js (v10.4)
+ * - HTML results discovery (two URL shapes) + rel="next"
+ * - Appointments-first parsing; detail-page fallback
+ * - Updated classifier (covers banners + “list is open” + “able to register”)
+ * - Diagnostics email (optional) if accepting=0
+ * - Sends professional email via emailTemplates.js
  */
 
 import axios from "axios";
 import axiosRetry from "axios-retry";
 import * as cheerio from "cheerio";
-import mongoose from "mongoose";
 import pLimit from "p-limit";
 import dayjs from "dayjs";
+import mongoose from "mongoose";
 
 import { connectMongo, Watch, EmailLog } from "./models.js";
 import { renderEmail } from "./emailTemplates.js";
 
-/* ENV */
+/* ─────────────── ENV ─────────────── */
 const {
   MONGO_URI,
   EMAIL_FROM,
-
   POSTMARK_SERVER_TOKEN,
   POSTMARK_TOKEN,
   POSTMARK_MESSAGE_STREAM = "outbound",
@@ -36,9 +35,9 @@ const {
   DEBUG_RUN_REPORT = "false",
   DEBUG_ADMIN_EMAIL = "",
 
-  ACCEPT_MODE = "strict",        // "strict" | "lenient"
-  EMAILLOG_BYPASS = "0",         // "1" to ignore per-day dedupe (testing)
-  DIAG_DUMP_ON_ZERO = "1",       // "1" email first 10 snippets to admin if accepting=0
+  ACCEPT_MODE = "strict",      // "strict" | "lenient"
+  EMAILLOG_BYPASS = "0",       // "1" bypass per-day dedupe
+  DIAG_DUMP_ON_ZERO = "1",     // needs DEBUG_ADMIN_EMAIL
 } = process.env;
 
 if (!MONGO_URI) throw new Error("MONGO_URI is required");
@@ -55,26 +54,13 @@ const BYPASS_LOG = String(EMAILLOG_BYPASS).toLowerCase() === "1";
 const ADMIN_EMAIL = (DEBUG_ADMIN_EMAIL || "").trim();
 const WANT_DIAG   = String(DIAG_DUMP_ON_ZERO).toLowerCase() === "1" && !!ADMIN_EMAIL;
 
-const UA =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36";
-
-const sleep   = (ms) => new Promise((r) => setTimeout(r, ms));
-const normPc  = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
 const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
-const clean   = (s) => String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+const clean = (s) => String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
 
-/* Evidence (light) */
-const PracticeEvidenceSchema =
-  mongoose.models.PracticeEvidence?.schema ||
-  new mongoose.Schema(
-    { practiceUrl: { type: String, index: true }, dateKey: { type: String, index: true },
-      verdict: String, reason: String, source: String, snippet: String, scannedAt: { type: Date, default: Date.now } },
-    { versionKey: false, collection: "PracticeEvidence" }
-  );
-const PracticeEvidence =
-  mongoose.models.PracticeEvidence || mongoose.model("PracticeEvidence", PracticeEvidenceSchema);
-
-/* HTTP client */
+/* ───────────── HTTP w/ Retry ───────────── */
 const client = axios.create({
   timeout: REQUEST_TIMEOUT,
   maxRedirects: 7,
@@ -112,7 +98,7 @@ async function fetchPage(url) {
   }
 }
 
-/* Discovery */
+/* ───────────── Discovery ───────────── */
 function resultsUrlVariants(postcode, radius) {
   const pc = encodeURIComponent(postcode);
   const base = "https://www.nhs.uk";
@@ -241,7 +227,7 @@ async function discoverPractices(postcode, radius) {
   return Array.from(mapByDetail.values());
 }
 
-/* Appointments resolution + text extraction */
+/* ───────────── Appointments resolution + text ───────────── */
 function findAppointmentsHref($) {
   let href =
     $('a[href*="/appointments"]').attr("href") ||
@@ -256,7 +242,7 @@ function findAppointmentsHref($) {
     $('nav a, [role="navigation"] a, .nhsuk-navigation a, .nhsuk-list a').each((_, a) => {
       const t = String($(a).text() || "").toLowerCase();
       const h = $(a).attr("href") || "";
-      if (!href && (t.includes("appointment") || t.includes("opening"))) href = h;
+      if (!href && (t.includes("appointment") || t.includes("opening") || t.includes("who we can accept"))) href = h;
     });
   }
   return href || "";
@@ -300,7 +286,7 @@ function extractAppointmentsText(html) {
   const buckets = [];
   $("h1,h2,h3").each((_, h) => {
     const heading = String($(h).text() || "").toLowerCase();
-    if (/appointment|opening\s+times|patients|registration|who we can accept/.test(heading)) {
+    if (/appointment|opening\s+times|patients|registration|who we can accept|new patients/i.test(heading)) {
       const buf = [];
       let cur = $(h).next(), hops = 0;
       while (cur.length && hops < 60) {
@@ -333,40 +319,33 @@ function extractAppointmentsText(html) {
   return buckets[0];
 }
 
-/* Classifier */
-const RX_NOT_CONFIRMED =
-  /\b(this (dentist|practice)|we|practice)\s+(has|have)\s+not\s+confirmed\b.*\b(accept|register)/i;
-
+/* ───────────── Classifier ───────────── */
+const RX_NOT_CONFIRMED = /\b(has|have)\s+not\s+confirmed\b.*\b(accept|register)/i;
 const RX_NEGATIVE =
   /\b(private only|nhs not available|not (currently )?accept(?:ing)?|no longer accepting|cannot accept|not taking on|nhs list closed|nhs capacity full|emergency only|urgent care only)\b/i;
-
 const RX_WAITLIST = /\b(waiting list|register your interest|expression of interest)\b/i;
 
 const POS_STRICT = [
-  // exact / very common lines first
   "this dentist currently accepts new nhs patients for routine dental care",
   "this dentist currently accepts new nhs patients",
   "this practice is currently accepting new nhs patients",
   "currently accepts new nhs patients",
   "accepts new nhs patients",
   "accepting new nhs patients",
-  // variants (practice/dentist + verbs)
   "is accepting new nhs patients",
   "we are accepting new nhs patients",
-  "we're accepting new nhs patients",
   "now accepting nhs patients",
   "taking on new nhs patients",
   "now registering nhs patients",
   "currently registering nhs patients",
   "we are able to register nhs patients",
   "we can accept new nhs patients",
-  // signals we’ve seen in banners
   "our nhs list is open",
   "nhs list is open",
   "limited nhs availability",
   "accepting new nhs adult patients",
   "we have nhs spaces",
-  "spaces available for nhs patients"
+  "spaces available for nhs patients",
 ];
 
 function classifyAcceptance(text) {
@@ -390,7 +369,6 @@ function classifyAcceptance(text) {
       }
     }
   }
-
   return "UNKNOWN";
 }
 function inferReason(text) {
@@ -413,7 +391,7 @@ function extractSnippet(text, max = 420) {
   return t.slice(start, start + max).trim();
 }
 
-/* Postmark */
+/* ───────────── Email (Postmark) ───────────── */
 async function sendEmail(toList, subject, html) {
   const token = POSTMARK_SERVER_TOKEN || POSTMARK_TOKEN || "";
   if (!toList?.length || !token) return { ok: false };
@@ -428,7 +406,7 @@ async function sendEmail(toList, subject, html) {
     : { ok: false, status: res.status, body: res.data };
 }
 
-/* Job builder (watches or raw) */
+/* ───────────── Build jobs ───────────── */
 async function buildJobs(filterPostcode) {
   const match = filterPostcode ? { postcode: normPc(filterPostcode) } : {};
 
@@ -460,7 +438,7 @@ async function buildJobs(filterPostcode) {
   }));
 }
 
-/* Admin run report */
+/* ───────────── Optional admin run report ───────────── */
 async function sendRunReport({ postcode, radius, discovered, apptResolved, apptFallback, unknown, recipientsCount }) {
   if (!RUN_REPORT || !ADMIN_EMAIL) return;
   const subject = `Scan report — ${postcode} (${radius} mi)`;
@@ -479,7 +457,7 @@ async function sendRunReport({ postcode, radius, discovered, apptResolved, apptF
   await sendEmail([ADMIN_EMAIL], subject, html);
 }
 
-/* Scan one postcode group */
+/* ───────────── Scan group ───────────── */
 async function scanJob({ postcode, radiusMiles, recipients }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
@@ -495,7 +473,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
 
   const acceptingDetails = [];
   const childOnlyDetails = [];
-  const diagSnippets = []; // for admin diagnostics when accepting=0
+  const diagSnippets = [];
 
   let cApptResolved = 0, cApptFallback = 0, cUnknown = 0;
 
@@ -625,7 +603,7 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
   return { accepting: acceptingDetails, childOnly: childOnlyDetails, emailAttempts, scanned: practices.length };
 }
 
-/* Runner */
+/* ───────────── Runner ───────────── */
 export async function runScan(opts = {}) {
   if (mongoose.connection.readyState !== 1) await connectMongo(MONGO_URI);
 
