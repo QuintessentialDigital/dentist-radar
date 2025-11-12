@@ -1,128 +1,103 @@
-// emailTemplates.js — v2.2 (Professional templates + summary header)
-// Single named export: renderEmail(type, data)
+// emailTemplates.js — professional templates (welcome + availability)
 
-function escapeHtml(s = "") {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+const css = `
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Arial,sans-serif;-webkit-font-smoothing:antialiased;color:#111;margin:0;padding:0}
+  .wrap{max-width:760px;margin:0 auto;padding:20px}
+  h1,h2,h3{margin:0 0 12px}
+  .meta{color:#666;font-size:13px;margin-bottom:12px}
+  .card{border:1px solid #eee;border-radius:10px;padding:14px 16px;margin:10px 0}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .k{color:#555;width:110px}
+  .v{flex:1}
+  table{width:100%;border-collapse:collapse;margin-top:8px}
+  th,td{border-top:1px solid #eee;padding:10px 8px;text-align:left;vertical-align:top}
+  th{background:#fafafa;font-weight:600}
+  .pill{display:inline-block;background:#eef6ff;border:1px solid #d8e8ff;color:#16437e;padding:2px 8px;border-radius:999px;font-size:12px}
+  .footer{color:#777;font-size:12px;margin-top:16px}
+  .links a{margin-right:10px}
+`;
+
+function esc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")}
+
+function welcomeTemplate({ email, postcode, radius, createdAt }) {
+  return {
+    subject: `DentistRadar — alert set for ${postcode} (${radius} miles)`,
+    html: `
+    <html><head><meta charset="utf-8"><style>${css}</style></head><body>
+    <div class="wrap">
+      <h2>You're set — we’ll watch NHS dentist availability for you</h2>
+      <div class="meta">Postcode: <b>${esc(postcode)}</b> • Radius: <b>${radius} miles</b> • Created: ${new Date(createdAt||Date.now()).toLocaleString()}</div>
+
+      <div class="card">
+        <div class="row"><div class="k">What we do</div><div class="v">We check the NHS <b>Appointments</b> pages of practices within your radius and alert you when wording indicates they are <b>accepting new NHS patients</b>.</div></div>
+        <div class="row"><div class="k">How to use</div><div class="v">When you receive an alert, <b>call the practice</b> promptly to confirm before travelling. Availability changes quickly.</div></div>
+        <div class="row"><div class="k">Tips</div><div class="v">Consider nearby postcodes (e.g., work or school), try different radii, and keep your phone handy.</div></div>
+      </div>
+
+      <div class="footer">You’re receiving this because you created an alert at DentistRadar. To stop alerts, reply “STOP” or remove your watch in the app.</div>
+    </div></body></html>`,
+  };
 }
 
-function formatDistance(mi) {
-  if (mi == null || Number.isNaN(mi)) return "";
-  const n = Number(mi);
-  if (!Number.isFinite(n)) return "";
-  return n < 10 ? `${n.toFixed(1)} miles` : `${Math.round(n)} miles`;
-}
+function availabilityTemplate({ postcode, radius, practices = [], includeChildOnly = false, scannedAt }) {
+  const accepting = practices; // already filtered upstream
+  const count = accepting.length;
 
-function renderHeaderSummary({ postcode = "", radius = 0, practices = [] }) {
-  // Compute totals + distance buckets (0–2, 2–5, 5–10, 10–25, 25+)
-  const nums = practices
-    .map(p => (typeof p.distanceMiles === "number" ? p.distanceMiles : null))
-  ;
-  const total = practices.length;
-
-  const bucket = (from, to) =>
-    nums.filter(v => v != null && v >= from && v < to).length;
-
-  const b0_2   = bucket(0, 2);
-  const b2_5   = bucket(2, 5);
-  const b5_10  = bucket(5, 10);
-  const b10_25 = bucket(10, 25);
-  const b25p   = nums.filter(v => v != null && v >= 25).length;
-  const unknown= nums.filter(v => v == null).length;
-
-  return `
-  <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;border:1px solid #eaeaea;border-radius:10px;overflow:hidden;margin:8px 0 14px;">
-    <thead>
-      <tr style="background:#f7f9fb;">
-        <th align="left" style="font:600 13px system-ui,Arial;padding:10px 12px;color:#0b5cab;">Postcode</th>
-        <th align="left" style="font:600 13px system-ui,Arial;padding:10px 12px;color:#0b5cab;">Radius</th>
-        <th align="left" style="font:600 13px system-ui,Arial;padding:10px 12px;color:#0b5cab;">Found</th>
-        <th align="left" style="font:600 13px system-ui,Arial;padding:10px 12px;color:#0b5cab;">0–2</th>
-        <th align="left" style="font:600 13px system-ui,Arial;padding:10px 12px;color:#0b5cab;">2–5</th>
-        <th align="left" style="font:600 13px system-ui,Arial;padding:10px 12px;color:#0b5cab;">5–10</th>
-        <th align="left" style="font:600 13px system-ui,Arial;padding:10px 12px;color:#0b5cab;">10–25</th>
-        <th align="left" style="font:600 13px system-ui,Arial;padding:10px 12px;color:#0b5cab;">25+</th>
-        <th align="left" style="font:600 13px system-ui,Arial;padding:10px 12px;color:#0b5cab;">Unknown</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td style="font:500 13px system-ui,Arial;padding:10px 12px;color:#1a1a1a;">${escapeHtml(postcode)}</td>
-        <td style="font:500 13px system-ui,Arial;padding:10px 12px;color:#1a1a1a;">${radius} miles</td>
-        <td style="font:600 13px system-ui,Arial;padding:10px 12px;color:#1a1a1a;">${total}</td>
-        <td style="font:500 13px system-ui,Arial;padding:10px 12px;color:#1a1a1a;">${b0_2}</td>
-        <td style="font:500 13px system-ui,Arial;padding:10px 12px;color:#1a1a1a;">${b2_5}</td>
-        <td style="font:500 13px system-ui,Arial;padding:10px 12px;color:#1a1a1a;">${b5_10}</td>
-        <td style="font:500 13px system-ui,Arial;padding:10px 12px;color:#1a1a1a;">${b10_25}</td>
-        <td style="font:500 13px system-ui,Arial;padding:10px 12px;color:#1a1a1a;">${b25p}</td>
-        <td style="font:500 13px system-ui,Arial;padding:10px 12px;color:#1a1a1a;">${unknown}</td>
-      </tr>
-    </tbody>
-  </table>`;
-}
-
-export function renderEmail(type, data) {
-  if (type === "welcome") {
-    const subject = "Welcome to DentistRadar – NHS Dentist Alerts";
-    const html = `
-    <div style="font-family:system-ui,Arial,sans-serif;color:#1a1a1a;line-height:1.6;">
-      <h2 style="color:#0b5cab;margin:0 0 8px;">Welcome to DentistRadar</h2>
-      <p>Thanks for subscribing. We’ll email you when NHS dental practices near your postcode start accepting new patients.</p>
-      <ul style="margin:0 0 16px 18px;padding:0;">
-        <li>We check NHS practice pages every hour.</li>
-        <li>Alerts include practice name, phone, distance and map/appointments links.</li>
-        <li>You can manage or unsubscribe any time.</li>
-      </ul>
-      <p style="margin:16px 0 8px;">Manage alerts: <a href="https://www.dentistradar.co.uk" style="color:#0b5cab;">dentistradar.co.uk</a></p>
-      <p style="font-size:12px;color:#666;margin:10px 0 0;">Please call the practice to confirm before travelling.</p>
+  const header = `
+    <div class="card">
+      <div class="row"><div class="k">Summary</div>
+        <div class="v">
+          <span class="pill">${count} practice${count!==1?"s":""} accepting</span>
+          &nbsp;within <b>${radius} miles</b> of <b>${esc(postcode)}</b>
+          <div class="meta">Scanned: ${new Date(scannedAt||Date.now()).toLocaleString()}</div>
+        </div>
+      </div>
     </div>`;
-    return { subject, html };
-  }
 
-  if (type === "availability") {
-    const postcode  = data?.postcode || "";
-    const radius    = data?.radius ?? "";
-    const practices = Array.isArray(data?.practices) ? data.practices : [];
+  const rows = accepting.map(p => {
+    const phone = p.phone ? `<a href="tel:${esc(p.phone)}">${esc(p.phone)}</a>` : "—";
+    const dist  = p.distanceText ? esc(p.distanceText) : "—";
+    const name  = p.name ? esc(p.name) : "NHS dental practice";
+    const appt  = p.appointmentUrl ? `<a href="${esc(p.appointmentUrl)}">Appointments</a>` : "";
+    const det   = p.detailUrl ? `<a href="${esc(p.detailUrl)}">NHS details</a>` : "";
+    const map   = p.mapUrl ? `<a href="${esc(p.mapUrl)}">Map</a>` : "";
+    const links = [appt, det, map].filter(Boolean).join(" · ");
 
-    const subject = `NHS Dentist Availability – ${postcode} (${radius} miles)`;
+    return `<tr>
+      <td><div style="font-weight:600">${name}</div>${p.address ? `<div style="color:#555">${esc(p.address)}</div>`:""}</td>
+      <td>${dist}</td>
+      <td>${phone}</td>
+      <td class="links">${links || "—"}</td>
+    </tr>`;
+  }).join("");
 
-    const header = renderHeaderSummary({ postcode, radius, practices });
+  const html = `
+  <html><head><meta charset="utf-8"><style>${css}</style></head><body>
+    <div class="wrap">
+      <h2>Good news — NHS practices accepting near ${esc(postcode)}</h2>
+      <div class="meta">We found practices indicating they are accepting new NHS patients. Please phone to confirm before travelling.</div>
 
-    const cards = practices.map(p => {
-      const name   = p.name || "NHS Dental Practice";
-      const phone  = p.phone ? `<p style="margin:4px 0;">📞 <a href="tel:${p.phone}" style="color:#0b5cab;text-decoration:none;">${p.phone}</a></p>` : "";
-      const distMI = (typeof p.distanceMiles === "number") ? formatDistance(p.distanceMiles) : "";
-      const dist   = distMI ? `<p style="margin:4px 0;">📍 ${distMI} from ${escapeHtml(postcode)}</p>` :
-                    (p.distanceText ? `<p style="margin:4px 0;">📍 ${escapeHtml(p.distanceText)} from ${escapeHtml(postcode)}</p>` : "");
-      const addr   = p.address ? `<p style="margin:4px 0;">🏠 ${escapeHtml(p.address)}</p>` : "";
-      const links  = [
-        p.appointmentUrl ? `<a href="${p.appointmentUrl}" style="color:#0b5cab;text-decoration:none;">Appointments</a>` : "",
-        p.mapUrl ? `<a href="${p.mapUrl}" style="color:#0b5cab;text-decoration:none;">Google Maps</a>` : "",
-        p.detailUrl ? `<a href="${p.detailUrl}" style="color:#0b5cab;text-decoration:none;">NHS Profile</a>` : "",
-      ].filter(Boolean).join(" &middot; ");
-
-      return `
-        <div style="margin:14px 0; padding:12px; border:1px solid #e6e6e6; border-radius:10px;">
-          <h3 style="margin:0 0 6px; color:#0b5cab;">${escapeHtml(name)}</h3>
-          ${dist}${phone}${addr}
-          <p style="margin:6px 0 0;">${links}</p>
-        </div>`;
-    }).join("");
-
-    const html = `
-    <div style="font-family:system-ui,Arial,sans-serif;color:#1a1a1a;line-height:1.6;">
-      <h2 style="color:#0b5cab;margin:0 0 8px;">New NHS Dentist Availability Near You</h2>
-      <p style="margin:0 0 10px;">We’ve found practices currently accepting new NHS patients within ${radius} miles of <b>${escapeHtml(postcode)}</b>.</p>
       ${header}
-      ${cards || `<p>No eligible practices found in this run.</p>`}
-      <p style="margin-top:14px;">Please call the practice to confirm availability before visiting.</p>
-      <hr style="border:none;border-top:1px solid #eee;margin:16px 0;">
-      <p style="font-size:12px;color:#666;margin:0;">DentistRadar checks NHS pages hourly. Manage alerts at <a href="https://www.dentistradar.co.uk" style="color:#0b5cab;">dentistradar.co.uk</a>.</p>
-    </div>`;
-    return { subject, html };
-  }
 
-  return { subject: "DentistRadar Update", html: "<div style='font-family:system-ui'>No content.</div>" };
+      <table>
+        <thead><tr><th>Practice</th><th>Distance</th><th>Phone</th><th>Quick links</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+
+      <div class="footer">
+        DentistRadar reads the “Appointments” wording on NHS practice pages. Availability changes quickly; please confirm with the practice.
+      </div>
+    </div>
+  </body></html>`;
+
+  return {
+    subject: `DentistRadar — ${count} accepting near ${postcode} (${radius} mi)`,
+    html,
+  };
+}
+
+export function renderEmail(kind, data) {
+  if (kind === "welcome") return welcomeTemplate(data || {});
+  if (kind === "availability") return availabilityTemplate(data || {});
+  throw new Error(`Unknown email kind: ${kind}`);
 }
