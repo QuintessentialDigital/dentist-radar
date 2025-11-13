@@ -25,28 +25,40 @@
 
 <main>
   <section class="hero">
-    <div class="container">
-      <h1>Find an NHS Dentist Accepting Patients</h1>
-      <p>Be the first to know when nearby practices start accepting new NHS patients — free instant alerts straight to your inbox.</p>
+    <div class="container hero-layout">
+      <!-- Left: text + form -->
+      <div class="hero-text">
+        <h1>Find an NHS Dentist Accepting Patients</h1>
+        <p>Be the first to know when nearby practices start accepting new NHS patients — free instant alerts straight to your inbox.</p>
 
-      <form id="alertForm" class="alert-form" novalidate>
-        <div class="input">
-          <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
-                 placeholder="Your email" required>
-        </div>
-        <div class="input">
-          <input id="postcode" name="postcode" type="text" autocomplete="postal-code"
-                 placeholder="Postcode (e.g. RG1 2AB)" required>
-        </div>
-        <div class="input">
-          <input id="radius" name="radius" type="number" min="1" max="30" step="1"
-                 placeholder="Radius (miles)" required>
-        </div>
-        <button type="submit" class="btn">GET MY ALERT</button>
-      </form>
+        <form id="alertForm" class="alert-form" novalidate>
+          <div class="input">
+            <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
+                   placeholder="Your email" required>
+          </div>
+          <div class="input">
+            <input id="postcode" name="postcode" type="text" autocomplete="postal-code"
+                   placeholder="Postcode (e.g. RG1 2AB)" required>
+          </div>
+          <div class="input">
+            <input id="radius" name="radius" type="number" min="1" max="30" step="1"
+                   placeholder="Radius (miles)" required>
+          </div>
+          <button type="submit" class="btn">GET MY ALERT</button>
+        </form>
 
-      <!-- Hidden until JS shows it; now spaced below button -->
-      <p id="msg" class="message-box" aria-live="polite"></p>
+        <!-- Hidden until JS shows it; now spaced below button -->
+        <p id="msg" class="message-box" aria-live="polite"></p>
+      </div>
+
+      <!-- Right: modern clinic illustration -->
+      <div class="hero-visual">
+        <img
+          src="hero-clinic.png"
+          alt="Illustration of a modern, welcoming dental clinic environment"
+          loading="lazy"
+        >
+      </div>
     </div>
   </section>
 
