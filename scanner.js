@@ -1,10 +1,10 @@
 // scanner.js
 // Scans active Watches, checks NHS for accepting dentists,
-// sends emails, and logs per-USER alert deliveries in EmailLog
+// sends emails, and logs per-USER alert deliveries in EmailLog.
 //
-// Run either as:
-//   node scanner.js
-// or import { runScan } from "./scanner.js" in server.js
+// Usage:
+//   - Run manually: node scanner.js
+//   - From server.js: import { runScan } from "./scanner.js";
 
 import "dotenv/config";
 import nodemailer from "nodemailer";
@@ -18,7 +18,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ----------- NHS helpers -----------
+// ---------------- NHS helpers ----------------
 
 function buildSearchUrl(postcode, radiusMiles) {
   const base = "https://www.nhs.uk/service-search/find-a-dentist/results";
@@ -112,7 +112,7 @@ function parseAcceptanceFromAppointments(html) {
   return "unknown";
 }
 
-// ----------- Mailer -----------
+// ---------------- Mailer ----------------
 
 function createTransport() {
   const host = process.env.SMTP_HOST;
@@ -178,12 +178,12 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
   });
 }
 
-// ----------- Core per-Watch scan -----------
+// ---------------- Core per-Watch scan ----------------
 
 async function scanWatch(watch) {
   const { _id: alertId, email, postcode } = watch;
 
-  // 👇 Key: support both radiusMiles and radius, with a sensible default
+  // Support both radiusMiles and radius, with a default
   const radiusMiles = watch.radiusMiles ?? watch.radius ?? 25;
 
   const searchUrl = buildSearchUrl(postcode, radiusMiles);
@@ -193,6 +193,7 @@ async function scanWatch(watch) {
   try {
     searchHtml = await fetchHtml(searchUrl);
   } catch (err) {
+    console.error("Search fetch failed:", err.message);
     return {
       alertId,
       email,
@@ -207,7 +208,6 @@ async function scanWatch(watch) {
   let scanned = 0;
   let totalAccepting = 0;
   let totalNotAccepting = 0;
-
   const newAccepting = [];
 
   for (const practice of practices) {
@@ -219,7 +219,8 @@ async function scanWatch(watch) {
     let appointmentsHtml;
     try {
       appointmentsHtml = await fetchHtml(appointmentUrl);
-    } catch {
+    } catch (err) {
+      console.warn("Appointments fetch failed:", err.message);
       continue;
     }
 
@@ -228,6 +229,119 @@ async function scanWatch(watch) {
     if (status === "accepting") {
       totalAccepting++;
 
-      // ✔ Per-user de-duplication
+      // Per-alert (per-user) de-duplication
       const alreadySent = await EmailLog.findOne({
         alertId,
+        practiceId: practice.practiceId,
+        appointmentUrl,
+      }).lean();
+
+      if (!alreadySent) {
+        newAccepting.push({
+          ...practice,
+          appointmentUrl,
+        });
+      }
+    } else if (status === "not_accepting") {
+      totalNotAccepting++;
+    }
+
+    await sleep(400);
+  }
+
+  // Send & log
+  if (newAccepting.length) {
+    try {
+      await sendAcceptingEmail({
+        to: email,
+        postcode,
+        radiusMiles,
+        practices: newAccepting,
+      });
+
+      const bulk = EmailLog.collection.initializeUnorderedBulkOp();
+
+      newAccepting.forEach((p) => {
+        bulk
+          .find({
+            alertId,
+            practiceId: p.practiceId,
+            appointmentUrl: p.appointmentUrl,
+          })
+          .upsert()
+          .updateOne({
+            $setOnInsert: {
+              alertId,
+              email,
+              postcode,
+              radiusMiles,
+              practiceId: p.practiceId,
+              appointmentUrl: p.appointmentUrl,
+              sentAt: new Date(),
+            },
+          });
+      });
+
+      await bulk.execute();
+    } catch (err) {
+      console.error("Email/log error:", err.message);
+    }
+  }
+
+  return {
+    alertId,
+    email,
+    postcode,
+    radiusMiles,
+    scanned,
+    totalAccepting,
+    totalNotAccepting,
+    newAccepting: newAccepting.length,
+    tookMs: Date.now() - t0,
+  };
+}
+
+// ---------------- Orchestrators ----------------
+
+export async function runAllScans() {
+  await connectMongo();
+
+  const activeWatches = await Watch.find({ active: true }).lean();
+
+  console.log(
+    `Starting scan for ${activeWatches.length} active alert(s) at ${new Date().toISOString()}`
+  );
+
+  const results = [];
+
+  for (const watch of activeWatches) {
+    const result = await scanWatch(watch);
+    results.push(result);
+
+    await Watch.updateOne(
+      { _id: watch._id },
+      { $set: { lastRunAt: new Date() } }
+    );
+  }
+
+  return results;
+}
+
+// Alias expected by server.js
+export async function runScan() {
+  return runAllScans();
+}
+
+// Allow running directly: node scanner.js
+if (import.meta.url === `file://${process.argv[1]}`) {
+  runAllScans()
+    .then((res) => {
+      console.log("Scan complete");
+      console.log(JSON.stringify(res, null, 2));
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error("Scan error", err);
+      process.exit(1);
+    });
+}
