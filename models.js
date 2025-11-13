@@ -65,7 +65,7 @@ watchSchema.index({ email: 1, postcode: 1, radiusMiles: 1, radius: 1 });
  * EmailLog is where we prevent duplicates and keep a history of alerts.
  *
  * IMPORTANT:
- * - We *relax* required constraints so legacy code that saves partial logs
+ * - We relax required constraints so legacy code that saves partial logs
  *   doesn't throw validation errors.
  * - Our scanner still writes full entries with all fields populated.
  */
@@ -75,7 +75,7 @@ const emailLogSchema = new mongoose.Schema(
     alertId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Watch",
-      index: true,
+      index: true, // single index, no duplicate schema.index()
     },
     email: { type: String, index: true },
     postcode: { type: String },
@@ -90,7 +90,6 @@ const emailLogSchema = new mongoose.Schema(
 );
 
 // Helpful analytics indices (non-unique to avoid conflicts with partial rows)
-emailLogSchema.index({ alertId: 1 });
 emailLogSchema.index({ email: 1, postcode: 1 });
 emailLogSchema.index({ practiceId: 1 });
 
