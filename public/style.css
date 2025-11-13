@@ -42,18 +42,62 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 /* =========================
    Hero
 ========================= */
-.hero{background:linear-gradient(135deg,#0b63ff 0%,#00bfff 100%);color:#fff;text-align:center}
+.hero{
+  background:linear-gradient(135deg,#0b63ff 0%,#00bfff 100%);
+  color:#fff;
+}
 .hero .container{padding:56px 16px 40px}
 .hero.small-hero .container{padding:36px 16px 28px}
-.hero h1{font-size:2.4rem;font-weight:800;margin-bottom:12px}
-.hero p{font-size:1.1rem;max-width:640px;margin:0 auto 24px}
+
+/* Split hero layout: text + image */
+.hero-layout{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:32px;
+}
+.hero-text{
+  flex:1 1 320px;
+  min-width:260px;
+}
+.hero-visual{
+  flex:1 1 260px;
+  min-width:240px;
+  display:flex;
+  justify-content:flex-end;
+}
+.hero-visual img{
+  max-width:420px;
+  width:100%;
+  height:auto;
+  border-radius:18px;
+  box-shadow:0 14px 30px rgba(0,0,0,0.18);
+}
+
+/* Headline + sub-copy */
+.hero h1{
+  font-size:2.4rem;
+  font-weight:800;
+  margin-bottom:12px;
+}
+.hero p{
+  font-size:1.1rem;
+  max-width:640px;
+  margin:0 0 24px 0;
+}
+
+/* Ensure hero text is left-aligned on desktop */
+.hero-text h1,
+.hero-text p{
+  text-align:left;
+}
 
 /* =========================
    Home form
 ========================= */
 .alert-form{
-  display:flex;flex-wrap:wrap;gap:10px;justify-content:center;
-  max-width:720px;margin:0 auto;
+  display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-start;
+  max-width:720px;margin:0 0;
   margin-bottom:14px; /* space before any validation message */
 }
 .input{flex:1 1 200px;min-width:200px;max-width:260px}
@@ -75,7 +119,7 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
   margin-top:14px;       /* extra whitespace under the button (desktop + mobile) */
   background:rgba(255,255,255,0.97);
   border-radius:10px; padding:10px 14px; font-weight:600; color:#1a1a1a;
-  max-width:600px; margin-left:auto; margin-right:auto; box-shadow:0 1px 6px rgba(0,0,0,.1)
+  max-width:600px; margin-left:0; margin-right:auto; box-shadow:0 1px 6px rgba(0,0,0,.1)
 }
 .message-box a{color:#0b63ff;font-weight:700;text-decoration:underline}
 .message-box.error{color:#d93025}.message-box.warn{color:#a36b00}.message-box.success{color:#0a8a0a}
@@ -152,11 +196,38 @@ footer a{color:#0b63ff}
 
   /* Hero + form */
   .hero .container{padding:36px 16px 28px}
-  .alert-form{display:grid;grid-template-columns:1fr;row-gap:8px;max-width:100%}
+  .hero-layout{
+    flex-direction:column;
+    align-items:flex-start;
+  }
+  .hero-text{
+    width:100%;
+  }
+  .hero-text h1,
+  .hero-text p{
+    text-align:left;
+  }
+  .hero-visual{
+    width:100%;
+    justify-content:center;
+    margin-top:12px;
+  }
+
+  .alert-form{
+    display:grid;
+    grid-template-columns:1fr;
+    row-gap:8px;
+    max-width:100%;
+    justify-content:stretch;
+  }
   .input{min-width:100%;max-width:100%}
   .input input{height:52px;font-size:1.05rem;border-radius:10px}
   .btn{height:52px;border-radius:10px;font-size:1.02rem}
-  .message-box{margin-top:12px}
+  .message-box{
+    margin-top:12px;
+    margin-left:0;
+    margin-right:0;
+  }
 
   /* Pricing mobile alignment */
   .plan-card .btn{width:100%}
