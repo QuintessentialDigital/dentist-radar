@@ -4,7 +4,7 @@
 //
 // Run either as:
 //   node scanner.js
-// or import { runAllScans } in your server/cron code.
+// or import { runScan } from "./scanner.js" in server.js
 
 import "dotenv/config";
 import nodemailer from "nodemailer";
@@ -30,13 +30,11 @@ function buildSearchUrl(postcode, radiusMiles) {
 }
 
 function buildAppointmentsUrl(detailUrl) {
-  // Standard NHS pattern:
-  //  https://www.nhs.uk/services/dentist/<name>/<id>
-  //  appointments page:
-  //  https://www.nhs.uk/services/dentist/<name>/<id>/appointments-and-opening-times
   if (!detailUrl) return null;
+
   let url = detailUrl.split("?")[0];
   if (url.endsWith("/")) url = url.slice(0, -1);
+
   return `${url}/appointments-and-opening-times`;
 }
 
@@ -48,35 +46,32 @@ async function fetchHtml(url) {
       Accept: "text/html,application/xhtml+xml",
     },
   });
+
   if (!res.ok) {
     throw new Error(`Fetch failed ${res.status} for ${url}`);
   }
+
   return await res.text();
 }
 
-/**
- * Very lightweight parser to pull practice detail URLs from the search HTML.
- * We avoid extra dependencies: do simple regex on <a href="..."> inside result cards.
- */
+// Extract practice URLs from NHS search results
 function extractPracticesFromSearch(html) {
   const results = [];
-
-  // Look for NHS service links that contain "/services/dentist/"
   const regex = /href="([^"]+\/services\/dentist\/[^"]+)"/g;
-  let match;
+
   const seen = new Set();
+  let match;
 
   while ((match = regex.exec(html)) !== null) {
     const href = match[1];
+
     if (seen.has(href)) continue;
     seen.add(href);
 
-    // NHS hrefs may be relative; normalise:
     const url = href.startsWith("http")
       ? href
       : `https://www.nhs.uk${href}`;
 
-    // Simple practiceId: last segment
     const parts = url.split("/");
     const practiceId = parts[parts.length - 1] || parts[parts.length - 2];
 
@@ -89,14 +84,10 @@ function extractPracticesFromSearch(html) {
   return results;
 }
 
-/**
- * Determine whether appointments page indicates accepting / not accepting.
- * We just look at the plain text with a handful of known patterns.
- */
+// Parse appointments page for accepting patterns
 function parseAcceptanceFromAppointments(html) {
   const lower = html.toLowerCase();
 
-  // Strong positive signals
   const positivePatterns = [
     "this dentist currently accepts new nhs patients",
     "this dentist currently accepts new nhs adult patients",
@@ -105,7 +96,6 @@ function parseAcceptanceFromAppointments(html) {
     "is accepting new nhs patients",
   ];
 
-  // Strong negative signals
   const negativePatterns = [
     "this dentist is not accepting new nhs patients",
     "this dentist currently does not accept new nhs patients",
@@ -116,14 +106,9 @@ function parseAcceptanceFromAppointments(html) {
   const positiveHit = positivePatterns.some((p) => lower.includes(p));
   const negativeHit = negativePatterns.some((p) => lower.includes(p));
 
-  if (positiveHit && !negativeHit) {
-    return "accepting";
-  }
-  if (negativeHit && !positiveHit) {
-    return "not_accepting";
-  }
+  if (positiveHit && !negativeHit) return "accepting";
+  if (negativeHit && !positiveHit) return "not_accepting";
 
-  // Unknown / mixed / not sure -> treat as not-accepting for alerts
   return "unknown";
 }
 
@@ -164,19 +149,19 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
 
   const html = `
     <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #333;">
-      <h2 style="color:#0b5cff; margin-bottom: 16px;">Good news! We found NHS dentists accepting patients</h2>
+      <h2 style="color:#0b5cff; margin-bottom: 16px;">Good news! NHS dentists are accepting new patients</h2>
       <p>Based on your alert for postcode <strong>${postcode}</strong> within <strong>${radiusMiles} miles</strong>, we found the following practices currently accepting NHS patients:</p>
       <ul>${listHtml}</ul>
       <p style="margin-top:16px;">Appointments availability can change quickly, so we recommend booking as soon as possible.</p>
       <p style="font-size:12px;color:#777;margin-top:24px;">
-        You are receiving this email because you created an alert on DentistRadar.
-        If this wasn’t you or you no longer wish to receive alerts, please contact support.
+        You received this email because you created an alert on DentistRadar.
+        If this wasn’t you or you want to stop receiving alerts, please contact support.
       </p>
     </div>
   `;
 
   const text =
-    `Good news! We found NHS dentists accepting patients near ${postcode}.\n\n` +
+    `Good news! NHS dentists accepting patients near ${postcode}:\n\n` +
     practices
       .map(
         (p) =>
@@ -205,11 +190,6 @@ async function scanWatch(watch) {
   try {
     searchHtml = await fetchHtml(searchUrl);
   } catch (err) {
-    console.error("Search fetch failed", {
-      postcode,
-      radiusMiles,
-      err: err.message,
-    });
     return {
       alertId,
       email,
@@ -236,11 +216,7 @@ async function scanWatch(watch) {
     let appointmentsHtml;
     try {
       appointmentsHtml = await fetchHtml(appointmentUrl);
-    } catch (err) {
-      console.warn("Appointments fetch failed", {
-        appointmentUrl,
-        err: err.message,
-      });
+    } catch {
       continue;
     }
 
@@ -249,7 +225,7 @@ async function scanWatch(watch) {
     if (status === "accepting") {
       totalAccepting++;
 
-      // ✅ KEY: de-dup per ALERT (watch) + practice, not globally.
+      // ✔ Per-user de-duplication
       const alreadySent = await EmailLog.findOne({
         alertId,
         practiceId: practice.practiceId,
@@ -266,11 +242,10 @@ async function scanWatch(watch) {
       totalNotAccepting++;
     }
 
-    // Be kind to NHS servers
     await sleep(400);
   }
 
-  // If we have new accepting practices, send email + log them
+  // ----- send & log -----
   if (newAccepting.length) {
     try {
       await sendAcceptingEmail({
@@ -280,8 +255,8 @@ async function scanWatch(watch) {
         practices: newAccepting,
       });
 
-      // Insert logs; ignore duplicates just in case of race conditions
       const bulk = EmailLog.collection.initializeUnorderedBulkOp();
+
       newAccepting.forEach((p) => {
         bulk
           .find({
@@ -302,17 +277,12 @@ async function scanWatch(watch) {
             },
           });
       });
+
       await bulk.execute();
     } catch (err) {
-      console.error("Failed to send or log accepting email", {
-        alertId,
-        email,
-        err: err.message,
-      });
+      console.error("Email/log error:", err.message);
     }
   }
-
-  const tookMs = Date.now() - t0;
 
   return {
     alertId,
@@ -323,11 +293,11 @@ async function scanWatch(watch) {
     totalAccepting,
     totalNotAccepting,
     newAccepting: newAccepting.length,
-    tookMs,
+    tookMs: Date.now() - t0,
   };
 }
 
-// ----------- Orchestrator -----------
+// ----------- Orchestrators -----------
 
 export async function runAllScans() {
   await connectMongo();
@@ -341,28 +311,24 @@ export async function runAllScans() {
   const results = [];
 
   for (const watch of activeWatches) {
-    console.log(
-      `Scanning alert ${watch._id} for ${watch.email} – ${watch.postcode} / ${watch.radiusMiles} miles`
-    );
-
     const result = await scanWatch(watch);
     results.push(result);
 
-    // Update lastRunAt
     await Watch.updateOne(
       { _id: watch._id },
       { $set: { lastRunAt: new Date() } }
-    );
-
-    console.log(
-      `Result for ${watch.postcode}: totalAccepting=${result.totalAccepting}, newAccepting=${result.newAccepting}, scanned=${result.scanned}, tookMs=${result.tookMs}`
     );
   }
 
   return results;
 }
 
-// Allow running directly: `node scanner.js`
+// ✔ Export alias for server.js
+export async function runScan() {
+  return runAllScans();
+}
+
+// Allow running directly
 if (import.meta.url === `file://${process.argv[1]}`) {
   runAllScans()
     .then((res) => {
