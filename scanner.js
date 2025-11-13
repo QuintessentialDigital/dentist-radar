@@ -27,13 +27,13 @@ function buildSearchUrl(postcode, radiusMiles) {
   return `https://www.nhs.uk/service-search/find-a-dentist/results/${encPostcode}`;
 }
 
-function buildAppointmentsUrl(detailUrl) {
+// NEW: appointments info is on the main dentist page now
+function buildPracticeUrl(detailUrl) {
   if (!detailUrl) return null;
-
+  // Strip querystring, normalise trailing slash
   let url = detailUrl.split("?")[0];
   if (url.endsWith("/")) url = url.slice(0, -1);
-
-  return `${url}/appointments-and-opening-times`;
+  return url; // no extra /appointments-and-opening-times
 }
 
 async function fetchHtml(url) {
@@ -82,16 +82,17 @@ function extractPracticesFromSearch(html) {
   return results;
 }
 
-// Parse appointments page for accepting patterns
-function parseAcceptanceFromAppointments(html) {
+// Parse dentist page for accepting patterns
+function parseAcceptanceFromPracticePage(html) {
   const lower = html.toLowerCase();
 
   const positivePatterns = [
+    "this dentist currently accepts new nhs patients for routine dental care",
     "this dentist currently accepts new nhs patients",
-    "this dentist currently accepts new nhs adult patients",
-    "this dentist currently accepts new nhs child patients",
     "accepting new nhs patients",
     "is accepting new nhs patients",
+    // some pages say "when availability allows"
+    "when availability allows, this dentist accepts new nhs patients",
   ];
 
   const negativePatterns = [
@@ -141,7 +142,7 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
   const listHtml = practices
     .map(
       (p) =>
-        `<li><strong>${p.name || p.practiceId}</strong><br/><a href="${p.appointmentUrl}" target="_blank">${p.appointmentUrl}</a></li>`
+        `<li><strong>${p.name || p.practiceId}</strong><br/><a href="${p.practiceUrl}" target="_blank">${p.practiceUrl}</a></li>`
     )
     .join("");
 
@@ -163,7 +164,7 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
     practices
       .map(
         (p) =>
-          `- ${p.name || p.practiceId}\n  Appointments: ${p.appointmentUrl}\n`
+          `- ${p.name || p.practiceId}\n  NHS profile: ${p.practiceUrl}\n`
       )
       .join("\n");
 
@@ -211,18 +212,18 @@ async function scanWatch(watch) {
   for (const practice of practices) {
     scanned++;
 
-    const appointmentUrl = buildAppointmentsUrl(practice.detailUrl);
-    if (!appointmentUrl) continue;
+    const practiceUrl = buildPracticeUrl(practice.detailUrl);
+    if (!practiceUrl) continue;
 
-    let appointmentsHtml;
+    let practiceHtml;
     try {
-      appointmentsHtml = await fetchHtml(appointmentUrl);
+      practiceHtml = await fetchHtml(practiceUrl);
     } catch (err) {
-      console.warn("Appointments fetch failed:", err.message);
+      console.warn("Practice fetch failed:", err.message);
       continue;
     }
 
-    const status = parseAcceptanceFromAppointments(appointmentsHtml);
+    const status = parseAcceptanceFromPracticePage(practiceHtml);
 
     if (status === "accepting") {
       totalAccepting++;
@@ -231,13 +232,13 @@ async function scanWatch(watch) {
       const alreadySent = await EmailLog.findOne({
         alertId,
         practiceId: practice.practiceId,
-        appointmentUrl,
+        appointmentUrl: practiceUrl, // still call it appointmentUrl in DB for compatibility
       }).lean();
 
       if (!alreadySent) {
         newAccepting.push({
           ...practice,
-          appointmentUrl,
+          practiceUrl,
         });
       }
     } else if (status === "not_accepting") {
@@ -264,7 +265,7 @@ async function scanWatch(watch) {
           .find({
             alertId,
             practiceId: p.practiceId,
-            appointmentUrl: p.appointmentUrl,
+            appointmentUrl: p.practiceUrl,
           })
           .upsert()
           .updateOne({
@@ -274,7 +275,7 @@ async function scanWatch(watch) {
               postcode,
               radiusMiles,
               practiceId: p.practiceId,
-              appointmentUrl: p.appointmentUrl,
+              appointmentUrl: p.practiceUrl,
               sentAt: new Date(),
             },
           });
