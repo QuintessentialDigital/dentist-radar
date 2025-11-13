@@ -180,4 +180,192 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
     practices
       .map(
         (p) =>
-          `- ${p.n
+          `- ${p.name || p.practiceId}\n  Appointments: ${p.appointmentUrl}\n`
+      )
+      .join("\n");
+
+  await transport.sendMail({
+    from,
+    to,
+    subject,
+    html,
+    text,
+  });
+}
+
+// ----------- Core per-Watch scan -----------
+
+async function scanWatch(watch) {
+  const { _id: alertId, email, postcode, radiusMiles } = watch;
+
+  const searchUrl = buildSearchUrl(postcode, radiusMiles);
+  const t0 = Date.now();
+
+  let searchHtml;
+  try {
+    searchHtml = await fetchHtml(searchUrl);
+  } catch (err) {
+    console.error("Search fetch failed", { postcode, radiusMiles, err: err.message });
+    return {
+      alertId,
+      email,
+      postcode,
+      radiusMiles,
+      error: `Search fetch failed: ${err.message}`,
+    };
+  }
+
+  const practices = extractPracticesFromSearch(searchHtml);
+
+  let scanned = 0;
+  let totalAccepting = 0;
+  let totalNotAccepting = 0;
+
+  const newAccepting = [];
+
+  for (const practice of practices) {
+    scanned++;
+
+    const appointmentUrl = buildAppointmentsUrl(practice.detailUrl);
+    if (!appointmentUrl) continue;
+
+    let appointmentsHtml;
+    try {
+      appointmentsHtml = await fetchHtml(appointmentUrl);
+    } catch (err) {
+      console.warn("Appointments fetch failed", {
+        appointmentUrl,
+        err: err.message,
+      });
+      continue;
+    }
+
+    const status = parseAcceptanceFromAppointments(appointmentsHtml);
+
+    if (status === "accepting") {
+      totalAccepting++;
+
+      // ✅ KEY FIX:
+      // De-dup per ALERT (watch) + practice, not globally.
+      const alreadySent = await EmailLog.findOne({
+        alertId,
+        practiceId: practice.practiceId,
+        appointmentUrl,
+      }).lean();
+
+      if (!alreadySent) {
+        newAccepting.push({
+          ...practice,
+          appointmentUrl,
+        });
+      }
+    } else if (status === "not_accepting") {
+      totalNotAccepting++;
+    }
+
+    // Be kind to NHS servers
+    await sleep(400);
+  }
+
+  // If we have new accepting practices, send email + log them
+  if (newAccepting.length) {
+    try {
+      await sendAcceptingEmail({
+        to: email,
+        postcode,
+        radiusMiles,
+        practices: newAccepting,
+      });
+
+      // Insert logs; ignore duplicates just in case of race conditions
+      const bulk = EmailLog.collection.initializeUnorderedBulkOp();
+      newAccepting.forEach((p) => {
+        bulk.find({
+          alertId,
+          practiceId: p.practiceId,
+          appointmentUrl: p.appointmentUrl,
+        }).upsert().updateOne({
+          $setOnInsert: {
+            alertId,
+            email,
+            postcode,
+            radiusMiles,
+            practiceId: p.practiceId,
+            appointmentUrl: p.appointmentUrl,
+            sentAt: new Date(),
+          },
+        });
+      });
+      await bulk.execute();
+    } catch (err) {
+      console.error("Failed to send or log accepting email", {
+        alertId,
+        email,
+        err: err.message,
+      });
+    }
+  }
+
+  const tookMs = Date.now() - t0;
+
+  return {
+    alertId,
+    email,
+    postcode,
+    radiusMiles,
+    scanned,
+    totalAccepting,
+    totalNotAccepting,
+    newAccepting: newAccepting.length,
+    tookMs,
+  };
+}
+
+// ----------- Orchestrator -----------
+
+export async function runAllScans() {
+  await connectMongo();
+
+  const activeWatches = await Watch.find({ active: true }).lean();
+
+  console.log(
+    `Starting scan for ${activeWatches.length} active alert(s) at ${new Date().toISOString()}`
+  );
+
+  const results = [];
+
+  for (const watch of activeWatches) {
+    console.log(
+      `Scanning alert ${watch._id} for ${watch.email} – ${watch.postcode} / ${watch.radiusMiles} miles`
+    );
+
+    const result = await scanWatch(watch);
+    results.push(result);
+
+    // Update lastRunAt
+    await Watch.updateOne(
+      { _id: watch._id },
+      { $set: { lastRunAt: new Date() } }
+    );
+
+    console.log(
+      `Result for ${watch.postcode}: totalAccepting=${result.totalAccepting}, newAccepting=${result.newAccepting}, scanned=${result.scanned}, tookMs=${result.tookMs}`
+    );
+  }
+
+  return results;
+}
+
+// Allow running directly: `node scanner.js`
+if (import.meta.url === `file://${process.argv[1]}`) {
+  runAllScans()
+    .then((res) => {
+      console.log("Scan complete");
+      console.log(JSON.stringify(res, null, 2));
+      process.exit(0);
+    })
+    .catch((err) => {
+      console.error("Scan error", err);
+      process.exit(1);
+    });
+}
