@@ -21,12 +21,10 @@ function sleep(ms) {
 // ---------------- NHS helpers ----------------
 
 function buildSearchUrl(postcode, radiusMiles) {
-  const base = "https://www.nhs.uk/service-search/find-a-dentist/results";
-  const params = new URLSearchParams({
-    postcode,
-    distance: String(radiusMiles),
-  });
-  return `${base}?${params.toString()}`;
+  // NHS now expects the location in the PATH, not as ?postcode=...
+  const encPostcode = encodeURIComponent(postcode.trim());
+  // radiusMiles is kept for internal logic / reporting, not sent to NHS here
+  return `https://www.nhs.uk/service-search/find-a-dentist/results/${encPostcode}`;
 }
 
 function buildAppointmentsUrl(detailUrl) {
