@@ -1,7 +1,7 @@
 // scanner.js
 // Scans active Watches, checks NHS for accepting dentists directly from
-// the search results page, sends emails, and logs per-USER alert deliveries
-// in EmailLog.
+// the search results page, sends emails (if SMTP is configured),
+// and logs per-USER alert deliveries in EmailLog.
 //
 // Usage:
 //   - Run manually: node scanner.js
@@ -67,15 +67,16 @@ async function fetchHtml(url) {
 function extractPracticesFromSearch(html) {
   const results = [];
 
-  // Each block looks like:
-  //   N.   Result for   <Name>
-  //   V012345
-  //   DEN
-  //   ...
-  //   When availability allows, this dentist accepts new NHS patients ...
-  //   End of result for   <Name>
+  // Each block looks like (in the accessible text version):
   //
-  // We'll capture "Result for <Name> ... End of result for"
+  //   Result for   Winnersh Dental Practice
+  //   V006578
+  //   ...
+  //   When availability allows, this dentist accepts new NHS patients if they are:
+  //   ...
+  //   End of result for   Winnersh Dental Practice
+  //
+  // We capture "Result for <Name> ... End of result for"
   const regex =
     /Result for\s+(.+?)\r?\n([\s\S]*?)(?:End of result for\s+.+?\r?\n)/g;
 
@@ -134,6 +135,7 @@ function extractPracticesFromSearch(html) {
 
 // ---------------- Mailer ----------------
 
+// NOTE: now *never throws* – returns null if SMTP not configured
 function createTransport() {
   const host = process.env.SMTP_HOST;
   const port = Number(process.env.SMTP_PORT || 587);
@@ -141,7 +143,11 @@ function createTransport() {
   const pass = process.env.SMTP_PASS;
 
   if (!host || !user || !pass) {
-    throw new Error("SMTP_HOST, SMTP_USER, SMTP_PASS are required");
+    console.warn(
+      "[DentistRadar] SMTP not fully configured (SMTP_HOST/SMTP_USER/SMTP_PASS). " +
+        "Skipping email send but continuing scanner/logging."
+    );
+    return null;
   }
 
   return nodemailer.createTransport({
@@ -156,13 +162,17 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
   if (!practices.length) return;
 
   const transport = createTransport();
+  if (!transport) {
+    // no SMTP configured – just skip sending
+    return;
+  }
 
   const from = process.env.FROM_EMAIL || "alerts@dentistradar.co.uk";
   const subject = `DentistRadar: ${practices.length} NHS dentist(s) accepting near ${postcode}`;
 
   const listHtml = practices
     .map((p) => {
-      const link = p.profileUrl || "NHS profile page";
+      const link = p.profileUrl || p.appointmentUrl || "NHS profile page";
       return `<li><strong>${p.name || p.practiceId}</strong><br/><a href="${link}" target="_blank">${link}</a></li>`;
     })
     .join("");
@@ -184,7 +194,7 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
     `Good news! NHS dentists accepting patients near ${postcode}:\n\n` +
     practices
       .map((p) => {
-        const link = p.profileUrl || "(NHS profile page)";
+        const link = p.profileUrl || p.appointmentUrl || "(NHS profile page)";
         return `- ${p.name || p.practiceId}\n  NHS profile: ${link}\n`;
       })
       .join("\n");
@@ -264,8 +274,9 @@ async function scanWatch(watch) {
     await sleep(200);
   }
 
-  // Send & log
+  // Send & log — IMPORTANT: logging happens even if email fails / is skipped
   if (newAccepting.length) {
+    // Try sending email (will silently skip if SMTP not configured)
     try {
       await sendAcceptingEmail({
         to: email,
@@ -273,7 +284,13 @@ async function scanWatch(watch) {
         radiusMiles,
         practices: newAccepting,
       });
+    } catch (err) {
+      // Just log; don't fail scan
+      console.error("Email send error (non-fatal):", err.message);
+    }
 
+    // Always attempt to log, regardless of email outcome
+    try {
       const bulk = EmailLog.collection.initializeUnorderedBulkOp();
 
       newAccepting.forEach((p) => {
@@ -299,7 +316,7 @@ async function scanWatch(watch) {
 
       await bulk.execute();
     } catch (err) {
-      console.error("Email/log error:", err.message);
+      console.error("Log write error (non-fatal):", err.message);
     }
   }
 
