@@ -40,6 +40,15 @@ function extractPhone(block) {
   return phoneMatch ? phoneMatch[0].trim() : null;
 }
 
+// Build a Google Maps search link
+function buildMapsUrl(name, postcode) {
+  const q = `${name || ""} ${postcode || ""}`.trim();
+  if (!q) return null;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    q
+  )}`;
+}
+
 // ---------------- NHS helpers ----------------
 
 // NHS search results URL
@@ -54,15 +63,6 @@ function buildProfileUrl(name, practiceId) {
   const slug = slugifyName(name || "");
   if (!slug || !practiceId) return null;
   return `https://www.nhs.uk/services/dentist/${slug}/${practiceId}`;
-}
-
-// Build a Google Maps search link
-function buildMapsUrl(name, postcode) {
-  const q = `${name || ""} ${postcode || ""}`.trim();
-  if (!q) return null;
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-    q
-  )}`;
 }
 
 async function fetchHtml(url) {
@@ -81,7 +81,8 @@ async function fetchHtml(url) {
   return await res.text();
 }
 
-// Extract practice data (name, id, acceptance, distance, phone) from search HTML ONLY
+// Extract practice data (name, id, acceptance, distance, phone, adult/child)
+// from search HTML ONLY
 function extractPracticesFromSearch(html, searchPostcode) {
   const results = [];
 
@@ -93,6 +94,8 @@ function extractPracticesFromSearch(html, searchPostcode) {
   //   1.2 miles away
   //   ...
   //   When availability allows, this dentist accepts new NHS patients if they are:
+  //     adults aged 18 or over
+  //     children aged 17 or under
   //   ...
   //   End of result for   Winnersh Dental Practice
   //
@@ -103,12 +106,11 @@ function extractPracticesFromSearch(html, searchPostcode) {
   while ((match = regex.exec(html)) !== null) {
     const name = match[1].trim();
     const block = match[2];
+    const lower = block.toLowerCase();
 
     // Practice ID: lines like "V003718"
     const idMatch = block.match(/\bV[0-9A-Z]{6}\b/);
     const practiceId = idMatch ? idMatch[0] : null;
-
-    const lower = block.toLowerCase();
 
     // Distance text: e.g. "1.2 miles away"
     let distanceText = null;
@@ -151,6 +153,26 @@ function extractPracticesFromSearch(html, searchPostcode) {
     else if (neg && !pos) acceptance = "not_accepting";
     else if (unk && !pos && !neg) acceptance = "unknown";
 
+    // Adult / child tagging
+    const acceptsAdults =
+      lower.includes("adults aged 18 or over") ||
+      lower.includes("adults aged 18 and over") ||
+      lower.includes("adult patients");
+
+    const acceptsChildren =
+      lower.includes("children aged 17 or under") ||
+      lower.includes("children aged under 18") ||
+      lower.includes("child patients");
+
+    let patientType = "Not specified";
+    if (acceptsAdults && acceptsChildren) {
+      patientType = "Adults & Children";
+    } else if (acceptsAdults) {
+      patientType = "Adults only";
+    } else if (acceptsChildren) {
+      patientType = "Children only";
+    }
+
     const profileUrl = buildProfileUrl(name, practiceId);
     const mapsUrl = buildMapsUrl(name, searchPostcode);
 
@@ -163,10 +185,31 @@ function extractPracticesFromSearch(html, searchPostcode) {
       distanceText,
       distanceMiles,
       phone,
+      acceptsAdults,
+      acceptsChildren,
+      patientType,
     });
   }
 
   return results;
+}
+
+// ---------------- Unsubscribe URL helper ----------------
+
+function buildUnsubscribeUrl(alertId, email) {
+  const base =
+    process.env.PUBLIC_BASE_URL ||
+    process.env.APP_BASE_URL ||
+    "https://dentistradar.co.uk";
+
+  // MVP: simple alert + email link; your server should implement /unsubscribe
+  // to set Watch.active = false for this alertId & email.
+  const params = new URLSearchParams({
+    alert: String(alertId),
+    email: email || "",
+  });
+
+  return `${base.replace(/\/$/, "")}/unsubscribe?${params.toString()}`;
 }
 
 // ---------------- Mailer ----------------
@@ -194,7 +237,13 @@ function createTransport() {
   });
 }
 
-async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
+async function sendAcceptingEmail({
+  alertId,
+  to,
+  postcode,
+  radiusMiles,
+  practices,
+}) {
   if (!practices.length) return;
 
   const transport = createTransport();
@@ -203,6 +252,8 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
   const from = process.env.FROM_EMAIL || "alerts@dentistradar.co.uk";
   const subject = `DentistRadar: ${practices.length} NHS dentist(s) accepting near ${postcode}`;
 
+  const unsubscribeUrl = buildUnsubscribeUrl(alertId, to);
+
   // Professional tabular HTML email
   const rowsHtml = practices
     .map((p) => {
@@ -210,11 +261,15 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
       const mapsLink = p.mapsUrl || profileLink;
       const distance = p.distanceText || "";
       const phone = p.phone || "";
+      const patientType = p.patientType || "Not specified";
 
       return `
         <tr>
           <td style="padding:8px 12px;border:1px solid #e0e0e0;">
             <strong>${p.name || p.practiceId}</strong>
+          </td>
+          <td style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">
+            ${patientType}
           </td>
           <td style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">
             ${distance}
@@ -249,6 +304,7 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
         <thead>
           <tr style="background:#f5f7fb;">
             <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:left;">Practice</th>
+            <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">Patient type</th>
             <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">Distance</th>
             <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">Phone</th>
             <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">NHS Page</th>
@@ -270,8 +326,11 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
         DentistRadar does not guarantee availability and cannot book appointments on your behalf.
       </p>
       <p style="font-size:12px;color:#777;margin-top:8px;">
-        If you did not register for this alert or no longer wish to receive updates, please reply to this
-        email or contact DentistRadar support so we can remove your details.
+        If you no longer wish to receive alerts for this postcode, you can
+        <a href="${unsubscribeUrl}" target="_blank">unsubscribe from this alert here</a>.
+      </p>
+      <p style="font-size:12px;color:#777;margin-top:4px;">
+        If you did not register for this alert, please ignore this email or contact DentistRadar support.
       </p>
     </div>
   `;
@@ -285,9 +344,11 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
         const profile =
           p.profileUrl || p.appointmentUrl || "(see NHS website for details)";
         const maps = p.mapsUrl || profile;
-        return `- ${p.name || p.practiceId}${distance}${phone}\n  NHS: ${profile}\n  Map: ${maps}\n`;
+        const patientType = p.patientType || "Not specified";
+        return `- ${p.name || p.practiceId} [${patientType}]${distance}${phone}\n  NHS: ${profile}\n  Map: ${maps}\n`;
       })
-      .join("\n");
+      .join("\n") +
+    `\n\nTo unsubscribe from this alert, visit: ${unsubscribeUrl}\n`;
 
   await transport.sendMail({
     from,
@@ -368,6 +429,7 @@ async function scanWatch(watch) {
   if (newAccepting.length) {
     try {
       await sendAcceptingEmail({
+        alertId,
         to: email,
         postcode,
         radiusMiles,
