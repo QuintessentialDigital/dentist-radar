@@ -181,7 +181,10 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
 // ----------- Core per-Watch scan -----------
 
 async function scanWatch(watch) {
-  const { _id: alertId, email, postcode, radiusMiles } = watch;
+  const { _id: alertId, email, postcode } = watch;
+
+  // 👇 Key: support both radiusMiles and radius, with a sensible default
+  const radiusMiles = watch.radiusMiles ?? watch.radius ?? 25;
 
   const searchUrl = buildSearchUrl(postcode, radiusMiles);
   const t0 = Date.now();
@@ -228,116 +231,3 @@ async function scanWatch(watch) {
       // ✔ Per-user de-duplication
       const alreadySent = await EmailLog.findOne({
         alertId,
-        practiceId: practice.practiceId,
-        appointmentUrl,
-      }).lean();
-
-      if (!alreadySent) {
-        newAccepting.push({
-          ...practice,
-          appointmentUrl,
-        });
-      }
-    } else if (status === "not_accepting") {
-      totalNotAccepting++;
-    }
-
-    await sleep(400);
-  }
-
-  // ----- send & log -----
-  if (newAccepting.length) {
-    try {
-      await sendAcceptingEmail({
-        to: email,
-        postcode,
-        radiusMiles,
-        practices: newAccepting,
-      });
-
-      const bulk = EmailLog.collection.initializeUnorderedBulkOp();
-
-      newAccepting.forEach((p) => {
-        bulk
-          .find({
-            alertId,
-            practiceId: p.practiceId,
-            appointmentUrl: p.appointmentUrl,
-          })
-          .upsert()
-          .updateOne({
-            $setOnInsert: {
-              alertId,
-              email,
-              postcode,
-              radiusMiles,
-              practiceId: p.practiceId,
-              appointmentUrl: p.appointmentUrl,
-              sentAt: new Date(),
-            },
-          });
-      });
-
-      await bulk.execute();
-    } catch (err) {
-      console.error("Email/log error:", err.message);
-    }
-  }
-
-  return {
-    alertId,
-    email,
-    postcode,
-    radiusMiles,
-    scanned,
-    totalAccepting,
-    totalNotAccepting,
-    newAccepting: newAccepting.length,
-    tookMs: Date.now() - t0,
-  };
-}
-
-// ----------- Orchestrators -----------
-
-export async function runAllScans() {
-  await connectMongo();
-
-  const activeWatches = await Watch.find({ active: true }).lean();
-
-  console.log(
-    `Starting scan for ${activeWatches.length} active alert(s) at ${new Date().toISOString()}`
-  );
-
-  const results = [];
-
-  for (const watch of activeWatches) {
-    const result = await scanWatch(watch);
-    results.push(result);
-
-    await Watch.updateOne(
-      { _id: watch._id },
-      { $set: { lastRunAt: new Date() } }
-    );
-  }
-
-  return results;
-}
-
-// ✔ Export alias for server.js
-export async function runScan() {
-  return runAllScans();
-}
-
-// Allow running directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runAllScans()
-    .then((res) => {
-      console.log("Scan complete");
-      console.log(JSON.stringify(res, null, 2));
-      process.exit(0);
-    })
-    .catch((err) => {
-      console.error("Scan error", err);
-      process.exit(1);
-    });
-}
