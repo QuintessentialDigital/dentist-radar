@@ -1,40 +1,34 @@
 /**
- * DentistRadar — scanner.js (v10.7)
- * - HTML results discovery (two URL patterns) + rel="next"
- * - Appointments-first; fallback to detail if needed
- * - BALANCED acceptance:
- *     • Accepts: strong NHS phrases, “registering new NHS patients”, or the “currently accepts … if they are:” list
- *     • Excludes: “has not confirmed…”, waitlist/interest only, explicit negatives/private-only
- *     • Child-only only if INCLUDE_CHILD_ONLY=true
- * - Evidence logging (PracticeEvidence + EmailLog today-key)
- * - Professional emails via emailTemplates.js
+ * DentistRadar — scanner.js (v10.3 + simplified classifier)
+ * - Discovery via NHS HTML results (two variants) + rel="next"
+ * - Appointments-first classify; detail fallback if thin
+ * - Classifier tuned to current NHS wording (simple + robust)
+ * - Evidence capture (verdict, reason, snippet)
+ * - Returns emailAttempts so cron can log correctly
  */
 
 import axios from "axios";
 import axiosRetry from "axios-retry";
 import * as cheerio from "cheerio";
+import mongoose from "mongoose";
 import pLimit from "p-limit";
 import dayjs from "dayjs";
 
-import { connectMongo, Watch, EmailLog, PracticeEvidence } from "./models.js";
+import { connectMongo, Watch, EmailLog } from "./models.js";
 import { renderEmail } from "./emailTemplates.js";
 
-/* ─────────────── ENV ─────────────── */
+/* ENV */
 const {
   MONGO_URI,
   EMAIL_FROM,
   POSTMARK_SERVER_TOKEN,
   POSTMARK_TOKEN,
   POSTMARK_MESSAGE_STREAM = "outbound",
-
   MAX_CONCURRENCY = "6",
   INCLUDE_CHILD_ONLY = "false",
-
+  DEBUG_DISCOVERY = "false",
   DISCOVERY_REQUEST_TIMEOUT_MS = "60000",
   DISCOVERY_RETRY = "3",
-
-  DEBUG_DISCOVERY = "false",
-  DEBUG_ACCEPT_TEXT = "false",
   DEBUG_RUN_REPORT = "false",
   DEBUG_ADMIN_EMAIL = "",
 } = process.env;
@@ -47,7 +41,6 @@ const CONCURRENCY = Math.max(1, Number(MAX_CONCURRENCY) || 6);
 const REQUEST_TIMEOUT = Math.max(10000, Number(DISCOVERY_REQUEST_TIMEOUT_MS) || 60000);
 const RETRIES = Math.max(0, Number(DISCOVERY_RETRY) || 3);
 const DEBUG = String(DEBUG_DISCOVERY).toLowerCase() === "true";
-const DEBUG_TEXT = String(DEBUG_ACCEPT_TEXT).toLowerCase() === "true";
 const RUN_REPORT = String(DEBUG_RUN_REPORT).toLowerCase() === "true";
 const ADMIN_EMAIL = (DEBUG_ADMIN_EMAIL || "").trim();
 
@@ -57,9 +50,32 @@ const UA =
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const normPc = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
 const validEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
-const clean = (s) => String(s || "").replace(/\s+/g, " ").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
+const clean = (s) =>
+  String(s || "")
+    .replace(/\s+/g, " ")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim();
 
-/* ───────── HTTP client with retry ───────── */
+/* Evidence model (guarded, separate collection) */
+const PracticeEvidenceSchema =
+  mongoose.models.PracticeEvidence?.schema ||
+  new mongoose.Schema(
+    {
+      practiceUrl: { type: String, index: true },
+      dateKey: { type: String, index: true },
+      verdict: String,
+      reason: String,
+      source: String,
+      snippet: String,
+      scannedAt: { type: Date, default: Date.now },
+    },
+    { versionKey: false, collection: "PracticeEvidence" }
+  );
+
+const PracticeEvidence =
+  mongoose.models.PracticeEvidence || mongoose.model("PracticeEvidence", PracticeEvidenceSchema);
+
+/* HTTP client w/ retry */
 const client = axios.create({
   timeout: REQUEST_TIMEOUT,
   maxRedirects: 7,
@@ -75,6 +91,7 @@ const client = axios.create({
     Connection: "keep-alive",
   },
 });
+
 axiosRetry(client, {
   retries: RETRIES,
   retryDelay: axiosRetry.exponentialDelay,
@@ -85,6 +102,7 @@ axiosRetry(client, {
     return s === 408 || s === 429 || (s >= 500 && s < 600);
   },
 });
+
 async function fetchPage(url) {
   try {
     const res = await client.get(url);
@@ -97,7 +115,7 @@ async function fetchPage(url) {
   }
 }
 
-/* ───────── Discovery helpers ───────── */
+/* Discovery */
 function resultsUrlVariants(postcode, radius) {
   const pc = encodeURIComponent(postcode);
   const base = "https://www.nhs.uk";
@@ -106,6 +124,7 @@ function resultsUrlVariants(postcode, radius) {
     `${base}/service-search/find-a-dentist/results?postcode=${pc}&distance=${radius}`,
   ];
 }
+
 function absolutize(baseUrl, href) {
   try {
     return new URL(href, baseUrl).toString();
@@ -113,6 +132,7 @@ function absolutize(baseUrl, href) {
     return "";
   }
 }
+
 function relNext($) {
   const link =
     $('a[rel="next"]').attr("href") ||
@@ -121,13 +141,24 @@ function relNext($) {
     $('a.nhsuk-pagination__link[aria-label*="Next"]').attr("href");
   return link ? String(link) : "";
 }
+
 function sanitizeAddress(raw) {
   if (!raw) return raw;
-  const parts = raw.split(/[\n\r]+| {2,}/).map((s) => s.trim()).filter(Boolean);
-  const filtered = parts.filter((line) => !/mile/i.test(line) && !/^this organisation is/i.test(line));
-  const addr = filtered.join(", ").replace(/,\s*,/g, ", ").replace(/\s+,/g, ",").trim();
+  const parts = raw
+    .split(/[\n\r]+| {2,}/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const filtered = parts.filter(
+    (line) => !/mile/i.test(line) && !/^this organisation is/i.test(line)
+  );
+  const addr = filtered
+    .join(", ")
+    .replace(/,\s*,/g, ", ")
+    .replace(/\s+,/g, ",")
+    .trim();
   return addr || undefined;
 }
+
 function nameFromUrl(detailUrl) {
   try {
     const u = new URL(detailUrl);
@@ -141,11 +172,11 @@ function nameFromUrl(detailUrl) {
   }
 }
 
-/* Extract practices from results HTML */
 function extractPracticesFromResults(html, baseUrl) {
   const $ = cheerio.load(html);
   const RX = /https:\/\/www\.nhs\.uk\/services\/dentist[s]?\/[A-Za-z0-9\-/%?_.#=]+/g;
   const mapByUrl = new Map();
+
   const push = (obj) => {
     const key = obj.detailUrl?.split("#")[0];
     if (!key) return;
@@ -153,6 +184,7 @@ function extractPracticesFromResults(html, baseUrl) {
     mapByUrl.set(key, merged);
   };
 
+  // Main cards
   const cards = $(".nhsuk-card, .nhsuk-grid-row, li, article, .nhsuk-results__item");
   cards.each((_, el) => {
     const scope = $(el);
@@ -162,9 +194,16 @@ function extractPracticesFromResults(html, baseUrl) {
       scope.find("a.nhsuk-card__link").attr("href") ||
       "";
     if (!href) return;
+
     const detailUrl = absolutize(baseUrl, href);
 
-    const nameRaw = clean(scope.find("h2, h3, .nhsuk-card__heading, .nhsuk-heading-m").first().text()) || undefined;
+    const nameRaw =
+      clean(
+        scope
+          .find("h2, h3, .nhsuk-card__heading, .nhsuk-heading-m")
+          .first()
+          .text()
+      ) || undefined;
 
     const telHref =
       scope.find('a[href^="tel:"]').first().attr("href") ||
@@ -183,13 +222,18 @@ function extractPracticesFromResults(html, baseUrl) {
     const address = sanitizeAddress(addressRaw);
 
     let distanceText = clean(
-      scope.find(':contains("mile")').filter((i, n) => /mile/i.test($(n).text())).first().text()
+      scope
+        .find(':contains("mile")')
+        .filter((i, n) => /mile/i.test($(n).text()))
+        .first()
+        .text()
     );
     if (!distanceText) distanceText = undefined;
 
     push({ detailUrl, name: nameRaw, phone, address, distanceText });
   });
 
+  // Script blobs
   $("script").each((_, s) => {
     if (s.attribs?.src) return;
     const txt = $(s).text() || "";
@@ -197,6 +241,7 @@ function extractPracticesFromResults(html, baseUrl) {
     if (m) m.forEach((u) => push({ detailUrl: u }));
   });
 
+  // Raw HTML text
   const body = typeof html === "string" ? html : $.root().html() || "";
   const hits = body.match(RX);
   if (hits) hits.forEach((u) => push({ detailUrl: u }));
@@ -209,13 +254,11 @@ async function discoverPractices(postcode, radius) {
   const queue = [...start];
   const seenUrl = new Set();
   const mapByDetail = new Map();
-  let pagesVisited = 0;
 
-  while (queue.length && pagesVisited < 12) {
+  while (queue.length && seenUrl.size < 12) {
     const url = queue.shift();
     if (seenUrl.has(url)) continue;
     seenUrl.add(url);
-    pagesVisited++;
 
     const html = await fetchPage(url);
     if (!html) continue;
@@ -233,13 +276,14 @@ async function discoverPractices(postcode, radius) {
       const abs = absolutize(url, nextHref);
       if (abs && !seenUrl.has(abs) && queue.length < 12) queue.push(abs);
     }
+
     await sleep(120);
   }
 
   return Array.from(mapByDetail.values());
 }
 
-/* ───────── Appointments resolution + text extraction ───────── */
+/* Appointments resolution + text extraction */
 function findAppointmentsHref($) {
   let href =
     $('a[href*="/appointments"]').attr("href") ||
@@ -259,6 +303,7 @@ function findAppointmentsHref($) {
   }
   return href || "";
 }
+
 async function resolveAppointmentsUrl(detailUrl) {
   const detailHtml = await fetchPage(detailUrl);
   if (!detailHtml) return "";
@@ -278,22 +323,25 @@ async function resolveAppointmentsUrl(detailUrl) {
   }
   return "";
 }
+
 function extractAppointmentsText(html) {
   const $ = cheerio.load(html);
   const buckets = [];
 
   $("h1,h2,h3").each((_, h) => {
     const heading = String($(h).text() || "").toLowerCase();
-    if (/appointment|opening\s+times|patients|registration|services/i.test(heading)) {
+    if (/appointment|opening\s+times|patients|registration/.test(heading)) {
       const buf = [];
-      let cur = $(h).next(), hops = 0;
+      let cur = $(h).next();
+      let hops = 0;
       while (cur.length && hops < 40) {
         const tag = (cur[0].tagName || "").toLowerCase();
         if (/^h[1-6]$/.test(tag)) break;
         if (["p", "div", "li", "ul", "ol", "section"].includes(tag)) {
           buf.push(String(cur.text() || "").replace(/\s+/g, " ").trim());
         }
-        cur = cur.next(); hops++;
+        cur = cur.next();
+        hops++;
       }
       const joined = buf.join(" ").trim();
       if (joined.length > 60) buckets.push(joined);
@@ -301,7 +349,13 @@ function extractAppointmentsText(html) {
   });
 
   if (!buckets.length) {
-    const wrappers = ["main", "#maincontent", ".nhsuk-main-wrapper", ".nhsuk-width-container", ".nhsuk-u-reading-width"];
+    const wrappers = [
+      "main",
+      "#maincontent",
+      ".nhsuk-main-wrapper",
+      ".nhsuk-width-container",
+      ".nhsuk-u-reading-width",
+    ];
     for (const sel of wrappers) {
       const t = String($(sel).text() || "").replace(/\s+/g, " ").trim();
       if (t.length > 200) buckets.push(t);
@@ -317,54 +371,100 @@ function extractAppointmentsText(html) {
   return buckets[0];
 }
 
-/* ───────── Classifier (BALANCED) ─────────
-   ACCEPTING if:
-   - strong NHS accept phrases OR
-   - the explicit NHS pattern that introduces an eligibility list (“… currently accepts new NHS patients … if they are:”)
-   CHILD_ONLY if: explicit children-only acceptance
-   NONE if:
-   - “has not confirmed if they currently accept”
-   - explicit negatives / private-only
-   - waitlist / register your interest only
-*/
-function classifyAcceptance(text) {
-  const t = String(text || "").toLowerCase().replace(/\s+/g, " ").replace(/’/g, "'");
+/* Classifier + helpers (simplified to match NHS wording) */
+function classifyAcceptanceSimple(text) {
+  const t = clean(text).toLowerCase();
 
-  // hard negatives
+  if (!t) return "UNKNOWN";
+
+  // Explicit "not provided" / "not confirmed" text should NOT be treated as accepting
   if (
-    /(not (currently )?accept(?:ing)?|no longer accepting|cannot accept|we are not accepting|private only|emergency only|urgent care only|walk-?in only|not taking (on )?nhs|no nhs spaces|nhs capacity full|nhs closed|we do not accept nhs|nhs not available)/i.test(
-      t
-    )
-  ) return "NONE";
-
-  // NHS “not confirmed” line
-  if (/has not confirmed if (they )?currently accept/i.test(t)) return "NONE";
-
-  // waitlist / interest only
-  if (/\b(waiting list|join (the )?waiting list|register your interest|expression of interest)\b/i.test(t)) {
+    t.includes("has not yet provided information about whether they are accepting new nhs patients") ||
+    t.includes("has not confirmed if they currently accept new nhs patients for routine dental care")
+  ) {
     return "NONE";
   }
 
-  // child only
-  const child = /(children only|only accept(?:ing)? children|under\s*18|aged\s*(1[0-7]|[1-9])\s*or\s*under)/i;
-  const childAccept = child.test(t) && /\b(accept|accepting|taking on|register|registering)\b/.test(t);
-  if (childAccept) return "CHILD_ONLY";
+  // Strong negation
+  const negRe = /(not (currently )?accept(?:ing)?|no longer accepting|cannot accept|we are not accepting|nhs not available|nhs list closed|nhs capacity full|private only|nhs closed|not taking (on )?nhs)/i;
+  if (negRe.test(t)) return "NONE";
 
-  // strong positives
-  const strong =
-    /(this dentist currently accepts new nhs patients|currently accept\w*\s+new\s+nhs\s+patients|accept\w*\s+new\s+nhs\s+patients|taking\s+on\s+new\s+nhs\s+patients|now\s+accept\w*\s+nhs\s+patients|we\s+can\s+accept\s+new\s+nhs\s+patients|we\s+are\s+able\s+to\s+register\s+nhs\s+patients)/i;
-  if (strong.test(t)) return "ACCEPTING";
+  // Child-only patterns (from NHS wording)
+  const childPhrases = [
+    "children aged 17 or under",
+    "children aged 16 or under",
+    "children aged under 18",
+    "only accepts new nhs patients for routine dental care if they are children",
+    "only accept new nhs patients for routine dental care if they are children",
+  ];
+  const hasChildPhrase = childPhrases.some((p) => t.includes(p));
+  const hasChildrenWord = t.includes("children");
+  const hasUnder18 = /under\s*18/.test(t) || /aged\s*(1[0-7]|[1-9])\s*or\s*under/.test(t);
 
-  // explicit “eligibility list” pattern used on NHS pages
-  if (/currently accepts new nhs patients.*if they are:/i.test(t)) return "ACCEPTING";
+  if (
+    (t.includes("currently accepts new nhs patients") || t.includes("accepting new nhs patients")) &&
+    (hasChildPhrase || (hasChildrenWord && hasUnder18))
+  ) {
+    return "CHILD_ONLY";
+  }
 
-  // default: non-committal → NONE
-  return "NONE";
+  // Very strong adult/all acceptance — main NHS phrase:
+  // "This dentist currently accepts new NHS patients for routine dental care"
+  if (t.includes("this dentist currently accepts new nhs patients for routine dental care")) {
+    // If it clearly says adults only
+    if (t.includes("adults aged 18 or over") || t.includes("adults and children")) {
+      return "ACCEPTING";
+    }
+    // If no explicit children restriction, we still treat as accepting
+    if (!hasChildrenWord || !hasUnder18) return "ACCEPTING";
+  }
+
+  // Generic positive patterns
+  const genericAcceptRe =
+    /(\baccept(?:ing)?\s+new\s+nhs\s+patients\b|\btaking\s+on\s+new\s+nhs\s+patients\b|\bregister(?:ing)?\s+new\s+nhs\s+patients\b)/i;
+  if (genericAcceptRe.test(t) && !negRe.test(t)) {
+    return "ACCEPTING";
+  }
+
+  // If it talks about NHS + "on a waiting list" → not currently available
+  if (
+    /\bwaiting list\b/i.test(t) &&
+    /\bnhs\b/i.test(t)
+  ) {
+    return "NONE";
+  }
+
+  // If text has no NHS / accept keywords at all, we treat as UNKNOWN
+  if (!/\bnhs\b/i.test(t) && !/\baccept|accepting|taking on|registering|patients\b/i.test(t)) {
+    return "UNKNOWN";
+  }
+
+  return "UNKNOWN";
 }
 
-function extractSnippet(text, max = 360) {
+function inferReason(text) {
+  const t = String(text || "").toLowerCase();
+  if (!t) return "APPT_THIN";
+  if (/waiting list|register your interest|expression of interest/.test(t)) return "WAITLIST";
+  if (/private only|nhs not available/.test(t)) return "PRIVATE_ONLY";
+  if (
+    /children only|only accept(?:ing)? children|under\s*18|aged\s*(1[0-7]|[1-9])\s*or\s*under/.test(t)
+  )
+    return "CHILD_ONLY";
+  if (
+    /not accept|no longer accept|cannot accept|not taking|nhs list closed|nhs capacity full|nhs closed/.test(
+      t
+    )
+  )
+    return "NEGATED";
+  if (!/(nhs|accept|accepting|taking on|registering|register|patients)/.test(t)) return "NO_KEYWORDS";
+  return "UNKNOWN";
+}
+
+function extractSnippet(text, max = 420) {
   const t = String(text || "");
-  const rx = /(accept|accepting|taking on|register|nhs|waiting list|expression of interest|not accept|has not confirmed)/i;
+  const rx =
+    /(this dentist currently accepts new nhs patients|accepting new nhs patients|taking on new nhs patients|nhs patients|waiting list|expression of interest)/i;
   const m = t.match(rx);
   if (!m) return t.slice(0, max).trim();
   const i = Math.max(0, t.toLowerCase().indexOf(m[0].toLowerCase()));
@@ -372,55 +472,91 @@ function extractSnippet(text, max = 360) {
   return t.slice(start, start + max).trim();
 }
 
-/* ───────── Email via Postmark ───────── */
+/* Email via Postmark */
 async function sendEmail(toList, subject, html) {
   const token = POSTMARK_SERVER_TOKEN || POSTMARK_TOKEN || "";
   if (!toList?.length || !token) return { ok: false };
 
   const res = await client.post(
     "https://api.postmarkapp.com/email",
-    { From: EMAIL_FROM, To: toList.join(","), Subject: subject, HtmlBody: html, MessageStream: POSTMARK_MESSAGE_STREAM },
-    { headers: { "X-Postmark-Server-Token": token, "Content-Type": "application/json", Accept: "application/json" } }
+    {
+      From: EMAIL_FROM,
+      To: toList.join(","),
+      Subject: subject,
+      HtmlBody: html,
+      MessageStream: POSTMARK_MESSAGE_STREAM,
+    },
+    {
+      headers: {
+        "X-Postmark-Server-Token": token,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+    }
   );
+
   return res.status >= 200 && res.status < 300
     ? { ok: true, id: res.data?.MessageID }
     : { ok: false, status: res.status, body: res.data };
 }
 
-/* ───────── Build jobs (watches) ───────── */
+/* Build jobs — with fallback to physical 'watches' collection */
 async function buildJobs(filterPostcode) {
-  const match = filterPostcode ? { postcode: normPc(filterPostcode) } : {};
+  const norm = (pc) => String(pc || "").toUpperCase().replace(/\s+/g, " ").trim();
+  const match = filterPostcode ? { postcode: norm(filterPostcode) } : {};
 
   let rows = await Watch.aggregate([
     { $match: match },
-    { $group: { _id: "$postcode", radius: { $first: "$radius" }, emails: { $addToSet: "$email" } } },
+    {
+      $group: {
+        _id: "$postcode",
+        radius: { $first: "$radius" },
+        emails: { $addToSet: "$email" },
+      },
+    },
     { $project: { _id: 0, postcode: "$_id", radius: 1, emails: 1 } },
   ]);
 
   if (!rows || rows.length === 0) {
     try {
-      const coll = (await import("mongoose")).default.connection.db.collection("watches");
+      const coll = mongoose.connection.db.collection("watches");
       rows = await coll
         .aggregate([
           { $match: match },
-          { $group: { _id: "$postcode", radius: { $first: "$radius" }, emails: { $addToSet: "$email" } } },
+          {
+            $group: {
+              _id: "$postcode",
+              radius: { $first: "$radius" },
+              emails: { $addToSet: "$email" },
+            },
+          },
           { $project: { _id: 0, postcode: "$_id", radius: 1, emails: 1 } },
         ])
         .toArray();
-    } catch {
-      // no-op
+    } catch (e) {
+      console.log("[WARN] Fallback aggregate on 'watches' failed:", e?.message);
     }
   }
 
   return (rows || []).map((r) => ({
-    postcode: normPc(r.postcode),
+    postcode: norm(r.postcode),
     radiusMiles: Math.max(1, Math.min(30, Number(r.radius) || 10)),
-    recipients: (r.emails || []).map((e) => String(e).trim().toLowerCase()).filter(validEmail),
+    recipients: (r.emails || [])
+      .map((e) => String(e).trim().toLowerCase())
+      .filter(validEmail),
   }));
 }
 
-/* ───────── Admin run report (optional) ───────── */
-async function sendRunReport({ postcode, radius, discovered, apptResolved, recipientsCount }) {
+/* Optional: run report when nothing sent */
+async function sendRunReport({
+  postcode,
+  radius,
+  discovered,
+  apptResolved,
+  apptFallback,
+  unknown,
+  recipientsCount,
+}) {
   if (!RUN_REPORT || !ADMIN_EMAIL) return;
   const subject = `Scan report — ${postcode} (${radius} mi)`;
   const html = `
@@ -430,13 +566,15 @@ async function sendRunReport({ postcode, radius, discovered, apptResolved, recip
       <ul>
         <li>Discovered practices: <b>${discovered}</b></li>
         <li>Appointments resolved: <b>${apptResolved}</b></li>
+        <li>Fallback to detail: <b>${apptFallback}</b></li>
+        <li>Unknown verdicts: <b>${unknown}</b></li>
         <li>Recipients in group: <b>${recipientsCount}</b></li>
       </ul>
     </div>`;
   await sendEmail([ADMIN_EMAIL], subject, html);
 }
 
-/* ───────── Scan job ───────── */
+/* Scan a postcode group */
 async function scanJob({ postcode, radiusMiles, recipients }) {
   console.log(`\n--- Scan: ${postcode} (${radiusMiles} miles) ---`);
 
@@ -450,123 +588,127 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
   const limit = pLimit(CONCURRENCY);
   const dateKey = dayjs().format("YYYY-MM-DD");
 
-  const acceptingCards = [];
-  const childOnlyCards = [];
+  const acceptingDetails = [];
+  const childOnlyDetails = [];
 
-  let cApptResolved = 0;
+  let cApptResolved = 0,
+    cApptFallback = 0,
+    cUnknown = 0;
 
   await Promise.all(
-    practices.map((p) =>
+    practices.map((p, idx) =>
       limit(async () => {
-        const detailUrl = p.detailUrl;
-        if (!detailUrl) return;
+        try {
+          const detailUrl = p.detailUrl;
+          if (!detailUrl) return;
 
-        const already = await EmailLog.findOne({ practiceUrl: detailUrl, dateKey }).lean();
-        if (already) return;
+          const already = await EmailLog.findOne({ practiceUrl: detailUrl, dateKey }).lean();
+          if (already) return;
 
-        // appointments-first
-        const apptUrl = await resolveAppointmentsUrl(detailUrl);
-        let sourceHtml = apptUrl ? await fetchPage(apptUrl) : "";
-        if (apptUrl && sourceHtml) cApptResolved++;
+          // Appointments first
+          let sourceHtml = null;
+          const apptUrl = await resolveAppointmentsUrl(detailUrl);
+          if (apptUrl) {
+            sourceHtml = await fetchPage(apptUrl);
+            cApptResolved++;
+          } else {
+            cApptFallback++;
+          }
 
-        // fallback: detail
-        if (!sourceHtml || sourceHtml.length < 450) {
-          const detailHtml = await fetchPage(detailUrl);
-          if (detailHtml && detailHtml.length > 450) sourceHtml = detailHtml;
-        }
-        if (!sourceHtml) {
+          // Fallback to detail if thin
+          let usedSource = apptUrl ? "appointments" : "detail";
+          if (!sourceHtml || sourceHtml.length < 450) {
+            const detailHtml = await fetchPage(detailUrl);
+            if (detailHtml && detailHtml.length > 450) {
+              sourceHtml = detailHtml;
+              usedSource = "detail";
+            }
+          }
+          if (!sourceHtml) {
+            await PracticeEvidence.create({
+              practiceUrl: detailUrl,
+              dateKey,
+              verdict: "UNKNOWN",
+              reason: "NO_APPT_PAGE",
+              source: apptUrl ? "appointments" : "detail",
+              snippet: "",
+            });
+            return;
+          }
+
+          const text = extractAppointmentsText(sourceHtml);
+          const verdict = classifyAcceptanceSimple(text);
+          if (verdict === "UNKNOWN") cUnknown++;
+
+          if (DEBUG && idx < 5) {
+            console.log(
+              `[DEBUG VERDICT] ${detailUrl} → ${verdict} (snippet="${extractSnippet(text, 160)}")`
+            );
+          }
+
+          const reason = verdict === "ACCEPTING" ? "MATCH" : inferReason(text);
+          const snippet = extractSnippet(text);
+
           await PracticeEvidence.create({
             practiceUrl: detailUrl,
             dateKey,
-            verdict: "NONE",
-            reason: "NO_APPT_OR_DETAIL",
-            source: apptUrl ? "appointments" : "detail",
-            snippet: "",
+            verdict,
+            reason,
+            source: usedSource,
+            snippet,
           });
-          return;
-        }
 
-        const text = extractAppointmentsText(sourceHtml);
-        if (DEBUG_TEXT) {
-          console.log("[ACCEPT TEXT]", detailUrl, "→", (text || "").slice(0, 260));
-        }
-        const verdict = classifyAcceptance(text);
-
-        // enrich card
-        let name = p.name;
-        let phone = p.phone;
-        let address = p.address;
-        let distanceText = p.distanceText;
-
-        if (!name || !phone || !address) {
-          const $ = cheerio.load(sourceHtml);
-          if (!name) name = clean($("h1").first().text()) || nameFromUrl(detailUrl) || undefined;
-          if (!phone) {
-            const tel = $('a[href^="tel:"]').first().attr("href") || "";
-            if (tel) phone = clean(tel.replace(/^tel:/i, ""));
-          }
-          if (!address) {
-            const addr = clean($("address").first().text());
-            address = sanitizeAddress(addr) || address;
-          }
-        }
-
-        const card = {
-          name,
-          address,
-          phone,
-          distanceText,
-          mapUrl:
-            address
+          const card = {
+            name:
+              p.name ||
+              (usedSource === "detail"
+                ? cheerio.load(sourceHtml)("h1").first().text().trim() || undefined
+                : undefined) ||
+              nameFromUrl(detailUrl),
+            address: p.address || undefined,
+            phone: p.phone || undefined,
+            distanceText: p.distanceText || undefined,
+            mapUrl: p.address
               ? `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(
                   postcode
-                )}&destination=${encodeURIComponent(address)}`
+                )}&destination=${encodeURIComponent(p.address)}`
               : undefined,
-          appointmentUrl: apptUrl || undefined,
-          detailUrl,
-          checkedAt: new Date(),
-        };
+            appointmentUrl: apptUrl || undefined,
+            detailUrl,
+            checkedAt: new Date(),
+          };
 
-        await PracticeEvidence.create({
-          practiceUrl: detailUrl,
-          dateKey,
-          verdict,
-          reason:
-            verdict === "ACCEPTING"
-              ? "MATCH"
-              : verdict === "CHILD_ONLY"
-              ? "CHILD_ONLY"
-              : "FILTERED",
-          source: apptUrl ? "appointments" : "detail",
-          snippet: extractSnippet(text),
-        });
-
-        if (verdict === "ACCEPTING") {
-          acceptingCards.push(card);
-          await EmailLog.create({
-            type: "availability",
-            practiceUrl: detailUrl,
-            dateKey,
-            status: "ACCEPTING",
-            sentAt: new Date(),
-          });
-        } else if (verdict === "CHILD_ONLY" && INCLUDE_CHILD) {
-          childOnlyCards.push(card);
-          await EmailLog.create({
-            type: "availability",
-            practiceUrl: detailUrl,
-            dateKey,
-            status: "CHILD_ONLY",
-            sentAt: new Date(),
-          });
+          if (verdict === "ACCEPTING") {
+            acceptingDetails.push(card);
+            await EmailLog.create({
+              type: "availability",
+              practiceUrl: detailUrl,
+              dateKey,
+              status: "ACCEPTING",
+              sentAt: new Date(),
+            });
+          } else if (verdict === "CHILD_ONLY" && INCLUDE_CHILD) {
+            childOnlyDetails.push(card);
+            await EmailLog.create({
+              type: "availability",
+              practiceUrl: detailUrl,
+              dateKey,
+              status: "CHILD_ONLY",
+              sentAt: new Date(),
+            });
+          }
+        } catch (e) {
+          if (DEBUG) console.log("[SCAN ITEM ERR]", e?.message);
         }
       })
     )
   );
 
-  console.log(`  • Resolved appt pages: ${cApptResolved}`);
+  console.log(
+    `  • Resolved appt pages: ${cApptResolved}, Fallback-to-detail: ${cApptFallback}, Unknown verdicts: ${cUnknown}`
+  );
 
-  const hasAccepting = acceptingCards.length > 0 || (INCLUDE_CHILD && childOnlyCards.length > 0);
+  const hasAccepting = acceptingDetails.length > 0 || (INCLUDE_CHILD && childOnlyDetails.length > 0);
   let emailAttempts = 0;
 
   if (!hasAccepting) {
@@ -576,38 +718,40 @@ async function scanJob({ postcode, radiusMiles, recipients }) {
       radius: radiusMiles,
       discovered: practices.length,
       apptResolved: cApptResolved,
+      apptFallback: cApptFallback,
+      unknown: cUnknown,
       recipientsCount: recipients?.length || 0,
     });
     return { accepting: [], childOnly: [], emailAttempts, scanned: practices.length };
   }
 
   if (!recipients?.length) {
-    console.log(`Found results but no recipients; not emailing.`);
-    return { accepting: acceptingCards, childOnly: childOnlyCards, emailAttempts, scanned: practices.length };
+    console.log(
+      `Found ${acceptingDetails.length + childOnlyDetails.length} results but no recipients; not emailing.`
+    );
+    return { accepting: acceptingDetails, childOnly: childOnlyDetails, emailAttempts, scanned: practices.length };
   }
 
-  const all = [...acceptingCards, ...(INCLUDE_CHILD ? childOnlyCards : [])];
+  const all = [...acceptingDetails, ...(INCLUDE_CHILD ? childOnlyDetails : [])];
   const { subject, html } = renderEmail("availability", {
     postcode,
     radius: radiusMiles,
     practices: all,
+    includeChildOnly: INCLUDE_CHILD,
     scannedAt: new Date(),
   });
 
   const sendRes = await sendEmail(recipients, subject, html);
   if (sendRes.ok) emailAttempts += 1;
 
-  return { accepting: acceptingCards, childOnly: childOnlyCards, emailAttempts, scanned: practices.length };
+  return { accepting: acceptingDetails, childOnly: childOnlyDetails, emailAttempts, scanned: practices.length };
 }
 
-/* ───────── Runner ───────── */
+/* Runner */
 export async function runScan(opts = {}) {
-  const mongoose = (await import("mongoose")).default;
-  if (mongoose.connection.readyState !== 1) {
-    await connectMongo(MONGO_URI);
-  }
+  if (mongoose.connection.readyState !== 1) await connectMongo(MONGO_URI);
 
-  console.log(`🦷 DentistRadar scanner — strict mode, timeout=${REQUEST_TIMEOUT}ms retries=${RETRIES}`);
+  console.log(`🦷 DentistRadar scanner — direct HTML, timeout=${REQUEST_TIMEOUT}ms retries=${RETRIES}`);
 
   const jobs = await buildJobs(opts.postcode);
   if (!jobs.length) {
