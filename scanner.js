@@ -20,20 +20,19 @@ function sleep(ms) {
 
 // ---------------- NHS helpers ----------------
 
+// NHS search results URL (new pattern)
 function buildSearchUrl(postcode, radiusMiles) {
-  // NHS now expects the location in the PATH, not as ?postcode=...
   const encPostcode = encodeURIComponent(postcode.trim());
-  // radiusMiles is kept for internal logic / reporting, not sent to NHS here
+  // radiusMiles is used for reporting, not sent to NHS
   return `https://www.nhs.uk/service-search/find-a-dentist/results/${encPostcode}`;
 }
 
-// NEW: appointments info is on the main dentist page now
-function buildPracticeUrl(detailUrl) {
+// Appointments page for a dentist (new pattern: /appointments)
+function buildAppointmentsUrl(detailUrl) {
   if (!detailUrl) return null;
-  // Strip querystring, normalise trailing slash
   let url = detailUrl.split("?")[0];
   if (url.endsWith("/")) url = url.slice(0, -1);
-  return url; // no extra /appointments-and-opening-times
+  return `${url}/appointments`;
 }
 
 async function fetchHtml(url) {
@@ -82,31 +81,40 @@ function extractPracticesFromSearch(html) {
   return results;
 }
 
-// Parse dentist page for accepting patterns
-function parseAcceptanceFromPracticePage(html) {
+// Parse appointments page for accepting patterns (new NHS wording)
+function parseAcceptanceFromAppointments(html) {
   const lower = html.toLowerCase();
 
   const positivePatterns = [
+    // explicit positive
     "this dentist currently accepts new nhs patients for routine dental care",
+    "when availability allows, this dentist accepts new nhs patients for routine dental care",
+    "when availability allows, this dentist accepts new nhs patients if they are",
+    // generic fallbacks
     "this dentist currently accepts new nhs patients",
     "accepting new nhs patients",
     "is accepting new nhs patients",
-    // some pages say "when availability allows"
-    "when availability allows, this dentist accepts new nhs patients",
   ];
 
   const negativePatterns = [
+    "this dentist does not currently accept new nhs patients for routine dental care",
     "this dentist is not accepting new nhs patients",
     "this dentist currently does not accept new nhs patients",
     "not accepting new nhs patients",
-    "is not accepting new nhs patients",
   ];
 
-  const positiveHit = positivePatterns.some((p) => lower.includes(p));
-  const negativeHit = negativePatterns.some((p) => lower.includes(p));
+  const unknownPatterns = [
+    "this dentist has not confirmed if they currently accept new nhs patients for routine dental care",
+    "this dentist surgery has not given a recent update on whether they're taking new nhs patients",
+  ];
 
-  if (positiveHit && !negativeHit) return "accepting";
-  if (negativeHit && !positiveHit) return "not_accepting";
+  const pos = positivePatterns.some((p) => lower.includes(p));
+  const neg = negativePatterns.some((p) => lower.includes(p));
+  const unk = unknownPatterns.some((p) => lower.includes(p));
+
+  if (pos && !neg) return "accepting";
+  if (neg && !pos) return "not_accepting";
+  if (unk && !pos && !neg) return "unknown";
 
   return "unknown";
 }
@@ -142,14 +150,14 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
   const listHtml = practices
     .map(
       (p) =>
-        `<li><strong>${p.name || p.practiceId}</strong><br/><a href="${p.practiceUrl}" target="_blank">${p.practiceUrl}</a></li>`
+        `<li><strong>${p.name || p.practiceId}</strong><br/><a href="${p.appointmentUrl}" target="_blank">${p.appointmentUrl}</a></li>`
     )
     .join("");
 
   const html = `
     <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #333;">
       <h2 style="color:#0b5cff; margin-bottom: 16px;">Good news! NHS dentists are accepting new patients</h2>
-      <p>Based on your alert for postcode <strong>${postcode}</strong> within <strong>${radiusMiles} miles</strong>, we found the following practices currently accepting NHS patients:</p>
+      <p>Based on your alert for postcode <strong>${postcode}</strong> within <strong>${radiusMiles} miles</strong>, we found the following practices currently accepting NHS patients for routine dental care:</p>
       <ul>${listHtml}</ul>
       <p style="margin-top:16px;">Appointments availability can change quickly, so we recommend booking as soon as possible.</p>
       <p style="font-size:12px;color:#777;margin-top:24px;">
@@ -164,7 +172,7 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
     practices
       .map(
         (p) =>
-          `- ${p.name || p.practiceId}\n  NHS profile: ${p.practiceUrl}\n`
+          `- ${p.name || p.practiceId}\n  NHS appointments page: ${p.appointmentUrl}\n`
       )
       .join("\n");
 
@@ -198,7 +206,12 @@ async function scanWatch(watch) {
       email,
       postcode,
       radiusMiles,
+      scanned: 0,
+      totalAccepting: 0,
+      totalNotAccepting: 0,
+      newAccepting: 0,
       error: `Search fetch failed: ${err.message}`,
+      tookMs: Date.now() - t0,
     };
   }
 
@@ -212,18 +225,18 @@ async function scanWatch(watch) {
   for (const practice of practices) {
     scanned++;
 
-    const practiceUrl = buildPracticeUrl(practice.detailUrl);
-    if (!practiceUrl) continue;
+    const appointmentUrl = buildAppointmentsUrl(practice.detailUrl);
+    if (!appointmentUrl) continue;
 
-    let practiceHtml;
+    let appointmentsHtml;
     try {
-      practiceHtml = await fetchHtml(practiceUrl);
+      appointmentsHtml = await fetchHtml(appointmentUrl);
     } catch (err) {
-      console.warn("Practice fetch failed:", err.message);
+      console.warn("Appointments fetch failed:", err.message);
       continue;
     }
 
-    const status = parseAcceptanceFromPracticePage(practiceHtml);
+    const status = parseAcceptanceFromAppointments(appointmentsHtml);
 
     if (status === "accepting") {
       totalAccepting++;
@@ -232,13 +245,13 @@ async function scanWatch(watch) {
       const alreadySent = await EmailLog.findOne({
         alertId,
         practiceId: practice.practiceId,
-        appointmentUrl: practiceUrl, // still call it appointmentUrl in DB for compatibility
+        appointmentUrl,
       }).lean();
 
       if (!alreadySent) {
         newAccepting.push({
           ...practice,
-          practiceUrl,
+          appointmentUrl,
         });
       }
     } else if (status === "not_accepting") {
@@ -265,7 +278,7 @@ async function scanWatch(watch) {
           .find({
             alertId,
             practiceId: p.practiceId,
-            appointmentUrl: p.practiceUrl,
+            appointmentUrl: p.appointmentUrl,
           })
           .upsert()
           .updateOne({
@@ -275,7 +288,7 @@ async function scanWatch(watch) {
               postcode,
               radiusMiles,
               practiceId: p.practiceId,
-              appointmentUrl: p.practiceUrl,
+              appointmentUrl: p.appointmentUrl,
               sentAt: new Date(),
             },
           });
