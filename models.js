@@ -43,7 +43,7 @@ const watchSchema = new mongoose.Schema(
     email: { type: String, required: true, index: true }, // user email
     postcode: { type: String, required: true },
 
-    // Make this OPTIONAL so old code that uses "radius" still works
+    // Optional so old code that uses "radius" still works
     radiusMiles: { type: Number },
 
     // For backward compatibility if your server/front-end uses "radius"
@@ -56,46 +56,48 @@ const watchSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Index on what we typically care about
+// Index on common lookup fields
 watchSchema.index({ email: 1, postcode: 1, radiusMiles: 1, radius: 1 });
 
 // ----------------- EmailLog -----------------
 
 /**
- * EmailLog is where we prevent duplicates.
+ * EmailLog is where we prevent duplicates and keep a history of alerts.
  *
- * We de-dup per ALERT (watch) + PRACTICE, not globally.
+ * IMPORTANT:
+ * - We *relax* required constraints so legacy code that saves partial logs
+ *   doesn't throw validation errors.
+ * - Our scanner still writes full entries with all fields populated.
  */
+
 const emailLogSchema = new mongoose.Schema(
   {
     alertId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Watch",
-      required: true,
       index: true,
     },
-    email: { type: String, required: true, index: true },
-    postcode: { type: String, required: true },
+    email: { type: String, index: true },
+    postcode: { type: String },
+    radiusMiles: { type: Number },
 
-    // We'll log the effective radius used (miles)
-    radiusMiles: { type: Number, required: true },
-
-    practiceId: { type: String, required: true }, // NHS service ID / slug
-    appointmentUrl: { type: String, required: true },
+    practiceId: { type: String }, // e.g. NHS service ID or slug
+    appointmentUrl: { type: String },
 
     sentAt: { type: Date, default: Date.now },
   },
   { timestamps: true }
 );
 
-// An alert can only email a given practice once
-emailLogSchema.index(
-  { alertId: 1, practiceId: 1, appointmentUrl: 1 },
-  { unique: true }
-);
-
-// Helpful analytics index
+// Helpful analytics indices (non-unique to avoid conflicts with partial rows)
+emailLogSchema.index({ alertId: 1 });
 emailLogSchema.index({ email: 1, postcode: 1 });
+emailLogSchema.index({ practiceId: 1 });
+
+// NOTE:
+// We intentionally do NOT add a unique index here.
+// The scanner de-duplicates using "findOne + upsert" logic,
+// so it will behave correctly without a DB-level unique constraint.
 
 // ----------------- Peek helper -----------------
 
