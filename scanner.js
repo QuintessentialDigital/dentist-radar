@@ -31,6 +31,15 @@ function slugifyName(name) {
     .replace(/^-|-$/g, "");
 }
 
+// Very simple UK phone extractor from a text block
+function extractPhone(block) {
+  // Look for something that looks like a UK landline: 0XXXXXXXXXX with spaces
+  const phoneMatch =
+    block.match(/\b0\d{2,4}[\s-]?\d{3}[\s-]?\d{3,4}\b/) ||
+    block.match(/\b0\d{9,10}\b/);
+  return phoneMatch ? phoneMatch[0].trim() : null;
+}
+
 // ---------------- NHS helpers ----------------
 
 // NHS search results URL
@@ -45,6 +54,15 @@ function buildProfileUrl(name, practiceId) {
   const slug = slugifyName(name || "");
   if (!slug || !practiceId) return null;
   return `https://www.nhs.uk/services/dentist/${slug}/${practiceId}`;
+}
+
+// Build a Google Maps search link
+function buildMapsUrl(name, postcode) {
+  const q = `${name || ""} ${postcode || ""}`.trim();
+  if (!q) return null;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    q
+  )}`;
 }
 
 async function fetchHtml(url) {
@@ -63,8 +81,8 @@ async function fetchHtml(url) {
   return await res.text();
 }
 
-// Extract practice data (name, id, acceptance) from search HTML ONLY
-function extractPracticesFromSearch(html) {
+// Extract practice data (name, id, acceptance, distance, phone) from search HTML ONLY
+function extractPracticesFromSearch(html, searchPostcode) {
   const results = [];
 
   // Each block looks like (in the accessible text version):
@@ -72,11 +90,12 @@ function extractPracticesFromSearch(html) {
   //   Result for   Winnersh Dental Practice
   //   V006578
   //   ...
+  //   1.2 miles away
+  //   ...
   //   When availability allows, this dentist accepts new NHS patients if they are:
   //   ...
   //   End of result for   Winnersh Dental Practice
   //
-  // We capture "Result for <Name> ... End of result for"
   const regex =
     /Result for\s+(.+?)\r?\n([\s\S]*?)(?:End of result for\s+.+?\r?\n)/g;
 
@@ -90,6 +109,18 @@ function extractPracticesFromSearch(html) {
     const practiceId = idMatch ? idMatch[0] : null;
 
     const lower = block.toLowerCase();
+
+    // Distance text: e.g. "1.2 miles away"
+    let distanceText = null;
+    let distanceMiles = null;
+    const distMatch = block.match(/([\d.]+)\s*miles?\s+away/i);
+    if (distMatch) {
+      distanceText = `${distMatch[1]} miles away`;
+      distanceMiles = Number(distMatch[1]);
+    }
+
+    // Phone number (best effort)
+    const phone = extractPhone(block);
 
     // Determine acceptance from the text in THIS block
     const positivePatterns = [
@@ -121,12 +152,17 @@ function extractPracticesFromSearch(html) {
     else if (unk && !pos && !neg) acceptance = "unknown";
 
     const profileUrl = buildProfileUrl(name, practiceId);
+    const mapsUrl = buildMapsUrl(name, searchPostcode);
 
     results.push({
       name,
       practiceId: practiceId || name,
       acceptance,
       profileUrl,
+      mapsUrl,
+      distanceText,
+      distanceMiles,
+      phone,
     });
   }
 
@@ -162,40 +198,94 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
   if (!practices.length) return;
 
   const transport = createTransport();
-  if (!transport) {
-    // no SMTP configured – just skip sending
-    return;
-  }
+  if (!transport) return;
 
   const from = process.env.FROM_EMAIL || "alerts@dentistradar.co.uk";
   const subject = `DentistRadar: ${practices.length} NHS dentist(s) accepting near ${postcode}`;
 
-  const listHtml = practices
+  // Professional tabular HTML email
+  const rowsHtml = practices
     .map((p) => {
-      const link = p.profileUrl || p.appointmentUrl || "NHS profile page";
-      return `<li><strong>${p.name || p.practiceId}</strong><br/><a href="${link}" target="_blank">${link}</a></li>`;
+      const profileLink = p.profileUrl || p.appointmentUrl || "#";
+      const mapsLink = p.mapsUrl || profileLink;
+      const distance = p.distanceText || "";
+      const phone = p.phone || "";
+
+      return `
+        <tr>
+          <td style="padding:8px 12px;border:1px solid #e0e0e0;">
+            <strong>${p.name || p.practiceId}</strong>
+          </td>
+          <td style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">
+            ${distance}
+          </td>
+          <td style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">
+            ${phone}
+          </td>
+          <td style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">
+            <a href="${profileLink}" target="_blank">NHS Profile</a>
+          </td>
+          <td style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">
+            <a href="${mapsLink}" target="_blank">View on map</a>
+          </td>
+        </tr>
+      `;
     })
     .join("");
 
   const html = `
     <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #333;">
-      <h2 style="color:#0b5cff; margin-bottom: 16px;">Good news! NHS dentists are accepting new patients</h2>
-      <p>Based on your alert for postcode <strong>${postcode}</strong> within <strong>${radiusMiles} miles</strong>, we found the following practices currently accepting new NHS patients:</p>
-      <ul>${listHtml}</ul>
-      <p style="margin-top:16px;">Appointments availability can change quickly, so we recommend contacting these practices as soon as possible.</p>
+      <h2 style="color:#0b5cff; margin-bottom: 16px;">Good news – NHS dentists are accepting new patients near you</h2>
+      <p>
+        You are receiving this alert from <strong>DentistRadar</strong> because you registered for updates
+        for postcode <strong>${postcode}</strong> within <strong>${radiusMiles} miles</strong>.
+      </p>
+      <p>
+        Based on the latest information from the NHS website, the following practices are currently shown
+        as accepting new NHS patients (subject to change and availability):
+      </p>
+
+      <table style="border-collapse:collapse;width:100%;margin-top:16px;font-size:14px;">
+        <thead>
+          <tr style="background:#f5f7fb;">
+            <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:left;">Practice</th>
+            <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">Distance</th>
+            <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">Phone</th>
+            <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">NHS Page</th>
+            <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">Map</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+
+      <p style="margin-top:16px;">
+        <strong>Tip:</strong> NHS availability can change quickly. If you find a suitable practice,
+        it’s best to contact them as soon as possible to confirm they are still accepting new patients.
+      </p>
+
       <p style="font-size:12px;color:#777;margin-top:24px;">
-        You received this email because you created an alert on DentistRadar.
-        If this wasn’t you or you want to stop receiving alerts, please contact support.
+        This email is based on publicly available information from the NHS website at the time of scanning.
+        DentistRadar does not guarantee availability and cannot book appointments on your behalf.
+      </p>
+      <p style="font-size:12px;color:#777;margin-top:8px;">
+        If you did not register for this alert or no longer wish to receive updates, please reply to this
+        email or contact DentistRadar support so we can remove your details.
       </p>
     </div>
   `;
 
   const text =
-    `Good news! NHS dentists accepting patients near ${postcode}:\n\n` +
+    `Good news – NHS dentists accepting new patients near ${postcode} (within ${radiusMiles} miles):\n\n` +
     practices
       .map((p) => {
-        const link = p.profileUrl || p.appointmentUrl || "(NHS profile page)";
-        return `- ${p.name || p.practiceId}\n  NHS profile: ${link}\n`;
+        const distance = p.distanceText ? ` (${p.distanceText})` : "";
+        const phone = p.phone ? ` | Phone: ${p.phone}` : "";
+        const profile =
+          p.profileUrl || p.appointmentUrl || "(see NHS website for details)";
+        const maps = p.mapsUrl || profile;
+        return `- ${p.name || p.practiceId}${distance}${phone}\n  NHS: ${profile}\n  Map: ${maps}\n`;
       })
       .join("\n");
 
@@ -238,7 +328,7 @@ async function scanWatch(watch) {
     };
   }
 
-  const practices = extractPracticesFromSearch(searchHtml);
+  const practices = extractPracticesFromSearch(searchHtml, postcode);
 
   let scanned = 0;
   let totalAccepting = 0;
@@ -274,9 +364,8 @@ async function scanWatch(watch) {
     await sleep(200);
   }
 
-  // Send & log — IMPORTANT: logging happens even if email fails / is skipped
+  // Send & log — logging happens even if email fails / is skipped
   if (newAccepting.length) {
-    // Try sending email (will silently skip if SMTP not configured)
     try {
       await sendAcceptingEmail({
         to: email,
@@ -285,11 +374,9 @@ async function scanWatch(watch) {
         practices: newAccepting,
       });
     } catch (err) {
-      // Just log; don't fail scan
       console.error("Email send error (non-fatal):", err.message);
     }
 
-    // Always attempt to log, regardless of email outcome
     try {
       const bulk = EmailLog.collection.initializeUnorderedBulkOp();
 
