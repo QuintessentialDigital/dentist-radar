@@ -173,7 +173,7 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
         If this wasn’t you or you no longer wish to receive alerts, please contact support.
       </p>
     </div>
-  `;
+  ";
 
   const text =
     `Good news! We found NHS dentists accepting patients near ${postcode}.\n\n` +
