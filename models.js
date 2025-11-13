@@ -42,7 +42,13 @@ const watchSchema = new mongoose.Schema(
   {
     email: { type: String, required: true, index: true }, // user email
     postcode: { type: String, required: true },
-    radiusMiles: { type: Number, required: true },
+
+    // Make this OPTIONAL so old code that uses "radius" still works
+    radiusMiles: { type: Number },
+
+    // For backward compatibility if your server/front-end uses "radius"
+    radius: { type: Number },
+
     active: { type: Boolean, default: true },
     createdAt: { type: Date, default: Date.now },
     lastRunAt: { type: Date },
@@ -50,18 +56,15 @@ const watchSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-watchSchema.index({ email: 1, postcode: 1, radiusMiles: 1 });
+// Index on what we typically care about
+watchSchema.index({ email: 1, postcode: 1, radiusMiles: 1, radius: 1 });
 
 // ----------------- EmailLog -----------------
 
 /**
  * EmailLog is where we prevent duplicates.
  *
- * IMPORTANT:
- * - We de-dup per ALERT (watch) + PRACTICE, not globally.
- *   That means:
- *   - User A and User B with same postcode both get their own emails.
- *   - User A doesn't get spammed twice for the same practice on the same alert.
+ * We de-dup per ALERT (watch) + PRACTICE, not globally.
  */
 const emailLogSchema = new mongoose.Schema(
   {
@@ -73,9 +76,11 @@ const emailLogSchema = new mongoose.Schema(
     },
     email: { type: String, required: true, index: true },
     postcode: { type: String, required: true },
+
+    // We'll log the effective radius used (miles)
     radiusMiles: { type: Number, required: true },
 
-    practiceId: { type: String, required: true }, // e.g. NHS service ID or slug
+    practiceId: { type: String, required: true }, // NHS service ID / slug
     appointmentUrl: { type: String, required: true },
 
     sentAt: { type: Date, default: Date.now },
@@ -83,13 +88,13 @@ const emailLogSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// ✅ key uniqueness: an alert can only email a given practice once
+// An alert can only email a given practice once
 emailLogSchema.index(
   { alertId: 1, practiceId: 1, appointmentUrl: 1 },
   { unique: true }
 );
 
-// Optional helpful index for analytics
+// Helpful analytics index
 emailLogSchema.index({ email: 1, postcode: 1 });
 
 // ----------------- Peek helper -----------------
