@@ -153,16 +153,44 @@ function extractPracticesFromSearch(html, searchPostcode) {
     else if (neg && !pos) acceptance = "not_accepting";
     else if (unk && !pos && !neg) acceptance = "unknown";
 
-    // Adult / child tagging
-    const acceptsAdults =
-      lower.includes("adults aged 18 or over") ||
-      lower.includes("adults aged 18 and over") ||
-      lower.includes("adult patients");
+    // Adult / child tagging – broader but still NHS-focused patterns
+    const adultPatterns = [
+      "adults aged 18 or over",
+      "adults aged 18 and over",
+      "adults aged 18+",
+      "adult nhs patients",
+      "adult patients",
+      "adult dental patients",
+      "nhs adult patients",
+      // fallback: generic "adults" but only if we already know it's accepting
+      "adults",
+    ];
 
-    const acceptsChildren =
-      lower.includes("children aged 17 or under") ||
-      lower.includes("children aged under 18") ||
-      lower.includes("child patients");
+    const childPatterns = [
+      "children aged 17 or under",
+      "children aged under 18",
+      "child nhs patients",
+      "child patients",
+      "nhs child patients",
+      "nhs children",
+      "children for routine dental care",
+      "children for routine care",
+      "under 18s",
+      "under 18 years",
+      "aged under 18",
+      // fallback: generic "children" when in acceptance block
+      "children",
+    ];
+
+    // Only consider generic "adults"/"children" if this is an accepting-style block
+    const baseTextForPatterns = pos ? lower : lower.replace(/\badults\b/g, "").replace(/\bchildren\b/g, "");
+
+    const acceptsAdults = adultPatterns.some((p) =>
+      baseTextForPatterns.includes(p)
+    );
+    const acceptsChildren = childPatterns.some((p) =>
+      baseTextForPatterns.includes(p)
+    );
 
     let patientType = "Not specified";
     if (acceptsAdults && acceptsChildren) {
