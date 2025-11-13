@@ -11,7 +11,7 @@ import nodemailer from "nodemailer";
 import { connectMongo, Watch, EmailLog } from "./models.js";
 
 // If you're on Node 18+, global fetch exists.
-// If not, install node-fetch and uncomment:
+// If not, install node-fetch and uncomment this:
 // import fetch from "node-fetch";
 
 function sleep(ms) {
@@ -61,7 +61,7 @@ async function fetchHtml(url) {
 function extractPracticesFromSearch(html) {
   const results = [];
 
-  // This is crude but works: we look for NHS service links that contain "/services/dentist/"
+  // Look for NHS service links that contain "/services/dentist/"
   const regex = /href="([^"]+\/services\/dentist\/[^"]+)"/g;
   let match;
   const seen = new Set();
@@ -173,7 +173,7 @@ async function sendAcceptingEmail({ to, postcode, radiusMiles, practices }) {
         If this wasn’t you or you no longer wish to receive alerts, please contact support.
       </p>
     </div>
-  ";
+  `;
 
   const text =
     `Good news! We found NHS dentists accepting patients near ${postcode}.\n\n` +
@@ -205,7 +205,11 @@ async function scanWatch(watch) {
   try {
     searchHtml = await fetchHtml(searchUrl);
   } catch (err) {
-    console.error("Search fetch failed", { postcode, radiusMiles, err: err.message });
+    console.error("Search fetch failed", {
+      postcode,
+      radiusMiles,
+      err: err.message,
+    });
     return {
       alertId,
       email,
@@ -245,8 +249,7 @@ async function scanWatch(watch) {
     if (status === "accepting") {
       totalAccepting++;
 
-      // ✅ KEY FIX:
-      // De-dup per ALERT (watch) + practice, not globally.
+      // ✅ KEY: de-dup per ALERT (watch) + practice, not globally.
       const alreadySent = await EmailLog.findOne({
         alertId,
         practiceId: practice.practiceId,
@@ -280,21 +283,24 @@ async function scanWatch(watch) {
       // Insert logs; ignore duplicates just in case of race conditions
       const bulk = EmailLog.collection.initializeUnorderedBulkOp();
       newAccepting.forEach((p) => {
-        bulk.find({
-          alertId,
-          practiceId: p.practiceId,
-          appointmentUrl: p.appointmentUrl,
-        }).upsert().updateOne({
-          $setOnInsert: {
+        bulk
+          .find({
             alertId,
-            email,
-            postcode,
-            radiusMiles,
             practiceId: p.practiceId,
             appointmentUrl: p.appointmentUrl,
-            sentAt: new Date(),
-          },
-        });
+          })
+          .upsert()
+          .updateOne({
+            $setOnInsert: {
+              alertId,
+              email,
+              postcode,
+              radiusMiles,
+              practiceId: p.practiceId,
+              appointmentUrl: p.appointmentUrl,
+              sentAt: new Date(),
+            },
+          });
       });
       await bulk.execute();
     } catch (err) {
