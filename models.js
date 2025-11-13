@@ -1,95 +1,116 @@
-// models.js — unified models + stable connection for DentistRadar (DB forced to 'dentistradar')
+// models.js
+// Central Mongoose models for DentistRadar
+// - User: registered user
+// - Watch: an "alert" (postcode + radius + email)
+// - EmailLog: which practices have already been emailed FOR THAT ALERT/USER
+
 import mongoose from "mongoose";
 
-/* Force DB name to 'dentistradar' regardless of the provided URI db segment */
-function forceDentistRadarDb(uri = "") {
-  if (!uri) return "";
-  if (/\/dentistradar(\?|$)/i.test(uri)) return uri;                 // already correct
-  if (/\/[^/?]+(\?|$)/.test(uri)) return uri.replace(/\/[^/?]+(\?|$)/, "/dentistradar$1");
-  return uri.replace(/(\.net)(\/)?/, "$1/dentistradar");
-}
+let mongoReadyPromise = null;
 
-/* Public connect helper */
-export async function connectMongo(raw) {
-  const uri = forceDentistRadarDb(raw || process.env.MONGO_URI || "");
-  if (!uri) throw new Error("MONGO_URI is required");
+export async function connectMongo() {
   if (mongoose.connection.readyState === 1) return;
-  await mongoose.connect(uri, { maxPoolSize: 10 });
-  console.log("✅ Mongo connected DB: dentistradar");
+
+  if (!mongoReadyPromise) {
+    const uri = process.env.MONGO_URI;
+    if (!uri) {
+      throw new Error("MONGO_URI is required");
+    }
+
+    mongoReadyPromise = mongoose.connect(uri, {
+      dbName: process.env.MONGO_DB || "dentistradar",
+    });
+  }
+
+  return mongoReadyPromise;
 }
 
-/* ---------- Schemas & Models ---------- */
-/* WATCHES — physical collection is lowercase 'watches' */
-const WatchSchema =
-  mongoose.models.Watch?.schema ||
-  new mongoose.Schema(
-    {
-      email: { type: String, index: true },
-      postcode: { type: String, index: true },
-      radius: Number,
-    },
-    { collection: "watches", timestamps: true, versionKey: false }
-  );
-WatchSchema.index({ email: 1, postcode: 1 }, { unique: true });
+// ----------------- User -----------------
 
-/* USER — keep lightweight; some code paths expect it */
-const UserSchema =
-  mongoose.models.User?.schema ||
-  new mongoose.Schema(
-    {
-      email: { type: String, unique: true, index: true },
-      plan: { type: String, default: "free" },          // free | pro | family
-      postcode_limit: { type: Number, default: 1 },
-      status: { type: String, default: "active" },
-    },
-    { collection: "users", timestamps: true, versionKey: false }
-  );
+const userSchema = new mongoose.Schema(
+  {
+    email: { type: String, required: true, index: true },
+    name: { type: String },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { timestamps: true }
+);
 
-/* EmailLog — logs welcome/availability sends + optional provider id */
-const EmailLogSchema =
-  mongoose.models.EmailLog?.schema ||
-  new mongoose.Schema(
-    {
-      type: String,                // 'welcome' | 'availability' | ...
-      to: String,                  // optional; not always set for per-practice logs
-      subject: String,
-      provider: { type: String, default: "postmark" },
-      providerId: String,
-      practiceUrl: String,         // for availability logs
-      status: String,              // ACCEPTING | CHILD_ONLY
-      dateKey: String,             // YYYY-MM-DD
-      sentAt: { type: Date, default: Date.now },
-      meta: Object,
-    },
-    { collection: "EmailLog", timestamps: false, versionKey: false }
-  );
-EmailLogSchema.index({ practiceUrl: 1, dateKey: 1 }, { unique: true, sparse: true });
+// ----------------- Watch / Alert -----------------
 
-/* Optional: Evidence (used by some scanners for debugging snippets) */
-const PracticeEvidenceSchema =
-  mongoose.models.PracticeEvidence?.schema ||
-  new mongoose.Schema(
-    {
-      practiceUrl: { type: String, index: true },
-      dateKey: { type: String, index: true },
-      verdict: String,     // ACCEPTING | CHILD_ONLY | NONE | UNKNOWN
-      reason: String,      // MATCH | NEGATED | WAITLIST | CHILD_ONLY | ...
-      source: String,      // 'appointments' | 'detail'
-      snippet: String,
-      scannedAt: { type: Date, default: Date.now },
-    },
-    { collection: "PracticeEvidence", versionKey: false }
-  );
+const watchSchema = new mongoose.Schema(
+  {
+    email: { type: String, required: true, index: true }, // user email
+    postcode: { type: String, required: true },
+    radiusMiles: { type: Number, required: true },
+    active: { type: Boolean, default: true },
+    createdAt: { type: Date, default: Date.now },
+    lastRunAt: { type: Date },
+  },
+  { timestamps: true }
+);
 
-/* Guarded model exports (avoid OverwriteModelError) */
-export const Watch = mongoose.models.Watch || mongoose.model("Watch", WatchSchema);
-export const User  = mongoose.models.User  || mongoose.model("User", UserSchema);
+watchSchema.index({ email: 1, postcode: 1, radiusMiles: 1 });
+
+// ----------------- EmailLog -----------------
+
+/**
+ * EmailLog is where we prevent duplicates.
+ *
+ * IMPORTANT:
+ * - We de-dup per ALERT (watch) + PRACTICE, not globally.
+ *   That means:
+ *   - User A and User B with same postcode both get their own emails.
+ *   - User A doesn't get spammed twice for the same practice on the same alert.
+ */
+const emailLogSchema = new mongoose.Schema(
+  {
+    alertId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Watch",
+      required: true,
+      index: true,
+    },
+    email: { type: String, required: true, index: true },
+    postcode: { type: String, required: true },
+    radiusMiles: { type: Number, required: true },
+
+    practiceId: { type: String, required: true }, // e.g. NHS service ID or slug
+    appointmentUrl: { type: String, required: true },
+
+    sentAt: { type: Date, default: Date.now },
+  },
+  { timestamps: true }
+);
+
+// ✅ key uniqueness: an alert can only email a given practice once
+emailLogSchema.index(
+  { alertId: 1, practiceId: 1, appointmentUrl: 1 },
+  { unique: true }
+);
+
+// Optional helpful index for analytics
+emailLogSchema.index({ email: 1, postcode: 1 });
+
+// ----------------- Peek helper -----------------
+
+export async function peek() {
+  const [users, watches, logs] = await Promise.all([
+    User.countDocuments(),
+    Watch.countDocuments(),
+    EmailLog.countDocuments(),
+  ]);
+
+  return { users, watches, logs };
+}
+
+// ----------------- Export models -----------------
+
+export const User =
+  mongoose.models.User || mongoose.model("User", userSchema);
+
+export const Watch =
+  mongoose.models.Watch || mongoose.model("Watch", watchSchema);
+
 export const EmailLog =
-  mongoose.models.EmailLog || mongoose.model("EmailLog", EmailLogSchema);
-export const PracticeEvidence =
-  mongoose.models.PracticeEvidence || mongoose.model("PracticeEvidence", PracticeEvidenceSchema);
-
-/* Small helper for quick console peeks */
-export const peek = (obj, n = 2) => JSON.stringify(obj, null, n);
-
-export default { connectMongo, Watch, User, EmailLog, PracticeEvidence, peek };
+  mongoose.models.EmailLog || mongoose.model("EmailLog", emailLogSchema);
