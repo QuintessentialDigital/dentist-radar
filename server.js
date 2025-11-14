@@ -23,7 +23,7 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.use(cors());
-// JSON body parsing for normal APIs (we are NOT doing Stripe signature verification in this version)
+// JSON body parsing for normal APIs (no Stripe signature verification yet)
 app.use(express.json());
 app.use(express.static("public"));
 
@@ -69,14 +69,17 @@ async function sendEmailHTML(to, subject, html, type = "other", meta = {}) {
     const body = r.data || {};
     if (ok) {
       try {
-        await EmailLog.create({
-          to,
-          subject,
-          type,
-          providerId: body.MessageID,
-          meta,
-          sentAt: new Date(),
-        });
+        // Only log scanner alert emails to avoid duplicate key on (null, null, null)
+        if (type === "alert") {
+          await EmailLog.create({
+            to,
+            subject,
+            type,
+            providerId: body.MessageID,
+            meta,
+            sentAt: new Date(),
+          });
+        }
       } catch (e) {
         console.error("⚠️ EmailLog save error:", e?.message || e);
       }
@@ -100,11 +103,20 @@ function normalizePostcode(raw = "") {
 function looksLikeUkPostcode(pc) {
   return /^([A-Z]{1,2}\d[A-Z\d]?)\s?\d[A-Z]{2}$/i.test((pc || "").toUpperCase());
 }
+
+// UPDATED: make planLimitFor rely primarily on plan, not strict status
 async function planLimitFor(email) {
   const u = await User.findOne({ email: normEmail(email) }).lean();
-  if (!u || u.status !== "active") return 1;
-  if (u.plan === "family") return u.postcode_limit || 10;
-  if (u.plan === "pro") return u.postcode_limit || 5;
+  if (!u) return 1;
+
+  const plan = (u.plan || "").toLowerCase();
+  const status = (u.status || "").toLowerCase();
+
+  if (plan === "family") return u.postcode_limit || 10;
+  if (plan === "pro") return u.postcode_limit || 5;
+
+  if (status === "active" && u.postcode_limit) return u.postcode_limit;
+
   return 1;
 }
 
@@ -334,12 +346,12 @@ app.post("/api/stripe/webhook", async (req, res) => {
               <p>Hi,</p>
               <p>Thank you for upgrading to <strong>DentistRadar ${planLabel}</strong>.</p>
               <p>You can now track up to <strong>${postcode_limit} postcode${
-          postcode_limit > 1 ? "s" : ""
-        }</strong> for NHS dentist availability.</p>
+                postcode_limit > 1 ? "s" : ""
+              }</strong> for NHS dentist availability.</p>
               <p>What you can do next:</p>
               <ul>
                 <li>Add or update your alerts on the homepage using your email.</li>
-                <li>Manage or remove existing alerts on the “My Alerts” page (coming soon in your emails).</li>
+                <li>Manage or remove existing alerts on the “My Alerts” page.</li>
               </ul>
               <p>If you have any questions or feedback, just reply to this email.</p>
               <p>Best regards,<br>DentistRadar</p>
