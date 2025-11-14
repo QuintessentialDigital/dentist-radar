@@ -26,11 +26,17 @@
 <main>
   <section class="hero">
     <div class="container hero-layout">
-      <!-- Left: text + form -->
-      <div class="hero-text">
-        <h1>Find an NHS Dentist Accepting Patients</h1>
-        <p>Be the first to know when nearby practices start accepting new NHS patients — free instant alerts straight to your inbox.</p>
+      <!-- LEFT: hero image -->
+      <div class="hero-visual">
+        <img
+          src="hero-clinic.png"
+          alt="Illustration of a modern dental clinic"
+          loading="lazy"
+        >
+      </div>
 
+      <!-- RIGHT: form + message -->
+      <div class="hero-form">
         <form id="alertForm" class="alert-form" novalidate>
           <div class="input">
             <input id="email" name="email" type="email" inputmode="email" autocomplete="email"
@@ -47,17 +53,8 @@
           <button type="submit" class="btn">GET MY ALERT</button>
         </form>
 
-        <!-- Hidden until JS shows it; now spaced below button -->
+        <!-- Hidden until JS shows it -->
         <p id="msg" class="message-box" aria-live="polite"></p>
-      </div>
-
-      <!-- Right: modern clinic illustration -->
-      <div class="hero-visual">
-        <img
-          src="hero-clinic.png"
-          alt="Illustration of a modern, welcoming dental clinic environment"
-          loading="lazy"
-        >
       </div>
     </div>
   </section>
