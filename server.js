@@ -2,6 +2,7 @@
 // - Uses shared models.js (watches/users/emaillogs)
 // - Welcome email uses HTML template via Postmark
 // - Adds /api/debug/peek to verify DB/collections
+// - Phase 2: Stripe webhook + plan activation email + "My Alerts" APIs
 
 import express from "express";
 import cors from "cors";
@@ -22,6 +23,7 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.use(cors());
+// JSON body parsing for normal APIs (we are NOT doing Stripe signature verification in this version)
 app.use(express.json());
 app.use(express.static("public"));
 
@@ -46,10 +48,7 @@ async function sendEmailHTML(to, subject, html, type = "other", meta = {}) {
     const r = await axios.post(
       "https://api.postmarkapp.com/email",
       {
-        From:
-          process.env.MAIL_FROM ||
-          process.env.EMAIL_FROM ||
-          "alerts@dentistradar.co.uk",
+        From: process.env.MAIL_FROM || process.env.EMAIL_FROM || "alerts@dentistradar.co.uk",
         To: to,
         Subject: subject,
         HtmlBody: html,
@@ -99,9 +98,7 @@ function normalizePostcode(raw = "") {
   return `${t.slice(0, t.length - 3)} ${t.slice(-3)}`.trim();
 }
 function looksLikeUkPostcode(pc) {
-  return /^([A-Z]{1,2}\d[A-Z\d]?)\s?\d[A-Z]{2}$/i.test(
-    (pc || "").toUpperCase()
-  );
+  return /^([A-Z]{1,2}\d[A-Z\d]?)\s?\d[A-Z]{2}$/i.test((pc || "").toUpperCase());
 }
 async function planLimitFor(email) {
   const u = await User.findOne({ email: normEmail(email) }).lean();
@@ -112,68 +109,14 @@ async function planLimitFor(email) {
 }
 
 /* ---------------------------
-   Basic Admin Auth Helper
---------------------------- */
-function checkAdminKey(req, res) {
-  const expected = process.env.ADMIN_KEY;
-  const key =
-    req.query.key ||
-    req.headers["x-admin-key"] ||
-    req.headers["x-api-key"];
-
-  if (!expected || key !== expected) {
-    res.status(403).json({ error: "Forbidden" });
-    return false;
-  }
-  return true;
-}
-
-/* ---------------------------
    Health / Debug
 --------------------------- */
 app.get("/api/health", (req, res) =>
-  res.json({
-    ok: true,
-    db: mongoose.connection?.name,
-    time: new Date().toISOString(),
-  })
+  res.json({ ok: true, db: mongoose.connection?.name, time: new Date().toISOString() })
 );
 app.get("/health", (req, res) =>
-  res.json({
-    ok: true,
-    db: mongoose.connection?.name,
-    time: new Date().toISOString(),
-  })
+  res.json({ ok: true, db: mongoose.connection?.name, time: new Date().toISOString() })
 );
-
-// Richer health endpoint with counts + last scan
-app.get("/healthz", async (req, res) => {
-  try {
-    const { users, watches, logs } = await peek();
-
-    const lastScan = await Watch.findOne(
-      { lastRunAt: { $ne: null } },
-      { lastRunAt: 1 }
-    )
-      .sort({ lastRunAt: -1 })
-      .lean();
-
-    res.json({
-      status: "ok",
-      time: new Date().toISOString(),
-      mongo: {
-        db: mongoose.connection?.name,
-        users,
-        watches,
-        emailLogs: logs,
-      },
-      lastScanAt: lastScan?.lastRunAt || null,
-    });
-  } catch (err) {
-    console.error("Healthz error:", err.message);
-    res.status(500).json({ status: "error", error: err.message });
-  }
-});
 
 // Quick peek to verify we're on the correct DB/collection
 app.get("/api/debug/peek", async (req, res) => {
@@ -182,47 +125,6 @@ app.get("/api/debug/peek", async (req, res) => {
     res.json({ ok: true, ...info });
   } catch (e) {
     res.status(500).json({ ok: false, error: e?.message });
-  }
-});
-
-/* ---------------------------
-   Admin JSON Overview
---------------------------- */
-app.get("/api/admin/overview", async (req, res) => {
-  if (!checkAdminKey(req, res)) return;
-
-  try {
-    const { users, watches, logs } = await peek();
-
-    const lastScan = await Watch.findOne(
-      { lastRunAt: { $ne: null } },
-      { lastRunAt: 1 }
-    )
-      .sort({ lastRunAt: -1 })
-      .lean();
-
-    const topPostcodes = await Watch.aggregate([
-      { $group: { _id: "$postcode", count: { $sum: 1 } } },
-      { $sort: { count: -1 } },
-      { $limit: 5 },
-    ]);
-
-    const recentLogs = await EmailLog.find({})
-      .sort({ sentAt: -1 })
-      .limit(10)
-      .lean();
-
-    res.json({
-      status: "ok",
-      time: new Date().toISOString(),
-      totals: { users, watches, emailLogs: logs },
-      lastScanAt: lastScan?.lastRunAt || null,
-      topPostcodes,
-      recentLogs,
-    });
-  } catch (err) {
-    console.error("Admin overview error:", err.message);
-    res.status(500).json({ status: "error", error: err.message });
   }
 });
 
@@ -236,11 +138,9 @@ app.post("/api/watch/create", async (req, res) => {
     const radius = Number(req.body?.radius);
 
     if (!emailRe.test(email))
-      return res.status(400).json({
-        ok: false,
-        error: "invalid_email",
-        message: "Please enter a valid email address.",
-      });
+      return res
+        .status(400)
+        .json({ ok: false, error: "invalid_email", message: "Please enter a valid email address." });
     if (!looksLikeUkPostcode(postcode))
       return res.status(400).json({
         ok: false,
@@ -257,11 +157,9 @@ app.post("/api/watch/create", async (req, res) => {
     // Duplicate check
     const exists = await Watch.findOne({ email, postcode }).lean();
     if (exists)
-      return res.status(400).json({
-        ok: false,
-        error: "duplicate",
-        message: "Alert already exists for this postcode.",
-      });
+      return res
+        .status(400)
+        .json({ ok: false, error: "duplicate", message: "Alert already exists for this postcode." });
 
     // Plan limit
     const limit = await planLimitFor(email);
@@ -270,9 +168,7 @@ app.post("/api/watch/create", async (req, res) => {
       return res.status(402).json({
         ok: false,
         error: "upgrade_required",
-        message: `Your plan allows up to ${limit} postcode${
-          limit > 1 ? "s" : ""
-        }.`,
+        message: `Your plan allows up to ${limit} postcode${limit > 1 ? "s" : ""}.`,
         upgradeLink: "/pricing.html",
       });
     }
@@ -288,11 +184,64 @@ app.post("/api/watch/create", async (req, res) => {
     console.error("watch/create error:", e);
     res
       .status(500)
-      .json({
+      .json({ ok: false, error: "server_error", message: "Something went wrong. Please try again later." });
+  }
+});
+
+/* ---------------------------
+   "My Alerts" APIs (list + delete)
+--------------------------- */
+
+// List all watches for a given email
+app.get("/api/watch/list", async (req, res) => {
+  try {
+    const emailRaw = req.query.email || "";
+    const email = normEmail(emailRaw);
+
+    if (!emailRe.test(email)) {
+      return res.status(400).json({
         ok: false,
-        error: "server_error",
-        message: "Something went wrong. Please try again later.",
+        error: "invalid_email",
+        message: "Please enter a valid email address.",
       });
+    }
+
+    const watches = await Watch.find({ email }).sort({ createdAt: -1 }).lean();
+    res.json({ ok: true, email, watches });
+  } catch (e) {
+    console.error("watch/list error:", e);
+    res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+// Delete a single watch (only if it belongs to that email)
+app.delete("/api/watch/:id", async (req, res) => {
+  try {
+    const emailRaw = req.query.email || "";
+    const email = normEmail(emailRaw);
+    const id = req.params.id;
+
+    if (!emailRe.test(email)) {
+      return res.status(400).json({
+        ok: false,
+        error: "invalid_email",
+        message: "Please enter a valid email address.",
+      });
+    }
+
+    if (!id) {
+      return res.status(400).json({ ok: false, error: "missing_id" });
+    }
+
+    const deleted = await Watch.findOneAndDelete({ _id: id, email });
+    if (!deleted) {
+      return res.status(404).json({ ok: false, error: "not_found" });
+    }
+
+    res.json({ ok: true, deletedId: id });
+  } catch (e) {
+    console.error("watch/delete error:", e);
+    res.status(500).json({ ok: false, error: "server_error" });
   }
 });
 
@@ -304,18 +253,15 @@ const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
 
 async function handleCheckoutSession(req, res) {
   try {
-    if (!stripe)
-      return res.json({ ok: false, error: "stripe_not_configured" });
+    if (!stripe) return res.json({ ok: false, error: "stripe_not_configured" });
     const { email, plan } = req.body || {};
-    if (!emailRe.test(email || ""))
-      return res.json({ ok: false, error: "invalid_email" });
+    if (!emailRe.test(email || "")) return res.json({ ok: false, error: "invalid_email" });
 
-    const SITE =
-      process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
+    const SITE = process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
     const pricePro = process.env.STRIPE_PRICE_PRO;
     const priceFamily = process.env.STRIPE_PRICE_FAMILY;
-    const priceId =
-      (plan || "pro").toLowerCase() === "family" ? priceFamily : pricePro;
+    const planKey = (plan || "pro").toLowerCase() === "family" ? "family" : "pro";
+    const priceId = planKey === "family" ? priceFamily : pricePro;
     if (!priceId) return res.json({ ok: false, error: "missing_price" });
 
     const session = await stripe.checkout.sessions.create({
@@ -323,17 +269,18 @@ async function handleCheckoutSession(req, res) {
       payment_method_types: ["card"],
       line_items: [{ price: priceId, quantity: 1 }],
       customer_email: email,
-      success_url: `${SITE}/thankyou.html?plan=${plan || "pro"}`,
+      metadata: {
+        plan: planKey, // so webhook knows whether it's pro or family
+      },
+      success_url: `${SITE}/thankyou.html?plan=${planKey}`,
       cancel_url: `${SITE}/upgrade.html?canceled=true`,
     });
     return res.json({ ok: true, url: session.url });
   } catch (err) {
     console.error("Stripe session error:", err?.type, err?.code, err?.message);
-    return res.status(500).json({
-      ok: false,
-      error: "stripe_error",
-      message: err?.message || "unknown",
-    });
+    return res
+      .status(500)
+      .json({ ok: false, error: "stripe_error", message: err?.message || "unknown" });
   }
 }
 
@@ -341,14 +288,91 @@ app.post("/api/create-checkout-session", handleCheckoutSession);
 app.post("/api/stripe/create-checkout-session", handleCheckoutSession);
 
 /* ---------------------------
+   Stripe Webhook (plan activation + email)
+   NOTE: this version assumes JSON body (no signature verification yet).
+--------------------------- */
+app.post("/api/stripe/webhook", async (req, res) => {
+  try {
+    const event = req.body;
+
+    if (!event || !event.type) {
+      return res.status(400).send(`Webhook Error: invalid payload`);
+    }
+
+    // Handle successful checkout
+    if (event.type === "checkout.session.completed") {
+      const session = event.data?.object || {};
+      const rawEmail =
+        session.customer_details?.email || session.customer_email || session.client_reference_id || "";
+      const email = normEmail(rawEmail);
+      const planRaw = session.metadata?.plan || "pro";
+      const plan = planRaw === "family" ? "family" : "pro";
+      const postcode_limit = plan === "family" ? 10 : 5;
+
+      if (email && emailRe.test(email)) {
+        // Upsert User with plan, status, and limit
+        const update = {
+          email,
+          plan,
+          status: "active",
+          postcode_limit,
+        };
+
+        await User.findOneAndUpdate(
+          { email },
+          { $set: update },
+          { upsert: true, new: true }
+        );
+
+        // Send DentistRadar plan activation email
+        const planLabel = plan === "family" ? "Family" : "Pro";
+        const subject = `Your DentistRadar ${planLabel} plan is now active`;
+        const html = `
+          <html>
+            <body style="font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#333;line-height:1.6;">
+              <h2 style="color:#0b63ff;">Your ${planLabel} plan is active 🎉</h2>
+              <p>Hi,</p>
+              <p>Thank you for upgrading to <strong>DentistRadar ${planLabel}</strong>.</p>
+              <p>You can now track up to <strong>${postcode_limit} postcode${
+          postcode_limit > 1 ? "s" : ""
+        }</strong> for NHS dentist availability.</p>
+              <p>What you can do next:</p>
+              <ul>
+                <li>Add or update your alerts on the homepage using your email.</li>
+                <li>Manage or remove existing alerts on the “My Alerts” page (coming soon in your emails).</li>
+              </ul>
+              <p>If you have any questions or feedback, just reply to this email.</p>
+              <p>Best regards,<br>DentistRadar</p>
+            </body>
+          </html>
+        `;
+
+        await sendEmailHTML(email, subject, html, "plan_activated", {
+          plan,
+          postcode_limit,
+          stripeSessionId: session.id,
+        });
+
+        console.log(`✅ Stripe webhook: activated ${planLabel} for ${email}`);
+      } else {
+        console.warn("⚠️ Stripe webhook: missing or invalid email on checkout.session.completed");
+      }
+    }
+
+    // You can extend here later for subscription cancellations, etc.
+    res.json({ received: true });
+  } catch (err) {
+    console.error("❌ Stripe webhook error:", err?.message || err);
+    res.status(500).send(`Webhook Error: ${err?.message || "unknown"}`);
+  }
+});
+
+/* ---------------------------
    Manual / Cron Scan Endpoint (token-gated)
 --------------------------- */
 app.post("/api/scan", async (req, res) => {
   const token = process.env.SCAN_TOKEN || "";
-  if (
-    !token ||
-    (req.query.token !== token && req.headers["x-scan-token"] !== token)
-  ) {
+  if (!token || (req.query.token !== token && req.headers["x-scan-token"] !== token)) {
     return res.status(403).json({ ok: false, error: "forbidden" });
   }
   try {
@@ -367,231 +391,6 @@ app.post("/api/scan", async (req, res) => {
       alertsSent: 0,
       note: "scan_exception",
     });
-  }
-});
-
-/* ---------------------------
-   Unsubscribe Endpoint
---------------------------- */
-app.get("/unsubscribe", async (req, res) => {
-  const { alert, email } = req.query;
-
-  if (!alert || !email) {
-    return res.status(400).send(`
-      <html>
-        <body style="font-family: Arial, sans-serif;">
-          <h2>Unable to unsubscribe</h2>
-          <p>The unsubscribe link is missing some information. Please check the link or contact support.</p>
-        </body>
-      </html>
-    `);
-  }
-
-  try {
-    const watch = await Watch.findOneAndUpdate(
-      { _id: alert, email: normEmail(email) },
-      { $set: { active: false } },
-      { new: true }
-    ).lean();
-
-    if (!watch) {
-      return res.status(404).send(`
-        <html>
-          <body style="font-family: Arial, sans-serif;">
-            <h2>Alert not found</h2>
-            <p>We couldn’t find an active alert matching this link. It may already have been unsubscribed.</p>
-          </body>
-        </html>
-      `);
-    }
-
-    const radius = watch.radiusMiles ?? watch.radius ?? 25;
-
-    res.send(`
-      <html>
-        <body style="font-family: Arial, sans-serif; max-width:600px; margin:40px auto; line-height:1.5;">
-          <h2 style="color:#0b5cff;">You’ve been unsubscribed from this DentistRadar alert</h2>
-          <p>
-            We’ve stopped sending alerts for the postcode
-            <strong>${watch.postcode}</strong> within <strong>${radius} miles</strong>
-            to <strong>${email}</strong>.
-          </p>
-          <p>If this was a mistake, you can create a new alert any time from the DentistRadar website.</p>
-          <p style="font-size:12px;color:#777;margin-top:24px;">
-            If you have any questions, please contact DentistRadar support.
-          </p>
-        </body>
-      </html>
-    `);
-  } catch (err) {
-    console.error("Unsubscribe error:", err.message);
-    res.status(500).send(`
-      <html>
-        <body style="font-family: Arial, sans-serif;">
-          <h2>Sorry, something went wrong</h2>
-          <p>We weren’t able to process your unsubscribe request. Please try again later or contact support.</p>
-        </body>
-      </html>
-    `);
-  }
-});
-
-/* ---------------------------
-   Admin Dashboard (HTML)
-   NOTE: your existing admin.html still works at /admin.html
---------------------------- */
-app.get("/admin/dashboard", async (req, res) => {
-  if (!checkAdminKey(req, res)) return;
-
-  try {
-    const { users, watches, logs } = await peek();
-
-    const lastScan = await Watch.findOne(
-      { lastRunAt: { $ne: null } },
-      { lastRunAt: 1 }
-    )
-      .sort({ lastRunAt: -1 })
-      .lean();
-
-    const alerts = await Watch.find({})
-      .sort({ createdAt: -1 })
-      .limit(50)
-      .lean();
-
-    const recentLogs = await EmailLog.find({})
-      .sort({ sentAt: -1 })
-      .limit(50)
-      .lean();
-
-    const lastScanAt = lastScan?.lastRunAt
-      ? new Date(lastScan.lastRunAt).toISOString()
-      : "never";
-
-    const html = `
-      <html>
-        <head>
-          <title>DentistRadar Admin Dashboard</title>
-          <style>
-            body { font-family: Arial, sans-serif; max-width: 1100px; margin: 30px auto; }
-            h1, h2 { color: #0b5cff; }
-            table { border-collapse: collapse; width: 100%; margin-bottom: 24px; font-size: 13px; }
-            th, td { border: 1px solid #e0e0e0; padding: 6px 8px; text-align: left; }
-            th { background: #f5f7fb; }
-            .card { border:1px solid #e0e0e0; border-radius:8px; padding:12px 16px; margin-bottom:16px; background:#fafbff; }
-            .muted { color:#777; font-size:12px; }
-          </style>
-        </head>
-        <body>
-          <h1>DentistRadar Admin Dashboard</h1>
-
-          <div class="card">
-            <h2>Overview</h2>
-            <p>
-              <strong>Users:</strong> ${users} &nbsp;&nbsp;
-              <strong>Alerts (watches):</strong> ${watches} &nbsp;&nbsp;
-              <strong>Email logs:</strong> ${logs}
-            </p>
-            <p class="muted">Last scan: ${lastScanAt}</p>
-          </div>
-
-          <div class="card">
-            <h2>Recent Alerts (latest 50)</h2>
-            <table>
-              <thead>
-                <tr>
-                  <th>Email</th>
-                  <th>Postcode</th>
-                  <th>Radius</th>
-                  <th>Active</th>
-                  <th>Created</th>
-                  <th>Last run</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${alerts
-                  .map((a) => {
-                    const radius = a.radiusMiles ?? a.radius ?? "";
-                    const created = a.createdAt
-                      ? new Date(a.createdAt)
-                          .toISOString()
-                          .slice(0, 19)
-                          .replace("T", " ")
-                      : "";
-                    const lastRun = a.lastRunAt
-                      ? new Date(a.lastRunAt)
-                          .toISOString()
-                          .slice(0, 19)
-                          .replace("T", " ")
-                      : "";
-                    return `
-                      <tr>
-                        <td>${a.email}</td>
-                        <td>${a.postcode}</td>
-                        <td>${radius}</td>
-                        <td>${a.active ? "Yes" : "No"}</td>
-                        <td>${created}</td>
-                        <td>${lastRun}</td>
-                      </tr>
-                    `;
-                  })
-                  .join("")}
-              </tbody>
-            </table>
-          </div>
-
-          <div class="card">
-            <h2>Recent Email Logs (latest 50)</h2>
-            <table>
-              <thead>
-                <tr>
-                  <th>Email</th>
-                  <th>Postcode</th>
-                  <th>Radius</th>
-                  <th>Practice ID</th>
-                  <th>Appointment URL</th>
-                  <th>Sent at</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${recentLogs
-                  .map((l) => {
-                    const sentAt = l.sentAt
-                      ? new Date(l.sentAt)
-                          .toISOString()
-                          .slice(0, 19)
-                          .replace("T", " ")
-                      : "";
-                    return `
-                      <tr>
-                        <td>${l.email || l.to || ""}</td>
-                        <td>${l.postcode || ""}</td>
-                        <td>${l.radiusMiles ?? ""}</td>
-                        <td>${l.practiceId || ""}</td>
-                        <td>${
-                          l.appointmentUrl
-                            ? `<a href="${l.appointmentUrl}" target="_blank">link</a>`
-                            : ""
-                        }</td>
-                        <td>${sentAt}</td>
-                      </tr>
-                    `;
-                  })
-                  .join("")}
-              </tbody>
-            </table>
-          </div>
-
-          <p class="muted">
-            Accessed at ${new Date().toISOString()}
-          </p>
-        </body>
-      </html>
-    `;
-
-    res.send(html);
-  } catch (err) {
-    console.error("Admin dashboard error:", err.message);
-    res.status(500).send("Admin dashboard error");
   }
 });
 
