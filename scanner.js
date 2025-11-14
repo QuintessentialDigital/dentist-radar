@@ -1,556 +1,293 @@
-// scanner.js
-// Scans active Watches, checks NHS for accepting dentists directly from
-// the search results page, sends emails (if SMTP is configured),
-// and logs per-USER alert deliveries in EmailLog.
-//
-// Usage:
-//   - Run manually: node scanner.js
-//   - From server.js: import { runScan } from "./scanner.js";
+/* =========================
+   Reset & base
+========================= */
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  min-height:100vh; display:flex; flex-direction:column;
+  font-family:"Inter","Segoe UI",Roboto,Arial,sans-serif;
+  color:#222; background:#fafafa; line-height:1.6;
+}
+main{flex:1 0 auto}
+img{max-width:100%;display:block}
+a{text-decoration:none;color:inherit}
 
-import "dotenv/config";
-import nodemailer from "nodemailer";
-import { connectMongo, Watch, EmailLog } from "./models.js";
+/* =========================
+   Containers
+========================= */
+.container{max-width:1080px;margin:0 auto;padding:0 16px}
+.container-wide{max-width:1280px;margin:0 auto;padding:0 20px}
 
-// If you're on Node 18+, global fetch exists.
-// If not, install node-fetch and uncomment this:
-// import fetch from "node-fetch";
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/* Make header container full-width so logo/menu can reach edges */
+header .container{
+  max-width:none;       /* header goes edge-to-edge */
+  padding:0 2%;         /* gentle side breathing room */
 }
 
-// ---------------- Small helpers ----------------
+/* =========================
+   Header (logo left, nav right)
+========================= */
+header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-index:1000}
+.navbar{
+  height:64px;display:flex;align-items:center;justify-content:space-between;
+  width:100%;
+}
+.logo{flex:0 0 auto}
+.logo img{height:44px;width:auto}
+.menu-toggle{display:none;background:none;border:0;font-size:1.8rem;line-height:1;margin-left:auto}
+.nav-links{list-style:none;display:flex;gap:1rem;align-items:center;margin-left:auto}
+.nav-links a{font-weight:600;padding:.3rem .6rem;border-radius:6px}
+.nav-links a:hover,.nav-links a.active{background:rgba(11,99,255,.08);color:#0b63ff}
 
-function slugifyName(name) {
-  return name
-    .toLowerCase()
-    .replace(/&/g, "and")
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
+/* =========================
+   Hero
+========================= */
+.hero{
+  background:linear-gradient(135deg,#0b63ff 0%,#00bfff 100%);
+  color:#fff;
+}
+.hero .container{padding:56px 16px 40px}
+.hero.small-hero .container{padding:36px 16px 28px}
+
+/* Centered headings for small-hero pages (Pricing, About, Terms, Privacy) */
+.hero.small-hero .container{
+  text-align:center;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+}
+.hero.small-hero h1,
+.hero.small-hero p{
+  max-width:640px;
+  margin-left:auto;
+  margin-right:auto;
 }
 
-// Very simple UK phone extractor from a text block
-function extractPhone(block) {
-  // Look for something that looks like a UK landline: 0XXXXXXXXXX with spaces
-  const phoneMatch =
-    block.match(/\b0\d{2,4}[\s-]?\d{3}[\s-]?\d{3,4}\b/) ||
-    block.match(/\b0\d{9,10}\b/);
-  return phoneMatch ? phoneMatch[0].trim() : null;
+/* Split hero layout: image left, form right (home only) */
+.hero-layout{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:32px;
 }
 
-// Build a Google Maps search link
-function buildMapsUrl(name, postcode) {
-  const q = `${name || ""} ${postcode || ""}`.trim();
-  if (!q) return null;
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-    q
-  )}`;
+/* LEFT: image */
+.hero-visual{
+  flex:1 1 320px;
+  min-width:260px;
+  display:flex;
+  justify-content:flex-start;
+}
+.hero-visual img{
+  max-width:420px;
+  width:100%;
+  height:auto;
+  border-radius:18px;
+  box-shadow:0 14px 30px rgba(0,0,0,0.18);
 }
 
-// ---------------- NHS helpers ----------------
-
-// NHS search results URL
-function buildSearchUrl(postcode, radiusMiles) {
-  const encPostcode = encodeURIComponent(postcode.trim());
-  // radiusMiles is kept for reporting, not sent to NHS
-  return `https://www.nhs.uk/service-search/find-a-dentist/results/${encPostcode}`;
+/* RIGHT: form */
+.hero-form{
+  flex:1 1 320px;
+  min-width:260px;
 }
 
-// Build an NHS profile URL from name + ID
-function buildProfileUrl(name, practiceId) {
-  const slug = slugifyName(name || "");
-  if (!slug || !practiceId) return null;
-  return `https://www.nhs.uk/services/dentist/${slug}/${practiceId}`;
+/* =========================
+   Home form
+========================= */
+.alert-form{
+  display:flex;
+  flex-direction:column;        /* stack fields vertically on desktop */
+  gap:10px;
+  justify-content:flex-start;
+  max-width:360px;              /* nice narrow, focused form */
+  margin:0 0 14px 0;
+}
+.input{
+  flex:0 0 auto;
+  min-width:100%;
+  max-width:100%;
+}
+.input input{
+  width:100%;
+  height:46px;
+  padding:0 14px;
+  border:1px solid #dcdcdc;
+  border-radius:8px;
+  font-size:1rem;
+  background:#fff;
+}
+.input input:focus{
+  border-color:#0b63ff;
+  box-shadow:0 0 0 3px rgba(11,99,255,.18);
+}
+.btn{
+  width:100%;                  /* button same width as inputs */
+  height:46px;
+  padding:0 22px;
+  border-radius:8px;
+  border:2px solid #fff;
+  background:#fff;
+  color:#0b63ff;
+  font-weight:800;
+  letter-spacing:.3px;
+  cursor:pointer;
+  transition:.15s;
+}
+.btn:hover{
+  background:#0b63ff;
+  color:#fff;
+  border-color:#0b63ff;
 }
 
-async function fetchHtml(url) {
-  const res = await fetch(url, {
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (compatible; DentistRadarBot/1.0; +https://dentistradar.co.uk)",
-      Accept: "text/html,application/xhtml+xml",
-    },
-  });
+/* =========================
+   Messages
+========================= */
+.message-box{
+  display:none;
+  margin-top:14px;
+  background:rgba(255,255,255,0.97);
+  border-radius:10px; padding:10px 14px; font-weight:600; color:#1a1a1a;
+  max-width:360px;              /* align with form width */
+  margin-left:0;
+  margin-right:0;
+  box-shadow:0 1px 6px rgba(0,0,0,.1);
+}
+.message-box a{color:#0b63ff;font-weight:700;text-decoration:underline}
+.message-box.error{color:#d93025}.message-box.warn{color:#a36b00}.message-box.success{color:#0a8a0a}
+.message-box.show{display:block}
 
-  if (!res.ok) {
-    throw new Error(`Fetch failed ${res.status} for ${url}`);
+/* =========================
+   Sections (shared)
+========================= */
+.section{padding:48px 0;text-align:center}
+.section h2{font-size:1.6rem;margin-bottom:14px;color:#111}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:12px}
+.card{background:#fff;border:1px solid #eee;border-radius:12px;padding:18px;box-shadow:0 2px 6px rgba(0,0,0,.04);text-align:left}
+.card strong{display:block;color:#0b63ff;margin-bottom:6px}
+
+/* Trust bullets */
+.kbullets{list-style:none;display:flex;gap:14px;justify-content:center;flex-wrap:wrap;margin-top:10px}
+.kbullets li{position:relative;padding:10px 14px 10px 34px;background:#fff;border:1px solid #eee;border-radius:10px}
+.kbullets li::before{content:"✓";position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#0b63ff;font-weight:800}
+
+/* =========================
+   Pricing
+========================= */
+.pricing-grid{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:18px;
+  align-items:stretch;
+}
+.plan-card{
+  background:#fff;border:1px solid #eee;border-radius:14px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,.05);
+  display:flex;flex-direction:column;gap:12px;text-align:left
+}
+.plan-card h2{font-size:1.3rem;margin-bottom:2px}
+.plan-card p{color:#444}
+.plan-card ul{list-style:none;display:flex;flex-direction:column;gap:8px;margin:6px 0 2px 0}
+.plan-card ul li{position:relative;padding-left:22px}
+.plan-card ul li::before{content:"•";position:absolute;left:8px;color:#0b63ff;font-weight:900}
+.price{font-weight:800;font-size:1.2rem;margin-top:4px;margin-bottom:8px}
+.plan-card .btn{align-self:flex-start}
+.plan-card.highlight{border-color:#0b63ff;box-shadow:0 6px 16px rgba(11,99,255,.12)}
+
+/* Stack pricing cards on mobile for clean vertical reading order */
+@media (max-width:900px){
+  .pricing-grid{grid-template-columns:1fr}
+  .plan-card .btn{width:100%}
+}
+
+/* =========================
+   Legal text blocks (About/Terms/Privacy)
+========================= */
+.legal-text{text-align:left;display:flex;flex-direction:column;gap:14px}
+.legal-text ul{list-style:none;margin-left:0;padding-left:0}
+.legal-text li{position:relative;padding-left:22px;margin:6px 0}
+.legal-text li::before{content:"•";position:absolute;left:8px;color:#0b63ff;font-weight:900}
+
+/* =========================
+   Footer (always visible)
+========================= */
+footer{background:#fff;border-top:1px solid #eee;flex-shrink:0;margin-top:auto}
+footer .container{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;min-height:64px;font-size:.95rem;text-align:center}
+footer a{color:#0b63ff}
+
+/* Desktop-only spacing tweaks so footer is more visible */
+@media (min-width:901px){
+  .hero .container{
+    padding-top:48px;          /* slightly reduced from 56 */
+    padding-bottom:28px;       /* reduced from 40 */
+  }
+  .hero.small-hero .container{
+    padding-top:28px;          /* reduced */
+    padding-bottom:20px;       /* reduced */
+  }
+  .section{
+    padding:40px 0;            /* reduced from 48, footer moves up */
+  }
+}
+
+/* =========================
+   Mobile (<=600px)
+========================= */
+@media (max-width:600px){
+  /* Header hamburger */
+  .menu-toggle{display:block}
+  .nav-links{
+    display:none;position:absolute;top:60px;left:0;right:0;background:#fff;
+    border-bottom:1px solid #eee;flex-direction:column;padding:12px 16px;gap:8px
+  }
+  .nav-links.open{display:flex}
+
+  /* Hero + form on mobile: image top, form below */
+  .hero .container{
+    padding:30px 16px 16px;      /* slightly tighter bottom padding */
+  }
+  .hero-layout{
+    flex-direction:column;
+    align-items:flex-start;
+    gap:20px;                    /* reduce space between image and form */
+  }
+  .hero-visual{
+    width:100%;
+    justify-content:center;
+    margin-bottom:4px;
+  }
+  .hero-form{
+    width:100%;
   }
 
-  return await res.text();
-}
-
-// Extract practice data (name, id, acceptance, distance, phone, adult/child)
-// from search HTML ONLY
-function extractPracticesFromSearch(html, searchPostcode) {
-  const results = [];
-
-  // Each block looks like (in the accessible text version):
-  //
-  //   Result for   Winnersh Dental Practice
-  //   V006578
-  //   ...
-  //   1.2 miles away
-  //   ...
-  //   When availability allows, this dentist accepts new NHS patients if they are:
-  //     adults aged 18 or over
-  //     children aged 17 or under
-  //   ...
-  //   End of result for   Winnersh Dental Practice
-  //
-  const regex =
-    /Result for\s+(.+?)\r?\n([\s\S]*?)(?:End of result for\s+.+?\r?\n)/g;
-
-  let match;
-  while ((match = regex.exec(html)) !== null) {
-    const name = match[1].trim();
-    const block = match[2];
-    const lower = block.toLowerCase();
-
-    // Practice ID: lines like "V003718"
-    const idMatch = block.match(/\bV[0-9A-Z]{6}\b/);
-    const practiceId = idMatch ? idMatch[0] : null;
-
-    // Distance text: e.g. "1.2 miles away"
-    let distanceText = null;
-    let distanceMiles = null;
-    const distMatch = block.match(/([\d.]+)\s*miles?\s+away/i);
-    if (distMatch) {
-      distanceText = `${distMatch[1]} miles away`;
-      distanceMiles = Number(distMatch[1]);
-    }
-
-    // Phone number (best effort)
-    const phone = extractPhone(block);
-
-    // Determine acceptance from the text in THIS block
-    const positivePatterns = [
-      "when availability allows, this dentist accepts new nhs patients if they are:",
-      "this dentist currently accepts new nhs patients for routine dental care",
-      "this dentist currently accepts new nhs patients",
-      "accepting new nhs patients",
-      "is accepting new nhs patients",
-    ];
-
-    const negativePatterns = [
-      "not accepting new nhs patients",
-      "this dentist does not currently accept new nhs patients for routine dental care",
-      "this dentist currently does not accept new nhs patients",
-    ];
-
-    const unknownPatterns = [
-      "this dentist surgery has not given a recent update on whether they're taking new nhs patients",
-      "this dentist has not confirmed if they currently accept new nhs patients for routine dental care",
-    ];
-
-    const pos = positivePatterns.some((p) => lower.includes(p));
-    const neg = negativePatterns.some((p) => lower.includes(p));
-    const unk = unknownPatterns.some((p) => lower.includes(p));
-
-    let acceptance = "unknown";
-    if (pos && !neg) acceptance = "accepting";
-    else if (neg && !pos) acceptance = "not_accepting";
-    else if (unk && !pos && !neg) acceptance = "unknown";
-
-    // Adult / child tagging – broader but still NHS-focused patterns
-    const adultPatterns = [
-      "adults aged 18 or over",
-      "adults aged 18 and over",
-      "adults aged 18+",
-      "adult nhs patients",
-      "adult patients",
-      "adult dental patients",
-      "nhs adult patients",
-      // fallback: generic "adults" but only if we already know it's accepting
-      "adults",
-    ];
-
-    const childPatterns = [
-      "children aged 17 or under",
-      "children aged under 18",
-      "child nhs patients",
-      "child patients",
-      "nhs child patients",
-      "nhs children",
-      "children for routine dental care",
-      "children for routine care",
-      "under 18s",
-      "under 18 years",
-      "aged under 18",
-      // fallback: generic "children" when in acceptance block
-      "children",
-    ];
-
-    // Only consider generic "adults"/"children" if this is an accepting-style block
-    const baseTextForPatterns = pos ? lower : lower.replace(/\badults\b/g, "").replace(/\bchildren\b/g, "");
-
-    const acceptsAdults = adultPatterns.some((p) =>
-      baseTextForPatterns.includes(p)
-    );
-    const acceptsChildren = childPatterns.some((p) =>
-      baseTextForPatterns.includes(p)
-    );
-
-    let patientType = "Not specified";
-    if (acceptsAdults && acceptsChildren) {
-      patientType = "Adults & Children";
-    } else if (acceptsAdults) {
-      patientType = "Adults only";
-    } else if (acceptsChildren) {
-      patientType = "Children only";
-    }
-
-    const profileUrl = buildProfileUrl(name, practiceId);
-    const mapsUrl = buildMapsUrl(name, searchPostcode);
-
-    results.push({
-      name,
-      practiceId: practiceId || name,
-      acceptance,
-      profileUrl,
-      mapsUrl,
-      distanceText,
-      distanceMiles,
-      phone,
-      acceptsAdults,
-      acceptsChildren,
-      patientType,
-    });
+  .alert-form{
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+    max-width:100%;
+    justify-content:stretch;
+  }
+  .input{min-width:100%;max-width:100%}
+  .input input{
+    height:52px;
+    font-size:1.05rem;
+    border-radius:10px;
+  }
+  .btn{
+    height:52px;
+    border-radius:10px;
+    font-size:1.02rem;
+  }
+  .message-box{
+    margin-top:10px;
+    margin-left:0;
+    margin-right:0;
   }
 
-  return results;
-}
-
-// ---------------- Unsubscribe URL helper ----------------
-
-function buildUnsubscribeUrl(alertId, email) {
-  const base =
-    process.env.PUBLIC_BASE_URL ||
-    process.env.APP_BASE_URL ||
-    "https://dentistradar.co.uk";
-
-  // MVP: simple alert + email link; your server should implement /unsubscribe
-  // to set Watch.active = false for this alertId & email.
-  const params = new URLSearchParams({
-    alert: String(alertId),
-    email: email || "",
-  });
-
-  return `${base.replace(/\/$/, "")}/unsubscribe?${params.toString()}`;
-}
-
-// ---------------- Mailer ----------------
-
-// NOTE: now *never throws* – returns null if SMTP not configured
-function createTransport() {
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT || 587);
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASS;
-
-  if (!host || !user || !pass) {
-    console.warn(
-      "[DentistRadar] SMTP not fully configured (SMTP_HOST/SMTP_USER/SMTP_PASS). " +
-        "Skipping email send but continuing scanner/logging."
-    );
-    return null;
+  /* Reduce vertical spacing between sections on mobile */
+  .section{
+    padding:32px 0;             /* was 48px, now tighter */
   }
 
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure: port === 465,
-    auth: { user, pass },
-  });
-}
-
-async function sendAcceptingEmail({
-  alertId,
-  to,
-  postcode,
-  radiusMiles,
-  practices,
-}) {
-  if (!practices.length) return;
-
-  const transport = createTransport();
-  if (!transport) return;
-
-  const from = process.env.FROM_EMAIL || "alerts@dentistradar.co.uk";
-  const subject = `DentistRadar: ${practices.length} NHS dentist(s) accepting near ${postcode}`;
-
-  const unsubscribeUrl = buildUnsubscribeUrl(alertId, to);
-
-  // Professional tabular HTML email
-  const rowsHtml = practices
-    .map((p) => {
-      const profileLink = p.profileUrl || p.appointmentUrl || "#";
-      const mapsLink = p.mapsUrl || profileLink;
-      const distance = p.distanceText || "";
-      const phone = p.phone || "";
-      const patientType = p.patientType || "Not specified";
-
-      return `
-        <tr>
-          <td style="padding:8px 12px;border:1px solid #e0e0e0;">
-            <strong>${p.name || p.practiceId}</strong>
-          </td>
-          <td style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">
-            ${patientType}
-          </td>
-          <td style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">
-            ${distance}
-          </td>
-          <td style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">
-            ${phone}
-          </td>
-          <td style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">
-            <a href="${profileLink}" target="_blank">NHS Profile</a>
-          </td>
-          <td style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">
-            <a href="${mapsLink}" target="_blank">View on map</a>
-          </td>
-        </tr>
-      `;
-    })
-    .join("");
-
-  const html = `
-    <div style="font-family: Arial, sans-serif; line-height: 1.5; color: #333;">
-      <h2 style="color:#0b5cff; margin-bottom: 16px;">Good news – NHS dentists are accepting new patients near you</h2>
-      <p>
-        You are receiving this alert from <strong>DentistRadar</strong> because you registered for updates
-        for postcode <strong>${postcode}</strong> within <strong>${radiusMiles} miles</strong>.
-      </p>
-      <p>
-        Based on the latest information from the NHS website, the following practices are currently shown
-        as accepting new NHS patients (subject to change and availability):
-      </p>
-
-      <table style="border-collapse:collapse;width:100%;margin-top:16px;font-size:14px;">
-        <thead>
-          <tr style="background:#f5f7fb;">
-            <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:left;">Practice</th>
-            <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">Patient type</th>
-            <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">Distance</th>
-            <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">Phone</th>
-            <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">NHS Page</th>
-            <th style="padding:8px 12px;border:1px solid #e0e0e0;text-align:center;">Map</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rowsHtml}
-        </tbody>
-      </table>
-
-      <p style="margin-top:16px;">
-        <strong>Tip:</strong> NHS availability can change quickly. If you find a suitable practice,
-        it’s best to contact them as soon as possible to confirm they are still accepting new patients.
-      </p>
-
-      <p style="font-size:12px;color:#777;margin-top:24px;">
-        This email is based on publicly available information from the NHS website at the time of scanning.
-        DentistRadar does not guarantee availability and cannot book appointments on your behalf.
-      </p>
-      <p style="font-size:12px;color:#777;margin-top:8px;">
-        If you no longer wish to receive alerts for this postcode, you can
-        <a href="${unsubscribeUrl}" target="_blank">unsubscribe from this alert here</a>.
-      </p>
-      <p style="font-size:12px;color:#777;margin-top:4px;">
-        If you did not register for this alert, please ignore this email or contact DentistRadar support.
-      </p>
-    </div>
-  `;
-
-  const text =
-    `Good news – NHS dentists accepting new patients near ${postcode} (within ${radiusMiles} miles):\n\n` +
-    practices
-      .map((p) => {
-        const distance = p.distanceText ? ` (${p.distanceText})` : "";
-        const phone = p.phone ? ` | Phone: ${p.phone}` : "";
-        const profile =
-          p.profileUrl || p.appointmentUrl || "(see NHS website for details)";
-        const maps = p.mapsUrl || profile;
-        const patientType = p.patientType || "Not specified";
-        return `- ${p.name || p.practiceId} [${patientType}]${distance}${phone}\n  NHS: ${profile}\n  Map: ${maps}\n`;
-      })
-      .join("\n") +
-    `\n\nTo unsubscribe from this alert, visit: ${unsubscribeUrl}\n`;
-
-  await transport.sendMail({
-    from,
-    to,
-    subject,
-    html,
-    text,
-  });
-}
-
-// ---------------- Core per-Watch scan ----------------
-
-async function scanWatch(watch) {
-  const { _id: alertId, email, postcode } = watch;
-
-  // Support both radiusMiles and radius, with a default
-  const radiusMiles = watch.radiusMiles ?? watch.radius ?? 25;
-
-  const searchUrl = buildSearchUrl(postcode, radiusMiles);
-  const t0 = Date.now();
-
-  let searchHtml;
-  try {
-    searchHtml = await fetchHtml(searchUrl);
-  } catch (err) {
-    console.error("Search fetch failed:", err.message);
-    return {
-      alertId,
-      email,
-      postcode,
-      radiusMiles,
-      scanned: 0,
-      totalAccepting: 0,
-      totalNotAccepting: 0,
-      newAccepting: 0,
-      error: `Search fetch failed: ${err.message}`,
-      tookMs: Date.now() - t0,
-    };
-  }
-
-  const practices = extractPracticesFromSearch(searchHtml, postcode);
-
-  let scanned = 0;
-  let totalAccepting = 0;
-  let totalNotAccepting = 0;
-  const newAccepting = [];
-
-  for (const practice of practices) {
-    scanned++;
-
-    if (practice.acceptance === "accepting") {
-      totalAccepting++;
-
-      const appointmentUrl = practice.profileUrl || null;
-
-      // Per-alert (per-user) de-duplication
-      const alreadySent = await EmailLog.findOne({
-        alertId,
-        practiceId: practice.practiceId,
-        appointmentUrl,
-      }).lean();
-
-      if (!alreadySent) {
-        newAccepting.push({
-          ...practice,
-          appointmentUrl,
-        });
-      }
-    } else if (practice.acceptance === "not_accepting") {
-      totalNotAccepting++;
-    }
-
-    // be nice to NHS
-    await sleep(200);
-  }
-
-  // Send & log — logging happens even if email fails / is skipped
-  if (newAccepting.length) {
-    try {
-      await sendAcceptingEmail({
-        alertId,
-        to: email,
-        postcode,
-        radiusMiles,
-        practices: newAccepting,
-      });
-    } catch (err) {
-      console.error("Email send error (non-fatal):", err.message);
-    }
-
-    try {
-      const bulk = EmailLog.collection.initializeUnorderedBulkOp();
-
-      newAccepting.forEach((p) => {
-        bulk
-          .find({
-            alertId,
-            practiceId: p.practiceId,
-            appointmentUrl: p.appointmentUrl,
-          })
-          .upsert()
-          .updateOne({
-            $setOnInsert: {
-              alertId,
-              email,
-              postcode,
-              radiusMiles,
-              practiceId: p.practiceId,
-              appointmentUrl: p.appointmentUrl,
-              sentAt: new Date(),
-            },
-          });
-      });
-
-      await bulk.execute();
-    } catch (err) {
-      console.error("Log write error (non-fatal):", err.message);
-    }
-  }
-
-  return {
-    alertId,
-    email,
-    postcode,
-    radiusMiles,
-    scanned,
-    totalAccepting,
-    totalNotAccepting,
-    newAccepting: newAccepting.length,
-    tookMs: Date.now() - t0,
-  };
-}
-
-// ---------------- Orchestrators ----------------
-
-export async function runAllScans() {
-  await connectMongo();
-
-  const activeWatches = await Watch.find({ active: true }).lean();
-
-  console.log(
-    `Starting scan for ${activeWatches.length} active alert(s) at ${new Date().toISOString()}`
-  );
-
-  const results = [];
-
-  for (const watch of activeWatches) {
-    const result = await scanWatch(watch);
-    results.push(result);
-
-    await Watch.updateOne(
-      { _id: watch._id },
-      { $set: { lastRunAt: new Date() } }
-    );
-  }
-
-  return results;
-}
-
-// Alias expected by server.js
-export async function runScan() {
-  return runAllScans();
-}
-
-// Allow running directly: node scanner.js
-if (import.meta.url === `file://${process.argv[1]}`) {
-  runAllScans()
-    .then((res) => {
-      console.log("Scan complete");
-      console.log(JSON.stringify(res, null, 2));
-      process.exit(0);
-    })
-    .catch((err) => {
-      console.error("Scan error", err);
-      process.exit(1);
-    });
+  /* Pricing mobile alignment */
+  .plan-card .btn{width:100%}
 }
