@@ -2,7 +2,7 @@
 // - Uses shared models.js (watches/users/emaillogs)
 // - Welcome email uses HTML template via Postmark
 // - Adds /api/debug/peek to verify DB/collections
-// - Phase 2: Stripe webhook + plan activation email + "My Alerts" APIs
+// - Phase 2: Stripe webhook + plan activation email + "My Alerts" APIs + Unsubscribe
 
 import express from "express";
 import cors from "cors";
@@ -104,7 +104,7 @@ function looksLikeUkPostcode(pc) {
   return /^([A-Z]{1,2}\d[A-Z\d]?)\s?\d[A-Z]{2}$/i.test((pc || "").toUpperCase());
 }
 
-// UPDATED: robust planLimitFor that works even if schema doesn't yet store plan/postcode_limit
+// Robust planLimitFor: works even if schema doesn't yet store plan/postcode_limit
 async function planLimitFor(email) {
   const e = normEmail(email);
   const u = await User.findOne({ email: e }).lean();
@@ -342,6 +342,10 @@ app.post("/api/stripe/webhook", async (req, res) => {
         // Send DentistRadar plan activation email
         const planLabel = plan === "family" ? "Family" : "Pro";
         const subject = `Your DentistRadar ${planLabel} plan is now active`;
+
+        const SITE = process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
+        const manageUrl = `${SITE}/my-alerts.html?email=${encodeURIComponent(email)}`;
+
         const html = `
           <html>
             <body style="font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#333;line-height:1.6;">
@@ -354,7 +358,7 @@ app.post("/api/stripe/webhook", async (req, res) => {
               <p>What you can do next:</p>
               <ul>
                 <li>Add or update your alerts on the homepage using your email.</li>
-                <li>Manage or remove existing alerts on the “My Alerts” page.</li>
+                <li>View and manage all your alerts on the <a href="${manageUrl}">My Alerts</a> page.</li>
               </ul>
               <p>If you have any questions or feedback, just reply to this email.</p>
               <p>Best regards,<br>DentistRadar</p>
@@ -406,6 +410,134 @@ app.post("/api/scan", async (req, res) => {
       alertsSent: 0,
       note: "scan_exception",
     });
+  }
+});
+
+/* ---------------------------
+   Unsubscribe (confirmation page)
+--------------------------- */
+
+// Generic HTML response helper
+function renderUnsubscribePage(success, infoText) {
+  const title = success ? "You have been unsubscribed" : "Unsubscribe";
+  const bodyText =
+    infoText ||
+    (success
+      ? "You will no longer receive alerts for this postcode."
+      : "We could not find that alert. It may have already been removed.");
+
+  return `
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>${title} — DentistRadar</title>
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+      </head>
+      <body style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;background:#fafafa;color:#222;line-height:1.6;">
+        <div style="max-width:480px;margin:40px auto;padding:24px 20px;background:#fff;border-radius:12px;border:1px solid #eee;box-shadow:0 2px 10px rgba(0,0,0,0.05);text-align:center;">
+          <h1 style="font-size:1.5rem;margin-bottom:10px;color:#0b63ff;">${title}</h1>
+          <p style="margin-bottom:18px;">${bodyText}</p>
+          <a href="/" style="display:inline-block;margin-top:6px;padding:10px 18px;border-radius:8px;background:#0b63ff;color:#fff;text-decoration:none;font-weight:600;">Back to DentistRadar</a>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
+// Support /unsubscribe?alertId=... or ?alert=... or /unsubscribe/:id
+app.get("/unsubscribe", async (req, res) => {
+  try {
+    const alertId = req.query.alertId || req.query.alert || null;
+    if (!alertId) {
+      return res
+        .status(400)
+        .send(
+          renderUnsubscribePage(
+            false,
+            "We couldn't identify which alert to remove. The link might be incomplete."
+          )
+        );
+    }
+
+    const deleted = await Watch.findByIdAndDelete(alertId);
+    if (!deleted) {
+      return res
+        .status(404)
+        .send(
+          renderUnsubscribePage(
+            false,
+            "We couldn't find that alert. It may have already been removed."
+          )
+        );
+    }
+
+    const pc = deleted.postcode || "";
+    return res.send(
+      renderUnsubscribePage(
+        true,
+        pc
+          ? `You will no longer receive alerts for <strong>${pc}</strong>.`
+          : "You will no longer receive alerts for this postcode."
+      )
+    );
+  } catch (e) {
+    console.error("unsubscribe error:", e);
+    return res
+      .status(500)
+      .send(
+        renderUnsubscribePage(
+          false,
+          "Something went wrong while removing your alert. Please try again later."
+        )
+      );
+  }
+});
+
+app.get("/unsubscribe/:id", async (req, res) => {
+  try {
+    const alertId = req.params.id;
+    if (!alertId) {
+      return res
+        .status(400)
+        .send(
+          renderUnsubscribePage(
+            false,
+            "We couldn't identify which alert to remove. The link might be incomplete."
+          )
+        );
+    }
+
+    const deleted = await Watch.findByIdAndDelete(alertId);
+    if (!deleted) {
+      return res
+        .status(404)
+        .send(
+          renderUnsubscribePage(
+            false,
+            "We couldn't find that alert. It may have already been removed."
+          )
+        );
+    }
+
+    const pc = deleted.postcode || "";
+    return res.send(
+      renderUnsubscribePage(
+        true,
+        pc
+          ? `You will no longer receive alerts for <strong>${pc}</strong>.`
+          : "You will no longer receive alerts for this postcode."
+      )
+    );
+  } catch (e) {
+    console.error("unsubscribe/:id error:", e);
+    return res
+      .status(500)
+      .send(
+        renderUnsubscribePage(
+          false,
+          "Something went wrong while removing your alert. Please try again later."
+        )
+      );
   }
 });
 
