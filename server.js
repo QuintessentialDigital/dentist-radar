@@ -104,20 +104,23 @@ function looksLikeUkPostcode(pc) {
   return /^([A-Z]{1,2}\d[A-Z\d]?)\s?\d[A-Z]{2}$/i.test((pc || "").toUpperCase());
 }
 
-// UPDATED: make planLimitFor rely primarily on plan, not strict status
+// UPDATED: robust planLimitFor that works even if schema doesn't yet store plan/postcode_limit
 async function planLimitFor(email) {
-  const u = await User.findOne({ email: normEmail(email) }).lean();
+  const e = normEmail(email);
+  const u = await User.findOne({ email: e }).lean();
+
+  // No user doc = free plan
   if (!u) return 1;
 
   const plan = (u.plan || "").toLowerCase();
-  const status = (u.status || "").toLowerCase();
 
-  if (plan === "family") return u.postcode_limit || 10;
-  if (plan === "pro") return u.postcode_limit || 5;
+  // If plan is explicitly set, respect it
+  if (plan === "family") return 10;
+  if (plan === "pro") return 5;
 
-  if (status === "active" && u.postcode_limit) return u.postcode_limit;
-
-  return 1;
+  // Fallback: any existing User doc = at least Pro for now
+  // (we only create User records via paid Stripe webhook)
+  return 5;
 }
 
 /* ---------------------------
