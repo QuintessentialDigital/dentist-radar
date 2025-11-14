@@ -78,7 +78,11 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
   border-radius:18px;
   box-shadow:0 14px 30px rgba(0,0,0,0.18);
 }
-.hero-form{flex:1 1 320px;min-width:260px}
+.hero-form{
+  flex:1 1 320px;
+  min-width:260px;
+  margin-top:8px; /* small vertical gap between image and first textbox */
+}
 
 /* =========================
    Home form
@@ -156,18 +160,69 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 }
 
 /* =========================
-   Pricing
+   Pricing (restored original behaviour)
 ========================= */
 .pricing-grid{
-  display:grid;grid-template-columns:repeat(3,1fr);
-  gap:18px;align-items:stretch;
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:18px;
+  align-items:stretch;
 }
 .plan-card{
-  background:#fff;border:1px solid #eee;border-radius:14px;
-  padding:20px;box-shadow:0 2px 8px rgba(0,0,0,.05);
-  display:flex;flex-direction:column;gap:12px;text-align:left;
+  background:#fff;
+  border:1px solid #eee;
+  border-radius:14px;
+  padding:20px;
+  box-shadow:0 2px 8px rgba(0,0,0,.05);
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  text-align:left;
 }
-.plan-card.highlight{border-color:#0b63ff;box-shadow:0 6px 16px rgba(11,99,255,.12)}
+.plan-card h2{
+  font-size:1.3rem;
+  margin-bottom:2px;
+}
+.plan-card p{
+  color:#444;
+}
+.plan-card ul{
+  list-style:none;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  margin:6px 0 2px 0;
+}
+.plan-card ul li{
+  position:relative;
+  padding-left:22px;
+}
+.plan-card ul li::before{
+  content:"•";
+  position:absolute;
+  left:8px;
+  color:#0b63ff;
+  font-weight:900;
+}
+.price{
+  font-weight:800;
+  font-size:1.2rem;
+  margin-top:4px;
+  margin-bottom:8px;
+}
+.plan-card .btn{
+  align-self:flex-start;
+}
+.plan-card.highlight{
+  border-color:#0b63ff;
+  box-shadow:0 6px 16px rgba(11,99,255,.12);
+}
+
+/* Stack pricing cards on mobile for clean vertical reading order */
+@media (max-width:900px){
+  .pricing-grid{grid-template-columns:1fr}
+  .plan-card .btn{width:100%}
+}
 
 /* =========================
    Legal pages (Terms & Privacy)
@@ -251,19 +306,16 @@ footer a{color:#0b63ff}
 
   .section{padding:32px 0}
 
-  /* =========================
-     MOBILE FIX FOR TRUST BULLETS
-     (Align vertically)
-  ========================== */
+  /* MOBILE FIX FOR TRUST BULLETS – align vertically and left */
   .kbullets{
-    flex-direction:column;   /* vertical list */
-    align-items:flex-start;  /* align left */
+    flex-direction:column;
+    align-items:flex-start;
     padding-left:0;
   }
   .kbullets li{
     width:100%;
     margin:0;
-    padding:10px 14px 10px 34px; /* consistent left padding */
+    padding:10px 14px 10px 34px;
     text-align:left;
   }
 
