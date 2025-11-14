@@ -150,4 +150,96 @@ header{
   border-radius:10px;
   padding:10px 14px;
   font-weight:600;
-  color:
+  color:#1a1a1a;
+  max-width:360px;
+  box-shadow:0 1px 6px rgba(0,0,0,.1);
+}
+.message-box.show{display:block}
+
+/* =========================
+   Sections
+========================= */
+.section{
+  padding:44px 0;   /* slightly reduced */
+  text-align:center;
+}
+.section h2{
+  font-size:1.6rem;
+  margin-bottom:14px;
+  color:#111;
+}
+
+.grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(260px,1fr));
+  gap:16px;
+}
+.card{
+  background:#fff;
+  border:1px solid #eee;
+  border-radius:12px;
+  padding:18px;
+  box-shadow:0 2px 6px rgba(0,0,0,.04);
+  text-align:left;
+}
+.card strong{color:#0b63ff}
+
+/* =========================
+   Footer
+========================= */
+footer{
+  background:#fff;
+  border-top:1px solid #eee;
+  margin-top:auto;
+}
+footer .container{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  min-height:64px;
+  gap:8px;
+}
+
+/* =========================
+   Mobile (<=600px)
+========================= */
+@media (max-width:600px){
+  .menu-toggle{display:block}
+  .nav-links{
+    display:none;
+    position:absolute;
+    top:60px; left:0; right:0;
+    background:#fff;
+    border-bottom:1px solid #eee;
+    flex-direction:column;
+    padding:12px 16px;
+  }
+  .nav-links.open{display:flex}
+
+  /* HERO reduced padding to reduce blue gap */
+  .hero .container{
+    padding:24px 16px 6px;    /* BIG improvement: reduces gap */
+  }
+
+  .hero-layout{
+    flex-direction:column;
+    gap:18px;                /* tighter */
+  }
+
+  .hero-visual{
+    width:100%;
+    justify-content:center;
+  }
+
+  .alert-form{
+    max-width:100%;
+    gap:8px;
+  }
+
+  .section{
+    padding:28px 0;        /* reduce section spacing */
+  }
+  .section.section-wide:first-of-type{
+    padding-top:12px;      /* pulls “How It Works” VERY close */
+  }
+}
