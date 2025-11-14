@@ -49,7 +49,18 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 .hero .container{padding:56px 16px 40px}
 .hero.small-hero .container{padding:36px 16px 28px}
 
-/* Split hero layout: image left, form right */
+/* Centered headings for small-hero pages (Pricing, About, Terms, Privacy) */
+.hero.small-hero .container{
+  text-align:center;
+}
+.hero.small-hero h1,
+.hero.small-hero p{
+  max-width:640px;
+  margin-left:auto;
+  margin-right:auto;
+}
+
+/* Split hero layout: image left, form right (home) */
 .hero-layout{
   display:flex;
   flex-wrap:wrap;
@@ -199,6 +210,13 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 footer{background:#fff;border-top:1px solid #eee;flex-shrink:0;margin-top:auto}
 footer .container{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;min-height:64px;font-size:.95rem;text-align:center}
 footer a{color:#0b63ff}
+
+/* Slightly reduce section padding on desktop so footer is easier to reach */
+@media (min-width:901px){
+  .section{
+    padding:40px 0; /* was 48px */
+  }
+}
 
 /* =========================
    Mobile (<=600px)
