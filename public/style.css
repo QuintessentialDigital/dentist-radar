@@ -104,9 +104,7 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
   box-shadow:0 0 0 3px rgba(11,99,255,.18);
 }
 
-/* -------------------------
-   Button – blue by default
-------------------------- */
+/* Button – blue by default */
 .btn{
   width:100%;
   height:46px;
@@ -140,7 +138,7 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 .message-box.error{color:#d93025}
 .message-box.success{color:#0a8a0a}
 
-/* >>> NEW UPDATE: MAKE LINKS LOOK CLEARLY CLICKABLE <<< */
+/* Make links inside message clearly clickable */
 .message-box a{
   color:#0b63ff;
   font-weight:700;
@@ -243,14 +241,13 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 }
 
 /* =========================
-   Legal pages
+   Legal Pages (Terms/Privacy)
 ========================= */
 .legal-text{
   text-align:left;
   display:flex;flex-direction:column;gap:0;
   font-size:0.98rem;line-height:1.6;
 }
-
 .legal-text h2,
 .legal-text h3,
 .legal-text p,
@@ -258,29 +255,22 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 .legal-text ol{
   margin:0;padding:0;
 }
-
-.legal-text h2,
-.legal-text h3{font-weight:600}
-
 .legal-text h2:not(:first-child),
 .legal-text h3:not(:first-child){
   margin-top:18px;
 }
-
 .legal-text h2 + p,
 .legal-text h3 + p,
 .legal-text h2 + ul,
 .legal-text h3 + ul{
   margin-top:2px;
 }
-
 .legal-text ul,
 .legal-text ol{
   list-style:disc;
   padding-left:1.5rem;
   margin-top:2px;margin-bottom:2px;
 }
-
 .legal-text li{margin:2px 0}
 
 /* =========================
@@ -310,30 +300,60 @@ footer a{color:#0b63ff}
   }
   .nav-links.open{display:flex}
 
-  .hero .container{padding:30px 16px 16px}
-  .hero-layout{flex-direction:column;align-items:flex-start;gap:20px}
-  .hero-visual{width:100%;justify-content:center;margin-bottom:4px}
+  /* Reduced blue bottom space */
+  .hero .container{
+    padding:30px 16px 20px;
+  }
 
-  /* extra spacing between image and Your email textbox */
+  .hero-layout{
+    flex-direction:column;
+    align-items:flex-start;
+    gap:20px;
+  }
+
+  .hero-visual{
+    width:100%;
+    justify-content:center;
+    margin-bottom:10px;
+  }
+
+  /* More space between image + email textbox */
   .hero-form{
     width:100%;
     margin-top:16px;
   }
 
-  .alert-form{gap:8px;max-width:100%}
-  .input input{height:52px;font-size:1.05rem;border-radius:10px}
-  .btn{height:52px;border-radius:10px;font-size:1.02rem}
+  /* EVEN spacing for ALL inputs + button */
+  .alert-form{
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+    max-width:100%;
+  }
 
-  /* validation message full width on mobile */
+  .input input{
+    height:52px;
+    font-size:1.05rem;
+    border-radius:10px;
+  }
+
+  .btn{
+    height:52px;
+    border-radius:10px;
+    font-size:1.02rem;
+    margin-bottom:0;
+  }
+
+  /* Validation message same width as form */
   .message-box{
-    margin-top:10px;
+    margin-top:12px;
     max-width:100%;
     width:100%;
   }
 
   .section{padding:32px 0}
 
-  /* Trust bullets vertical alignment on mobile */
+  /* Trust bullets vertical alignment */
   .kbullets{
     flex-direction:column;
     align-items:flex-start;
