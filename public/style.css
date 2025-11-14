@@ -20,8 +20,8 @@ a{text-decoration:none;color:inherit}
 
 /* Make header container full-width so logo/menu can reach edges */
 header .container{
-  max-width:none;       /* header goes edge-to-edge */
-  padding:0 2%;         /* gentle side breathing room */
+  max-width:none;
+  padding:0 2%;
 }
 
 /* =========================
@@ -83,7 +83,7 @@ header{
   padding:36px 16px 28px;
 }
 
-/* Centered headings for small-hero pages (Pricing, About, Terms, Privacy) */
+/* Centered headings for small hero pages */
 .hero.small-hero .container{
   text-align:center;
   display:flex;
@@ -97,15 +97,13 @@ header{
   margin-right:auto;
 }
 
-/* Split hero layout: image left, form right (home) */
+/* Split hero (home only) */
 .hero-layout{
   display:flex;
   flex-wrap:wrap;
   align-items:center;
   gap:32px;
 }
-
-/* LEFT: image */
 .hero-visual{
   flex:1 1 320px;
   min-width:260px;
@@ -119,8 +117,6 @@ header{
   border-radius:18px;
   box-shadow:0 14px 30px rgba(0,0,0,0.18);
 }
-
-/* RIGHT: form */
 .hero-form{
   flex:1 1 320px;
   min-width:260px;
@@ -131,16 +127,14 @@ header{
 ========================= */
 .alert-form{
   display:flex;
-  flex-direction:column;        /* stack fields vertically on desktop */
+  flex-direction:column;
   gap:10px;
   justify-content:flex-start;
-  max-width:360px;              /* nice narrow, focused form */
+  max-width:360px;
   margin:0 0 14px 0;
 }
 .input{
-  flex:0 0 auto;
   min-width:100%;
-  max-width:100%;
 }
 .input input{
   width:100%;
@@ -156,7 +150,7 @@ header{
   box-shadow:0 0 0 3px rgba(11,99,255,.18);
 }
 .btn{
-  width:100%;                  /* button same width as inputs */
+  width:100%;
   height:46px;
   padding:0 22px;
   border-radius:8px;
@@ -185,23 +179,16 @@ header{
   padding:10px 14px;
   font-weight:600;
   color:#1a1a1a;
-  max-width:360px;              /* align with form width */
-  margin-left:0;
-  margin-right:0;
+  max-width:360px;
   box-shadow:0 1px 6px rgba(0,0,0,.1);
 }
-.message-box a{
-  color:#0b63ff;
-  font-weight:700;
-  text-decoration:underline;
-}
+.message-box.show{display:block}
 .message-box.error{color:#d93025}
 .message-box.warn{color:#a36b00}
 .message-box.success{color:#0a8a0a}
-.message-box.show{display:block}
 
 /* =========================
-   Sections (shared)
+   Sections
 ========================= */
 .section{
   padding:48px 0;
@@ -227,7 +214,6 @@ header{
   text-align:left;
 }
 .card strong{
-  display:block;
   color:#0b63ff;
   margin-bottom:6px;
 }
@@ -265,7 +251,6 @@ header{
   display:grid;
   grid-template-columns:repeat(3,1fr);
   gap:18px;
-  align-items:stretch;
 }
 .plan-card{
   background:#fff;
@@ -276,11 +261,9 @@ header{
   display:flex;
   flex-direction:column;
   gap:12px;
-  text-align:left;
 }
 .plan-card h2{
   font-size:1.3rem;
-  margin-bottom:2px;
 }
 .plan-card p{color:#444}
 .plan-card ul{
@@ -288,7 +271,6 @@ header{
   display:flex;
   flex-direction:column;
   gap:8px;
-  margin:6px 0 2px 0;
 }
 .plan-card ul li{
   position:relative;
@@ -299,73 +281,55 @@ header{
   position:absolute;
   left:8px;
   color:#0b63ff;
-  font-weight:900;
 }
 .price{
   font-weight:800;
   font-size:1.2rem;
-  margin-top:4px;
-  margin-bottom:8px;
 }
-.plan-card .btn{align-self:flex-start}
 .plan-card.highlight{
   border-color:#0b63ff;
   box-shadow:0 6px 16px rgba(11,99,255,.12);
 }
 
-/* Stack pricing cards on mobile for clean vertical reading order */
-@media (max-width:900px){
-  .pricing-grid{grid-template-columns:1fr}
-  .plan-card .btn{width:100%}
-}
-
 /* =========================
-   Legal text blocks (About/Terms/Privacy)
+   Terms & Privacy — FINAL SPACING + BULLETS
 ========================= */
+
 .legal-text{
   text-align:left;
   display:flex;
   flex-direction:column;
-  gap:10px;
-  font-size:0.98rem;      /* slightly smaller for document-style pages */
+  gap:0;
+  font-size:0.98rem;
   line-height:1.6;
 }
 
-/* Questions / section headings inside legal pages */
-.legal-text h2{
-  font-size:1.15rem;
-  margin-top:20px;
-  margin-bottom:6px;      /* small gap before the answer */
-}
+/* QUESTIONS */
+.legal-text h2,
 .legal-text h3{
-  font-size:1.02rem;
-  margin-top:16px;
-  margin-bottom:4px;
+  margin-top:22px;        /* space BEFORE question */
+  margin-bottom:0;        /* NO space after question */
+  font-weight:600;
+}
+.legal-text h2:first-child{
+  margin-top:0;           /* first question has no top margin */
 }
 
-/* Answers / body text */
+/* ANSWERS */
 .legal-text p{
-  margin-bottom:8px;      /* space after each answer */
+  margin-top:0;           /* no space before */
+  margin-bottom:14px;     /* space after answer */
 }
 
-/* Ensure small, even gap between question and answer */
-.legal-text h2 + p,
-.legal-text h3 + p{
-  margin-top:4px;
-}
-
-/* Bullets: use normal bullets with clean alignment */
+/* BULLETS */
 .legal-text ul,
 .legal-text ol{
-  margin:6px 0 10px 0;
-  padding-left:1.5rem;
   list-style:disc;
+  padding-left:1.8rem;    /* indent right */
+  margin-top:0;
+  margin-bottom:14px;
 }
-
-/* Reset old custom bullet style */
 .legal-text li{
-  position:static;
-  padding-left:0;
   margin:4px 0;
 }
 .legal-text li::before{
@@ -373,12 +337,11 @@ header{
 }
 
 /* =========================
-   Footer (always visible)
+   Footer
 ========================= */
 footer{
   background:#fff;
   border-top:1px solid #eee;
-  flex-shrink:0;
   margin-top:auto;
 }
 footer .container{
@@ -389,7 +352,6 @@ footer .container{
   flex-wrap:wrap;
   min-height:64px;
   font-size:.95rem;
-  text-align:center;
 }
 footer a{color:#0b63ff}
 
@@ -397,7 +359,6 @@ footer a{color:#0b63ff}
    Mobile (<=600px)
 ========================= */
 @media (max-width:600px){
-  /* Header hamburger */
   .menu-toggle{display:block}
   .nav-links{
     display:none;
@@ -406,39 +367,31 @@ footer a{color:#0b63ff}
     left:0;
     right:0;
     background:#fff;
-    border-bottom:1px solid #eee;
     flex-direction:column;
     padding:12px 16px;
+    border-bottom:1px solid #eee;
     gap:8px;
   }
   .nav-links.open{display:flex}
 
-  /* Hero + form on mobile: image top, form below */
   .hero .container{
-    padding:30px 16px 16px;      /* slightly tighter bottom padding */
+    padding:30px 16px 16px;
   }
   .hero-layout{
     flex-direction:column;
     align-items:flex-start;
-    gap:20px;                    /* reduce space between image and form */
+    gap:20px;
   }
   .hero-visual{
     width:100%;
     justify-content:center;
     margin-bottom:4px;
   }
-  .hero-form{
-    width:100%;
-  }
 
   .alert-form{
-    display:flex;
-    flex-direction:column;
     gap:8px;
     max-width:100%;
-    justify-content:stretch;
   }
-  .input{min-width:100%;max-width:100%}
   .input input{
     height:52px;
     font-size:1.05rem;
@@ -449,17 +402,10 @@ footer a{color:#0b63ff}
     border-radius:10px;
     font-size:1.02rem;
   }
-  .message-box{
-    margin-top:10px;
-    margin-left:0;
-    margin-right:0;
-  }
 
-  /* Reduce vertical spacing between sections on mobile */
   .section{
-    padding:32px 0;             /* was 48px, now tighter */
+    padding:32px 0;
   }
 
-  /* Pricing mobile alignment */
   .plan-card .btn{width:100%}
 }
