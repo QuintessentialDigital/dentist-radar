@@ -60,7 +60,7 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
   margin-right:auto;
 }
 
-/* Split hero layout: image left, form right (home) */
+/* Split hero layout: image left, form right (home only) */
 .hero-layout{
   display:flex;
   flex-wrap:wrap;
@@ -211,10 +211,17 @@ footer{background:#fff;border-top:1px solid #eee;flex-shrink:0;margin-top:auto}
 footer .container{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;min-height:64px;font-size:.95rem;text-align:center}
 footer a{color:#0b63ff}
 
-/* Slightly reduce section padding on desktop so footer is easier to reach */
+/* Desktop-only spacing tweaks so footer is more visible */
 @media (min-width:901px){
+  .hero .container{
+    padding-bottom:28px;   /* was 40px */
+  }
+  .hero.small-hero .container{
+    padding-top:30px;      /* was 36px */
+    padding-bottom:22px;   /* was 28px */
+  }
   .section{
-    padding:40px 0; /* was 48px */
+    padding:40px 0;        /* was 48px */
   }
 }
 
