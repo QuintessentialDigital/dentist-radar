@@ -198,46 +198,67 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 
 /* =========================
    Legal text blocks (About/Terms/Privacy)
-   — ONLY Terms & Privacy behaviour adjusted
+   — Terms & Privacy Q/A and bullets
 ========================= */
 .legal-text{
   text-align:left;
   display:flex;
   flex-direction:column;
-  gap:0;                  /* control spacing with margins below */
+  gap:0;
+  font-size:0.98rem;
+  line-height:1.6;
+}
+
+/* Reset default margins so we have full control */
+.legal-text h2,
+.legal-text h3,
+.legal-text p,
+.legal-text ul,
+.legal-text ol{
+  margin:0;
+  padding:0;
 }
 
 /* Questions (headings) */
 .legal-text h2,
 .legal-text h3{
-  margin-top:22px;        /* space BEFORE question */
-  margin-bottom:0;        /* NO space after question */
   font-weight:600;
 }
-.legal-text h2:first-child,
-.legal-text h3:first-child{
-  margin-top:0;           /* first question: no top gap */
+
+/* Gap BEFORE each question (i.e. between previous answer and next question) */
+.legal-text h2:not(:first-child),
+.legal-text h3:not(:first-child){
+  margin-top:18px;
 }
 
-/* Answers (paragraphs) */
+/* Answers: small breathing room below question, but no big gap */
+.legal-text h2 + p,
+.legal-text h2 + ul,
+.legal-text h2 + ol,
+.legal-text h3 + p,
+.legal-text h3 + ul,
+.legal-text h3 + ol{
+  margin-top:2px;       /* tiny, almost flush with question */
+}
+
+/* Optional small bottom margin on paragraphs so multi-line answers have space before next question */
 .legal-text p{
-  margin-top:0;           /* no space before answer */
-  margin-bottom:14px;     /* space after answer, before next question */
+  margin-bottom:2px;
 }
 
-/* Bullets — indented to the right and aligned neatly */
+/* Bullets — neatly indented and aligned */
 .legal-text ul,
 .legal-text ol{
   list-style:disc;
-  margin-top:0;
-  margin-bottom:14px;
-  padding-left:1.8rem;    /* indent bullets to the right */
+  padding-left:1.5rem;  /* indent bullets to the right */
+  margin-top:2px;       /* close to previous text */
+  margin-bottom:2px;
 }
 .legal-text li{
-  margin:4px 0;
+  margin:2px 0;
 }
 
-/* Remove old custom bullet dot */
+/* Remove any old pseudo-bullets */
 .legal-text li::before{
   content:none;
 }
