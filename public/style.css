@@ -47,9 +47,20 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
   color:#fff;
 }
 .hero .container{padding:56px 16px 40px}
-.hero.small-hero .container{padding:36px 16px 28px}
 
-/* Split hero layout: image left, form right */
+/* Small hero (Pricing, About, Terms, Privacy) */
+.hero.small-hero .container{
+  padding:36px 16px 28px;
+  text-align:center;                     /* center title + subtitle */
+}
+.hero.small-hero h1,
+.hero.small-hero p{
+  max-width:640px;
+  margin-left:auto;
+  margin-right:auto;
+}
+
+/* Split hero layout: image left, form right (home page) */
 .hero-layout{
   display:flex;
   flex-wrap:wrap;
@@ -105,7 +116,7 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 }
 .input input:focus{
   border-color:#0b63ff;
-  box-shadow:0 0 0 3px rgba(0,0,0,.18);
+  box-shadow:0 0 0 3px rgba(11,99,255,.18);
 }
 .btn{
   width:100%;                  /* button same width as inputs */
@@ -193,7 +204,7 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
   text-align:left;
   display:flex;
   flex-direction:column;
-  gap:0;                  /* we control spacing via margins below */
+  gap:0;                  /* control spacing with margins below */
 }
 
 /* Questions (headings) */
