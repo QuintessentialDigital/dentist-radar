@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>My Alerts — Dentist Radar</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header>
+  <div class="container navbar">
+    <!-- logo left -->
+    <a href="/" class="logo">
+      <img src="logo.svg" alt="Dentist Radar" />
+    </a>
+    <!-- nav right -->
+    <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
+    <ul id="nav-links" class="nav-links">
+      <li><a href="/">Home</a></li>
+      <li><a href="pricing.html">Pricing</a></li>
+      <li><a href="about.html">About</a></li>
+      <li><a href="terms.html">Terms</a></li>
+      <li><a href="privacy.html">Privacy</a></li>
+      <li><a class="active" href="my-alerts.html">My Alerts</a></li>
+    </ul>
+  </div>
+</header>
+
+<main>
+  <!-- Small hero like other pages -->
+  <section class="hero small-hero">
+    <div class="container">
+      <h1>Manage Your Alerts</h1>
+      <p>View and remove NHS dentist alerts linked to your email address.</p>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="container">
+      <!-- Email input + load button -->
+      <div style="max-width:420px;margin:0 auto 18px auto;text-align:left;">
+        <label for="email-input" style="font-weight:600;display:block;margin-bottom:6px;">
+          Your email address
+        </label>
+        <input
+          id="email-input"
+          type="email"
+          inputmode="email"
+          autocomplete="email"
+          placeholder="you@example.com"
+          style="width:100%;height:46px;padding:0 14px;border:1px solid #dcdcdc;border-radius:8px;font-size:1rem;"
+        />
+        <button
+          id="load-btn"
+          class="btn"
+          style="margin-top:10px;width:100%;max-width:none;"
+        >
+          Load My Alerts
+        </button>
+        <p id="status" class="message-box" aria-live="polite"></p>
+      </div>
+
+      <!-- Alerts list -->
+      <div id="alerts-container" style="max-width:720px;margin:0 auto;text-align:left;">
+        <!-- Filled by JS -->
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="container footer">
+    © 2025 Dentist Radar ·
+    <a href="privacy.html">Privacy</a> ·
+    <a href="terms.html">Terms</a> ·
+    <a href="about.html">About</a>
+  </div>
+</footer>
+
+<script>
+  (function () {
+    const $ = (id) => document.getElementById(id);
+
+    const emailInput = $("email-input");
+    const loadBtn = $("load-btn");
+    const statusEl = $("status");
+    const alertsContainer = $("alerts-container");
+    const menuToggle = $("menu-toggle");
+    const navLinks = $("nav-links");
+
+    // Mobile nav toggle
+    if (menuToggle && navLinks) {
+      menuToggle.addEventListener("click", () => {
+        navLinks.classList.toggle("open");
+      });
+    }
+
+    // Get email from query string if present (e.g. ?email=foo@bar.com)
+    function getQueryEmail() {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const e = (params.get("email") || "").trim();
+        return e;
+      } catch {
+        return "";
+      }
+    }
+
+    function showStatus(msg, type) {
+      if (!statusEl) return;
+      if (!msg) {
+        statusEl.textContent = "";
+        statusEl.classList.remove("show", "error", "success", "warn");
+        return;
+      }
+      statusEl.textContent = msg;
+      statusEl.classList.add("show");
+      statusEl.classList.remove("error", "success", "warn");
+
+      if (type === "error") statusEl.classList.add("error");
+      else if (type === "success") statusEl.classList.add("success");
+      else if (type === "warn") statusEl.classList.add("warn");
+    }
+
+    function escapeHtml(s) {
+      return (s || "").replace(/[&<>"']/g, (c) =>
+        ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c])
+      );
+    }
+
+    function formatDate(iso) {
+      if (!iso) return "";
+      try {
+        const d = new Date(iso);
+        return d.toLocaleString("en-GB", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+      } catch {
+        return iso;
+      }
+    }
+
+    function renderAlerts(email, watches) {
+      alertsContainer.innerHTML = "";
+
+      const heading = document.createElement("h2");
+      heading.textContent = "Your alerts";
+      heading.style.marginBottom = "10px";
+      alertsContainer.appendChild(heading);
+
+      const sub = document.createElement("p");
+      sub.style.marginBottom = "12px";
+      sub.style.color = "#444";
+      sub.innerHTML = `Showing alerts for <strong>${escapeHtml(email)}</strong>.`;
+      alertsContainer.appendChild(sub);
+
+      if (!watches || !watches.length) {
+        const empty = document.createElement("div");
+        empty.textContent =
+          "You don't have any alerts yet. Create one on the homepage using this email address.";
+        empty.style.color = "#555";
+        alertsContainer.appendChild(empty);
+        return;
+      }
+
+      watches.forEach((w) => {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.style.marginBottom = "10px";
+
+        const postcode = escapeHtml(w.postcode || "Unknown");
+        const radius = typeof w.radius === "number" ? w.radius : w.radiusMiles;
+        const radiusLabel = radius ? `${radius} mile${radius > 1 ? "s" : ""}` : "N/A";
+        const created = formatDate(w.createdAt);
+
+        card.innerHTML = `
+          <div style="display:flex;flex-direction:column;gap:4px;">
+            <div>
+              <strong>${postcode}</strong>
+              ${radius ? `<span style="color:#555;">· ${radiusLabel}</span>` : ""}
+            </div>
+            ${created ? `<div style="font-size:0.9rem;color:#666;">Created: ${created}</div>` : ""}
+          </div>
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-delete" data-id="${w._id}" style="width:auto;max-width:none;padding:0 14px;height:38px;font-size:0.9rem;">
+              Remove alert
+            </button>
+          </div>
+        `;
+
+        alertsContainer.appendChild(card);
+      });
+
+      // Attach delete handlers
+      alertsContainer.querySelectorAll(".btn-delete").forEach((btn) => {
+        btn.addEventListener("click", async (e) => {
+          const id = btn.getAttribute("data-id");
+          if (!id) return;
+
+          const ok = window.confirm("Are you sure you want to remove this alert?");
+          if (!ok) return;
+
+          try {
+            showStatus("Removing alert…", "warn");
+            const res = await fetch(`/api/watch/${encodeURIComponent(id)}?email=${encodeURIComponent(email)}`, {
+              method: "DELETE",
+              headers: { "Content-Type": "application/json" },
+            });
+            const data = await res.json();
+            if (!data.ok) {
+              showStatus(data.message || "Could not remove alert. Please try again.", "error");
+              return;
+            }
+            // Reload list
+            await loadAlerts(email, true);
+          } catch (err) {
+            console.error(err);
+            showStatus("Error removing alert. Please try again.", "error");
+          }
+        });
+      });
+    }
+
+    async function loadAlerts(email, silentReload) {
+      const trimmed = (email || "").trim();
+      if (!trimmed) {
+        showStatus("Please enter your email address.", "error");
+        return;
+      }
+
+      if (!silentReload) {
+        showStatus("Loading your alerts…", "warn");
+      }
+
+      try {
+        const res = await fetch(`/api/watch/list?email=${encodeURIComponent(trimmed)}`);
+        const data = await res.json();
+
+        if (!data.ok) {
+          showStatus(data.message || "Could not load alerts. Please try again.", "error");
+          alertsContainer.innerHTML = "";
+          return;
+        }
+
+        renderAlerts(trimmed, data.watches || []);
+        showStatus("", null);
+      } catch (err) {
+        console.error(err);
+        showStatus("Error loading alerts. Please try again.", "error");
+        alertsContainer.innerHTML = "";
+      }
+    }
+
+    // Button click: load alerts
+    loadBtn.addEventListener("click", () => {
+      const email = emailInput.value;
+      loadAlerts(email, false);
+    });
+
+    // Enter key in email box triggers load
+    emailInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        loadBtn.click();
+      }
+    });
+
+    // If email is in query string, prefill & auto load
+    const qsEmail = getQueryEmail();
+    if (qsEmail) {
+      emailInput.value = qsEmail;
+      loadAlerts(qsEmail, false);
+    }
+  })();
+</script>
+</body>
+</html>
