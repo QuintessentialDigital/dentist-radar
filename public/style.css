@@ -81,7 +81,7 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 .hero-form{
   flex:1 1 320px;
   min-width:260px;
-  margin-top:8px; /* small vertical gap desktop/tablet */
+  margin-top:8px;
 }
 
 /* =========================
@@ -104,7 +104,9 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
   box-shadow:0 0 0 3px rgba(11,99,255,.18);
 }
 
-/* Button – blue by default, white text */
+/* -------------------------
+   Button – blue by default
+------------------------- */
 .btn{
   width:100%;
   height:46px;
@@ -137,6 +139,14 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 .message-box.show{display:block}
 .message-box.error{color:#d93025}
 .message-box.success{color:#0a8a0a}
+
+/* >>> NEW UPDATE: MAKE LINKS LOOK CLEARLY CLICKABLE <<< */
+.message-box a{
+  color:#0b63ff;
+  font-weight:700;
+  text-decoration:underline;
+  text-underline-offset:2px;
+}
 
 /* =========================
    Sections
@@ -195,9 +205,7 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
   font-size:1.3rem;
   margin-bottom:2px;
 }
-.plan-card p{
-  color:#444;
-}
+.plan-card p{color:#444}
 .plan-card ul{
   list-style:none;
   display:flex;
@@ -222,22 +230,20 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
   margin-top:4px;
   margin-bottom:8px;
 }
-.plan-card .btn{
-  align-self:flex-start;
-}
+.plan-card .btn{align-self:flex-start}
 .plan-card.highlight{
   border-color:#0b63ff;
-  box-shadow:0 6px 16px rgba(0,0,0,.12);
+  box-shadow:0 6px 16px rgba(11,99,255,.12);
 }
 
-/* Stack pricing cards on mobile for clean vertical reading order */
+/* Mobile Pricing */
 @media (max-width:900px){
   .pricing-grid{grid-template-columns:1fr}
   .plan-card .btn{width:100%}
 }
 
 /* =========================
-   Legal pages (Terms & Privacy)
+   Legal pages
 ========================= */
 .legal-text{
   text-align:left;
@@ -258,16 +264,14 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 
 .legal-text h2:not(:first-child),
 .legal-text h3:not(:first-child){
-  margin-top:18px; /* gap before next question */
+  margin-top:18px;
 }
 
 .legal-text h2 + p,
-.legal-text h2 + ul,
-.legal-text h2 + ol,
 .legal-text h3 + p,
-.legal-text h3 + ul,
-.legal-text h3 + ol{
-  margin-top:2px; /* almost flush under question */
+.legal-text h2 + ul,
+.legal-text h3 + ul{
+  margin-top:2px;
 }
 
 .legal-text ul,
@@ -276,6 +280,7 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
   padding-left:1.5rem;
   margin-top:2px;margin-bottom:2px;
 }
+
 .legal-text li{margin:2px 0}
 
 /* =========================
@@ -308,16 +313,18 @@ footer a{color:#0b63ff}
   .hero .container{padding:30px 16px 16px}
   .hero-layout{flex-direction:column;align-items:flex-start;gap:20px}
   .hero-visual{width:100%;justify-content:center;margin-bottom:4px}
+
+  /* extra spacing between image and Your email textbox */
   .hero-form{
     width:100%;
-    margin-top:16px;   /* extra space between image and email on mobile */
+    margin-top:16px;
   }
 
   .alert-form{gap:8px;max-width:100%}
   .input input{height:52px;font-size:1.05rem;border-radius:10px}
   .btn{height:52px;border-radius:10px;font-size:1.02rem}
 
-  /* Make validation message same width as inputs/button */
+  /* validation message full width on mobile */
   .message-box{
     margin-top:10px;
     max-width:100%;
@@ -326,7 +333,7 @@ footer a{color:#0b63ff}
 
   .section{padding:32px 0}
 
-  /* MOBILE FIX FOR TRUST BULLETS – align vertically and left */
+  /* Trust bullets vertical alignment on mobile */
   .kbullets{
     flex-direction:column;
     align-items:flex-start;
