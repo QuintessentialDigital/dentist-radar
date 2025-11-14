@@ -29,7 +29,7 @@ header .container{
 ========================= */
 header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-index:1000}
 .navbar{
-  height:64px;display:flex;align-items:center;justify-content:space-between; /* key line */
+  height:64px;display:flex;align-items:center;justify-content:space-between;
   width:100%;
 }
 .logo{flex:0 0 auto}
@@ -49,22 +49,20 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 .hero .container{padding:56px 16px 40px}
 .hero.small-hero .container{padding:36px 16px 28px}
 
-/* Split hero layout: text + image */
+/* Split hero layout: image left, form right */
 .hero-layout{
   display:flex;
   flex-wrap:wrap;
   align-items:center;
   gap:32px;
 }
-.hero-text{
+
+/* LEFT: image */
+.hero-visual{
   flex:1 1 320px;
   min-width:260px;
-}
-.hero-visual{
-  flex:1 1 260px;
-  min-width:240px;
   display:flex;
-  justify-content:flex-end;
+  justify-content:flex-start;
 }
 .hero-visual img{
   max-width:420px;
@@ -74,31 +72,22 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
   box-shadow:0 14px 30px rgba(0,0,0,0.18);
 }
 
-/* Headline + sub-copy */
-.hero h1{
-  font-size:2.4rem;
-  font-weight:800;
-  margin-bottom:12px;
-}
-.hero p{
-  font-size:1.1rem;
-  max-width:640px;
-  margin:0 0 24px 0;
-}
-
-/* Ensure hero text is left-aligned on desktop */
-.hero-text h1,
-.hero-text p{
-  text-align:left;
+/* RIGHT: form */
+.hero-form{
+  flex:1 1 320px;
+  min-width:260px;
 }
 
 /* =========================
    Home form
 ========================= */
 .alert-form{
-  display:flex;flex-wrap:wrap;gap:10px;justify-content:flex-start;
-  max-width:720px;margin:0 0;
-  margin-bottom:14px; /* space before any validation message */
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  justify-content:flex-start;
+  max-width:720px;
+  margin:0 0 14px 0;
 }
 .input{flex:1 1 200px;min-width:200px;max-width:260px}
 .input input{
@@ -115,8 +104,8 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
    Messages
 ========================= */
 .message-box{
-  display:none;          /* hidden until JS applies .show */
-  margin-top:14px;       /* extra whitespace under the button (desktop + mobile) */
+  display:none;
+  margin-top:14px;
   background:rgba(255,255,255,0.97);
   border-radius:10px; padding:10px 14px; font-weight:600; color:#1a1a1a;
   max-width:600px; margin-left:0; margin-right:auto; box-shadow:0 1px 6px rgba(0,0,0,.1)
@@ -194,23 +183,19 @@ footer a{color:#0b63ff}
   }
   .nav-links.open{display:flex}
 
-  /* Hero + form */
+  /* Hero + form on mobile: image top, form below */
   .hero .container{padding:36px 16px 28px}
   .hero-layout{
     flex-direction:column;
     align-items:flex-start;
   }
-  .hero-text{
-    width:100%;
-  }
-  .hero-text h1,
-  .hero-text p{
-    text-align:left;
-  }
   .hero-visual{
     width:100%;
     justify-content:center;
-    margin-top:12px;
+    margin-bottom:16px;
+  }
+  .hero-form{
+    width:100%;
   }
 
   .alert-form{
