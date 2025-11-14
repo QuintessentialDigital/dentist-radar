@@ -83,22 +83,48 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
 ========================= */
 .alert-form{
   display:flex;
-  flex-wrap:wrap;
+  flex-direction:column;        /* stack fields vertically on desktop */
   gap:10px;
   justify-content:flex-start;
-  max-width:720px;
+  max-width:360px;              /* nice narrow, focused form */
   margin:0 0 14px 0;
 }
-.input{flex:1 1 200px;min-width:200px;max-width:260px}
+.input{
+  flex:0 0 auto;
+  min-width:100%;
+  max-width:100%;
+}
 .input input{
-  width:100%;height:46px;padding:0 14px;border:1px solid #dcdcdc;border-radius:8px;font-size:1rem;background:#fff;
+  width:100%;
+  height:46px;
+  padding:0 14px;
+  border:1px solid #dcdcdc;
+  border-radius:8px;
+  font-size:1rem;
+  background:#fff;
 }
-.input input:focus{border-color:#0b63ff;box-shadow:0 0 0 3px rgba(11,99,255,.18)}
+.input input:focus{
+  border-color:#0b63ff;
+  box-shadow:0 0 0 3px rgba(11,99,255,.18);
+}
 .btn{
-  height:46px;padding:0 22px;border-radius:8px;border:2px solid #fff;background:#fff;color:#0b63ff;
-  font-weight:800;letter-spacing:.3px;cursor:pointer;transition:.15s
+  width:100%;                  /* button same width as inputs */
+  height:46px;
+  padding:0 22px;
+  border-radius:8px;
+  border:2px solid #fff;
+  background:#fff;
+  color:#0b63ff;
+  font-weight:800;
+  letter-spacing:.3px;
+  cursor:pointer;
+  transition:.15s;
 }
-.btn:hover{background:#0b63ff;color:#fff;border-color:#0b63ff}
+.btn:hover{
+  background:#0b63ff;
+  color:#fff;
+  border-color:#0b63ff;
+}
 
 /* =========================
    Messages
@@ -108,7 +134,10 @@ header{background:#fff;border-bottom:1px solid #eee;position:sticky;top:0;z-inde
   margin-top:14px;
   background:rgba(255,255,255,0.97);
   border-radius:10px; padding:10px 14px; font-weight:600; color:#1a1a1a;
-  max-width:600px; margin-left:0; margin-right:auto; box-shadow:0 1px 6px rgba(0,0,0,.1)
+  max-width:360px;              /* align with form width */
+  margin-left:0;
+  margin-right:0;
+  box-shadow:0 1px 6px rgba(0,0,0,.1);
 }
 .message-box a{color:#0b63ff;font-weight:700;text-decoration:underline}
 .message-box.error{color:#d93025}.message-box.warn{color:#a36b00}.message-box.success{color:#0a8a0a}
@@ -184,34 +213,50 @@ footer a{color:#0b63ff}
   .nav-links.open{display:flex}
 
   /* Hero + form on mobile: image top, form below */
-  .hero .container{padding:36px 16px 28px}
+  .hero .container{
+    padding:30px 16px 16px;      /* slightly tighter bottom padding */
+  }
   .hero-layout{
     flex-direction:column;
     align-items:flex-start;
+    gap:20px;                    /* reduce space between image and form */
   }
   .hero-visual{
     width:100%;
     justify-content:center;
-    margin-bottom:16px;
+    margin-bottom:4px;
   }
   .hero-form{
     width:100%;
   }
 
   .alert-form{
-    display:grid;
-    grid-template-columns:1fr;
-    row-gap:8px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
     max-width:100%;
     justify-content:stretch;
   }
   .input{min-width:100%;max-width:100%}
-  .input input{height:52px;font-size:1.05rem;border-radius:10px}
-  .btn{height:52px;border-radius:10px;font-size:1.02rem}
+  .input input{
+    height:52px;
+    font-size:1.05rem;
+    border-radius:10px;
+  }
+  .btn{
+    height:52px;
+    border-radius:10px;
+    font-size:1.02rem;
+  }
   .message-box{
-    margin-top:12px;
+    margin-top:10px;
     margin-left:0;
     margin-right:0;
+  }
+
+  /* Reduce vertical spacing between sections on mobile */
+  .section{
+    padding:32px 0;             /* was 48px, now tighter */
   }
 
   /* Pricing mobile alignment */
