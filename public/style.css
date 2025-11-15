@@ -303,23 +303,27 @@ header{
   text-align:left;
   display:flex;
   flex-direction:column;
-  gap:0; /* custom margins below control spacing */
+  gap:0;
 }
 
-/* Questions (typically h3) */
+/* Questions (h2 and h3 treated the same) */
+.legal-text h2,
 .legal-text h3{
   font-size:1.1rem;
-  margin:18px 0 0;          /* gap from previous answer to next question */
+  margin:18px 0 0;        /* gap from previous answer/list to next question */
+  font-weight:700;
 }
 
-/* First question at top can have no top-gap if desired */
+/* First question no extra top margin */
+.legal-text h2:first-child,
 .legal-text h3:first-child{
   margin-top:0;
 }
 
-/* Answers (paragraphs) */
+/* Answers */
 .legal-text p{
-  margin:0 0 10px;          /* no extra gap between question and answer */
+  margin:0 0 10px;        /* tight question → answer, small gap under answer */
+  line-height:1.55;
 }
 
 /* Lists inside answers */
@@ -341,16 +345,20 @@ header{
   font-weight:900;
 }
 
-/* Extra control:
-   - No extra top gap right after a question
-   - Clear gap before the next question */
+/* Tight spacing question → answer/list */
+.legal-text h2 + p,
 .legal-text h3 + p,
+.legal-text h2 + ul,
 .legal-text h3 + ul{
-  margin-top:-2px;          /* pull answer up tighter under question */
+  margin-top:0;
 }
+
+/* Gap before next question */
+.legal-text p + h2,
+.legal-text ul + h2,
 .legal-text p + h3,
 .legal-text ul + h3{
-  margin-top:18px;          /* answer/list → next question: gap */
+  margin-top:18px;
 }
 
 /* =========================
