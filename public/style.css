@@ -223,9 +223,12 @@ footer .container{
   flex-wrap:wrap;
   min-height:64px;
   font-size:.95rem;
-  text-align:center
+  text-align:center;
 }
-footer a{color:#0b63ff}
+footer a{
+  color:#0b63ff;
+  white-space:nowrap;   /* keep each footer link on one line, especially email */
+}
 
 /* =========================
    Mobile (<=600px)
@@ -278,8 +281,8 @@ footer a{color:#0b63ff}
 
   /* ⭐ Footer single-line fix on mobile ⭐ */
   footer .container{
-    flex-wrap:nowrap;
-    white-space:nowrap;
+    flex-wrap:nowrap !important;
+    white-space:nowrap !important;
     overflow-x:auto;
     gap:12px;
     justify-content:center;
