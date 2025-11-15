@@ -76,10 +76,20 @@ header{
   background:linear-gradient(135deg,#0b63ff 0%,#00bfff 100%);
   color:#fff;
 }
-.hero .container{padding:56px 16px 40px}
-.hero.small-hero .container{padding:36px 16px 28px}
+.hero .container{
+  padding:56px 16px 40px;
+}
 
-/* Split layout */
+/* Small hero pages (Pricing, About, Terms, Privacy) — center heading/subheading */
+.hero.small-hero .container{
+  padding:36px 16px 28px;
+  text-align:center;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+}
+
+/* Split layout (home hero) */
 .hero-layout{
   display:flex;
   flex-wrap:wrap;
@@ -234,6 +244,7 @@ header{
   display:grid;
   grid-template-columns:repeat(3,1fr);
   gap:18px;
+  align-items:stretch;
 }
 .plan-card{
   background:#fff;
@@ -243,7 +254,6 @@ header{
   box-shadow:0 2px 8px rgba(0,0,0,.05);
   display:flex;
   flex-direction:column;
-  justify-content:space-between;  /* spread content + button nicely */
   gap:12px;
   text-align:left;
 }
@@ -272,10 +282,15 @@ header{
   margin-top:4px;
   margin-bottom:8px;
 }
+
+/* Buttons in pricing cards:
+   - Desktop: left aligned but visually tidy
+   - Mobile: full width (set in media query) */
 .plan-card .btn{
-  align-self:center;      /* center horizontally in card */
-  min-width:60%;
+  align-self:flex-start;
+  min-width:0;
 }
+
 .plan-card.highlight{
   border-color:#0b63ff;
   box-shadow:0 6px 16px rgba(11,99,255,.12);
@@ -288,22 +303,26 @@ header{
   text-align:left;
   display:flex;
   flex-direction:column;
-  gap:0; /* let custom margins handle spacing */
+  gap:0; /* custom margins below control spacing */
 }
 
-/* Titles inside legal pages (questions) */
+/* Questions (typically h3) */
 .legal-text h3{
   font-size:1.1rem;
-  margin-top:18px;    /* space before each question */
-  margin-bottom:0;    /* NO space between question and answer */
+  margin:18px 0 0;          /* gap from previous answer to next question */
 }
 
-/* Paragraphs inside legal pages (answers) */
+/* First question at top can have no top-gap if desired */
+.legal-text h3:first-child{
+  margin-top:0;
+}
+
+/* Answers (paragraphs) */
 .legal-text p{
-  margin:0 0 10px;    /* small space after answer */
+  margin:0 0 10px;          /* no extra gap between question and answer */
 }
 
-/* Bullet lists in legal text */
+/* Lists inside answers */
 .legal-text ul{
   list-style:none;
   margin:0 0 10px;
@@ -320,6 +339,18 @@ header{
   left:8px;
   color:#0b63ff;
   font-weight:900;
+}
+
+/* Extra control:
+   - No extra top gap right after a question
+   - Clear gap before the next question */
+.legal-text h3 + p,
+.legal-text h3 + ul{
+  margin-top:0;             /* question → answer: tight */
+}
+.legal-text p + h3,
+.legal-text ul + h3{
+  margin-top:18px;          /* answer/list → next question: gap */
 }
 
 /* =========================
@@ -372,11 +403,12 @@ footer a{
   }
   .nav-links.open{display:flex}
 
-  /* Hero spacing mobile */
+  /* Hero spacing mobile (home + small-hero) */
   .hero .container{
     padding:30px 16px 18px;
   }
 
+  /* Home hero layout stays stacked */
   .hero-layout{
     flex-direction:column;
     gap:24px;
@@ -436,10 +468,10 @@ footer a{
     margin-top:2px;
   }
 
-  /* Pricing buttons full-width on mobile but centered */
+  /* Pricing buttons: full-width on mobile, still feel centred */
   .plan-card .btn{
     width:100%;
-    min-width:0;
+    align-self:stretch;
   }
 
   /* Footer alignment fix on mobile */
