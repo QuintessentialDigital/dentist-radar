@@ -346,7 +346,7 @@ header{
    - Clear gap before the next question */
 .legal-text h3 + p,
 .legal-text h3 + ul{
-  margin-top:0;             /* question → answer: tight */
+  margin-top:-2px;          /* pull answer up tighter under question */
 }
 .legal-text p + h3,
 .legal-text ul + h3{
