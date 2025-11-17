@@ -1,5 +1,5 @@
 // scanner.js
-// DentistRadar scanner (v3.0 – grouped, appointments-first)
+// DentistRadar scanner (v3.1 – grouped, appointments-first, updated NHS URL)
 //
 // Modes:
 //   1) DB mode (cron or /api/scan with no postcode):
@@ -13,7 +13,7 @@
 //        - node scanner.js RG41 4UW 25
 //
 // NHS flow:
-//   - Build search URL: /service-search/find-a-dentist/results?postcode=...&distance=...
+//   - Build search URL: /service-search/find-a-dentist/results/<POSTCODE>
 //   - From that page, extract all /services/dentist/... links
 //   - For each, construct /appointments URL, e.g.:
 //       https://www.nhs.uk/services/dentist/covent-garden-dental-clinic/XV003761/appointments
@@ -64,10 +64,14 @@ function safeRadius(radiusMiles) {
   return Math.min(n, 100);
 }
 
+// NEW: use /results/<POSTCODE> instead of old ?postcode=... pattern
 function buildSearchUrl(postcode, radiusMiles) {
+  // NHS now expects the location (postcode or town) in the path segment.
+  // Example: https://www.nhs.uk/service-search/find-a-dentist/results/TW1%203SD
   const pc = encodeURIComponent(normalisePostcode(postcode));
-  const r = safeRadius(radiusMiles);
-  return `${NHS_BASE}/service-search/find-a-dentist/results?postcode=${pc}&distance=${r}`;
+  // Radius is still stored/used for grouping, but NHS radius is handled on their side now.
+  safeRadius(radiusMiles); // keep call in case we later extend logic
+  return `${NHS_BASE}/service-search/find-a-dentist/results/${pc}`;
 }
 
 async function fetchHtml(url) {
@@ -194,6 +198,11 @@ export async function scanPostcodeRadius(postcode, radiusMiles) {
 
   const searchHtml = await fetchHtml(searchUrl);
   if (!searchHtml) {
+    console.log(
+      `⚠️  No search HTML returned for postcode="${normalisePostcode(
+        postcode
+      )}". Treating as 0 practices.`
+    );
     return {
       postcode: normalisePostcode(postcode),
       radiusMiles: safeRadius(radiusMiles),
