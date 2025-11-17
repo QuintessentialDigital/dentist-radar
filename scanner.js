@@ -1,4 +1,4 @@
-// DentistRadar scanner (v2.1 – resilient, grouped, dual-mode)
+// DentistRadar scanner (v2.2 – resilient, grouped, dual-mode, NHS URL fix)
 //
 // Modes:
 //   1) DB mode (cron / /api/scan without postcode):
@@ -35,8 +35,6 @@
 //   async function runScan(options?)
 //     - if options.postcode → direct/manual mode
 //     - else → DB mode (for cron + /api/scan without body.postcode)
-//   async function runAllScans()
-//     - always DB mode, used by cron.scan-all.js
 
 import dotenv from "dotenv";
 import nodemailer from "nodemailer";
@@ -57,7 +55,6 @@ const MAX_RETRIES = Number(process.env.SCANNER_RETRIES || 3);
 const MAX_PRACTICES_PER_ALERT = Number(process.env.SCANNER_MAX_PRACTICES || 50);
 
 // Hard safety cap on how many practices per postcode+radius we follow.
-// This is mainly "be kind to NHS".
 const HARD_MAX_PRACTICES = Math.max(10, Math.min(200, MAX_PRACTICES_PER_ALERT));
 
 const PUBLIC_ORIGIN =
@@ -119,16 +116,25 @@ async function fetchWithRetry(
       });
       clearTimeout(timeout);
       if (!r.ok) {
+        // If 404, no point retrying this URL
+        if (r.status === 404) {
+          throw new Error(`Fetch failed 404 for ${url}`);
+        }
         throw new Error(`Fetch failed ${r.status} for ${url}`);
       }
       return await r.text();
     } catch (err) {
       clearTimeout(timeout);
       lastErr = err;
-      const isLast = attempt === retries;
+      const msg = err?.message || String(err);
       console.warn(
-        `Fetch attempt ${attempt}/${retries} failed: ${err?.message || err}`
+        `Fetch attempt ${attempt}/${retries} failed: ${msg}`
       );
+      // If it's a clear 404, stop retrying this URL
+      if (msg.includes("Fetch failed 404")) {
+        break;
+      }
+      const isLast = attempt === retries;
       if (isLast) break;
       await sleep(500 * attempt);
     }
@@ -137,11 +143,52 @@ async function fetchWithRetry(
 }
 
 /* ---------------------------
+   NHS search URL helpers
+--------------------------- */
+
+// Use path-style URL first, fallback to query-style if needed.
+function buildSearchUrls(postcode, radiusMiles) {
+  const pc = encodeURIComponent(postcode.trim());
+  const r = radiusMiles || 10;
+
+  return [
+    // 1) Path style – commonly used NHS pattern
+    `${NHS_SEARCH_BASE}/${pc}?distance=${r}`,
+    // 2) Query style – fallback to support older/alternative pattern if still valid
+    `${NHS_SEARCH_BASE}?postcode=${pc}&distance=${r}`,
+  ];
+}
+
+async function fetchSearchHtml(postcode, radiusMiles, labelForLogs) {
+  const urls = buildSearchUrls(postcode, radiusMiles);
+  let lastError = null;
+
+  for (const url of urls) {
+    console.log(`Search NHS for ${labelForLogs} → ${url}`);
+    try {
+      const html = await fetchWithRetry(url, {
+        timeoutMs: HTTP_TIMEOUT_MS,
+        retries: 2,
+      });
+      if (html && html.length > 0) {
+        return { html, url };
+      }
+    } catch (err) {
+      lastError = err;
+      console.warn(
+        `Search fetch failed for ${url}: ${err?.message || err}`
+      );
+      // Try next URL variant if there is one
+    }
+  }
+
+  throw lastError || new Error("All NHS search URL variants failed");
+}
+
+/* ---------------------------
    HTML parsing helpers
 --------------------------- */
 
-// Very lightweight extraction of practices from NHS search HTML.
-// We just care about the dentist link, name and a short text context.
 function extractPracticesFromSearch(html, max = HARD_MAX_PRACTICES) {
   const practices = [];
   const seen = new Set();
@@ -194,7 +241,6 @@ function classifyAppointmentPage(html) {
     .replace(/\s+/g, " ")
     .toLowerCase();
 
-  // Accepting (may be adults+children or children-only)
   if (ACCEPT_PATTERNS.some((rx) => rx.test(text))) {
     if (CHILD_ONLY_PATTERNS.some((rx) => rx.test(text))) {
       return "childOnly";
@@ -333,17 +379,14 @@ async function scanPostcodeRadius(postcode, radiusMiles) {
     tookMs: 0,
   };
 
-  const searchUrl = `${NHS_SEARCH_BASE}?postcode=${encodeURIComponent(
-    normPc
-  )}&distance=${encodeURIComponent(String(radiusMiles))}`;
-
-  console.log(
-    `Search NHS for ${normPc} (${radiusMiles} miles) → ${searchUrl}`
-  );
-
   let html;
   try {
-    html = await fetchWithRetry(searchUrl);
+    const res = await fetchSearchHtml(
+      normPc,
+      radiusMiles,
+      `${normPc} (${radiusMiles} miles)`
+    );
+    html = res.html;
   } catch (err) {
     console.error("Search fetch failed:", err?.message || err);
     summary.tookMs = Date.now() - start;
@@ -406,7 +449,6 @@ async function scanPostcodeRadius(postcode, radiusMiles) {
 async function runDbMode() {
   const envPc = (process.env.POSTCODE || "").trim();
   const filter = {
-    // honour unsubscribes if you use a status flag
     status: { $ne: "unsubscribed" },
   };
 
@@ -424,7 +466,6 @@ async function runDbMode() {
     };
   }
 
-  // Group by (postcode, radius) so NHS scans stay low even with many users.
   const groups = new Map();
   for (const w of watches) {
     if (!w.email || !w.postcode || !w.radius) continue;
@@ -453,7 +494,6 @@ async function runDbMode() {
     const { summary, accepting } = await scanPostcodeRadius(postcode, radius);
     totalScanned += summary.scanned;
 
-    // Adults/mixed only for alerts
     const adultPractices = accepting.filter(
       (p) => p.patientType !== "children_only"
     );
@@ -463,7 +503,6 @@ async function runDbMode() {
     }
 
     if (!transport) {
-      // Scanner still working, but no SMTP configured.
       continue;
     }
 
@@ -491,7 +530,6 @@ async function runDbMode() {
         totalEmails += 1;
         totalAlertsSent += 1;
 
-        // Log each practice-email pair in EmailLog (all required fields set)
         for (const p of adultPractices) {
           try {
             await EmailLog.create({
@@ -570,15 +608,6 @@ async function runDirectMode(options = {}) {
 }
 
 /* ---------------------------
-   Convenience export for cron (DB mode only)
---------------------------- */
-
-export async function runAllScans() {
-  // For cron jobs: always use DB mode (grouped watches, email sending)
-  return runDbMode();
-}
-
-/* ---------------------------
    Exported entry point
 --------------------------- */
 
@@ -587,7 +616,6 @@ export async function runScan(options = {}) {
   const hasPostcode = Boolean(options && options.postcode);
 
   if (hasPostcode) {
-    // Admin/manual mode (e.g. /admin.html → /api/scan with postcode in body)
     return runDirectMode(options);
   }
 
@@ -595,7 +623,6 @@ export async function runScan(options = {}) {
     `🦷 DentistRadar scanner — timeout=${HTTP_TIMEOUT_MS}ms retries=${MAX_RETRIES} Mode=DB POSTCODE=${envPc || "ALL"}`
   );
 
-  // DB/cron mode → used by cron.scan-all.js and /api/scan without body.postcode
   return runDbMode();
 }
 
