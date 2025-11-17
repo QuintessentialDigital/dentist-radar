@@ -2,7 +2,7 @@
 // Central Mongoose models for DentistRadar
 // - User: registered user
 // - Watch: an "alert" (postcode + radius + email)
-// - EmailLog: which practices have already been emailed FOR THAT ALERT/USER
+// - EmailLog: history & de-duplication for alerts/emails
 
 import mongoose from "mongoose";
 
@@ -52,6 +52,9 @@ const watchSchema = new mongoose.Schema(
     active: { type: Boolean, default: true },
     createdAt: { type: Date, default: Date.now },
     lastRunAt: { type: Date },
+
+    // Some code uses unsubscribed flag instead of active=false
+    unsubscribed: { type: Boolean },
   },
   { timestamps: true }
 );
@@ -64,25 +67,46 @@ watchSchema.index({ email: 1, postcode: 1, radiusMiles: 1, radius: 1 });
 /**
  * EmailLog is where we prevent duplicates and keep a history of alerts.
  *
- * IMPORTANT:
- * - We relax required constraints so legacy code that saves partial logs
- *   doesn't throw validation errors.
- * - Our scanner still writes full entries with all fields populated.
+ * It is used in two ways:
+ *  - Per-practice logging (legacy) via alertId + practiceId + appointmentUrl
+ *  - Per-watch snapshot logging (current scanner) via watchId + signature
+ *
+ * We keep the schema broad and optional so both styles continue to work.
  */
 
 const emailLogSchema = new mongoose.Schema(
   {
+    // Legacy: per-alert/practice logging
     alertId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Watch",
-      index: true, // single index, no duplicate schema.index()
+      index: true,
     },
+
+    // Current scanner: per-watch logging
+    watchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Watch",
+      index: true,
+    },
+
     email: { type: String, index: true },
     postcode: { type: String },
     radiusMiles: { type: Number },
 
+    // Legacy per-practice fields
     practiceId: { type: String }, // e.g. NHS service ID or slug
     appointmentUrl: { type: String },
+
+    // Current scanner: summary info for de-duplication
+    acceptingCount: { type: Number },
+    signature: { type: String }, // concatenated list of accepting URLs
+
+    // Generic email logging (Postmark / other senders)
+    type: { type: String }, // e.g. "alert", "welcome", "plan_activated"
+    subject: { type: String },
+    providerId: { type: String }, // e.g. Postmark MessageID
+    meta: { type: mongoose.Schema.Types.Mixed },
 
     sentAt: { type: Date, default: Date.now },
   },
@@ -92,11 +116,7 @@ const emailLogSchema = new mongoose.Schema(
 // Helpful analytics indices (non-unique to avoid conflicts with partial rows)
 emailLogSchema.index({ email: 1, postcode: 1 });
 emailLogSchema.index({ practiceId: 1 });
-
-// NOTE:
-// We intentionally do NOT add a unique index here.
-// The scanner de-duplicates using "findOne + upsert" logic,
-// so it will behave correctly without a DB-level unique constraint.
+// watchId already has an index via the field definition
 
 // ----------------- Peek helper -----------------
 
