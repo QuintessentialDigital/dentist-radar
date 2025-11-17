@@ -1,4 +1,4 @@
-// DentistRadar scanner (v2.2 – resilient, grouped, dual-mode, NHS URL fix)
+// DentistRadar scanner (v2.3 – resilient, grouped, dual-mode, NHS URL fix + /appointments)
 //
 // Modes:
 //   1) DB mode (cron / /api/scan without postcode):
@@ -12,11 +12,6 @@
 //        - Scans that postcode+radius only
 //        - DOES NOT send any emails
 //        - Returns detailed accepting/childOnly arrays for admin.html
-//
-// Assumptions:
-//   - Node 18+ (global fetch available)
-//   - `nodemailer` installed
-//   - Watch + EmailLog schemas exported in ./models.js
 //
 // Env vars used:
 //   MONGO_URI             (connection handled in server.js)
@@ -116,7 +111,6 @@ async function fetchWithRetry(
       });
       clearTimeout(timeout);
       if (!r.ok) {
-        // If 404, no point retrying this URL
         if (r.status === 404) {
           throw new Error(`Fetch failed 404 for ${url}`);
         }
@@ -130,7 +124,6 @@ async function fetchWithRetry(
       console.warn(
         `Fetch attempt ${attempt}/${retries} failed: ${msg}`
       );
-      // If it's a clear 404, stop retrying this URL
       if (msg.includes("Fetch failed 404")) {
         break;
       }
@@ -152,10 +145,8 @@ function buildSearchUrls(postcode, radiusMiles) {
   const r = radiusMiles || 10;
 
   return [
-    // 1) Path style – commonly used NHS pattern
-    `${NHS_SEARCH_BASE}/${pc}?distance=${r}`,
-    // 2) Query style – fallback to support older/alternative pattern if still valid
-    `${NHS_SEARCH_BASE}?postcode=${pc}&distance=${r}`,
+    `${NHS_SEARCH_BASE}/${pc}?distance=${r}`,          // path style
+    `${NHS_SEARCH_BASE}?postcode=${pc}&distance=${r}`, // query style fallback
   ];
 }
 
@@ -178,7 +169,6 @@ async function fetchSearchHtml(postcode, radiusMiles, labelForLogs) {
       console.warn(
         `Search fetch failed for ${url}: ${err?.message || err}`
       );
-      // Try next URL variant if there is one
     }
   }
 
@@ -226,13 +216,25 @@ function extractPracticesFromSearch(html, max = HARD_MAX_PRACTICES) {
   return practices;
 }
 
+// UPDATED: build appointments URL using /appointments, with a small normaliser
 function buildAppointmentsUrl(baseUrl) {
   if (!baseUrl) return null;
-  if (/appointments-and-opening-times/i.test(baseUrl)) return baseUrl;
-  if (!baseUrl.endsWith("/")) {
-    return `${baseUrl}/appointments-and-opening-times`;
+
+  // If it already points to an appointments page, leave it
+  if (/\/appointments(?:[/?#]|$)/i.test(baseUrl)) {
+    return baseUrl;
   }
-  return `${baseUrl}appointments-and-opening-times`;
+
+  // If old style slug exists in URL, normalise it to /appointments
+  if (/appointments-and-opening-times/i.test(baseUrl)) {
+    return baseUrl.replace(/appointments-and-opening-times/gi, "appointments");
+  }
+
+  // Otherwise, append /appointments to the base practice URL
+  if (!baseUrl.endsWith("/")) {
+    return `${baseUrl}/appointments`;
+  }
+  return `${baseUrl}appointments`;
 }
 
 function classifyAppointmentPage(html) {
