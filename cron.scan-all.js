@@ -5,16 +5,12 @@
 //   node cron.scan-all.js
 //
 // Behaviour:
-//   - Connects to Mongo using MONGO_URI
-//   - Calls runScan() from scanner.js with no args → DB mode
-//   - Logs summary and exits
+//   - Ensures MONGO_URI is set
+//   - Calls runAllScans() from scanner.js → DB mode (grouped by postcode+radius)
+//   - scanner.js itself handles Mongo connection via connectMongo()
 
-import dotenv from "dotenv";
-import mongoose from "mongoose";
-import { connectMongo } from "./models.js";
+import "dotenv/config";
 import { runAllScans } from "./scanner.js";
-
-dotenv.config();
 
 async function main() {
   const startedAt = new Date();
@@ -32,21 +28,12 @@ async function main() {
   }
 
   try {
-    const conn = await connectMongo(rawUri);
-    console.log("🗄️  Mongo connected →", conn?.name || mongoose.connection?.name);
-  } catch (err) {
-    console.error("❌ Mongo connection error:", err?.message || err);
-    process.exit(1);
-  }
-
-  try {
-    // No options → DB mode (grouped by postcode+radius, sends emails)
-    const result = await runScan();
-    console.log("[cron] runScan() result:", JSON.stringify(result, null, 2));
+    // DB mode (scanner.js will call connectMongo() and do all grouping + emailing)
+    await runAllScans();
+    console.log("[cron] runAllScans() completed successfully.");
   } catch (err) {
     console.error("❌ Cron scan error:", err?.message || err);
   } finally {
-    await mongoose.connection.close().catch(() => {});
     const finishedAt = new Date();
     console.log(
       "=== DentistRadar cron.scan-all.js finished ===",
