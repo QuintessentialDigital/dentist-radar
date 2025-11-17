@@ -1,5 +1,5 @@
 // scanner.js
-// DentistRadar scanner (v3.1 – grouped, appointments-first, updated NHS URL)
+// DentistRadar scanner (v3.2 – grouped, appointments-first, updated NHS URL + link extraction)
 //
 // Modes:
 //   1) DB mode (cron or /api/scan with no postcode):
@@ -14,7 +14,7 @@
 //
 // NHS flow:
 //   - Build search URL: /service-search/find-a-dentist/results/<POSTCODE>
-//   - From that page, extract all /services/dentist/... links
+//   - From that page, extract all /services/dentist/... links (relative OR absolute)
 //   - For each, construct /appointments URL, e.g.:
 //       https://www.nhs.uk/services/dentist/covent-garden-dental-clinic/XV003761/appointments
 //   - Classify each appointments page as accepting / not accepting / child-only / unknown
@@ -64,13 +64,12 @@ function safeRadius(radiusMiles) {
   return Math.min(n, 100);
 }
 
-// NEW: use /results/<POSTCODE> instead of old ?postcode=... pattern
+// NHS now expects the location (postcode or town) in the path segment.
+// Example: https://www.nhs.uk/service-search/find-a-dentist/results/TW1%203SD
 function buildSearchUrl(postcode, radiusMiles) {
-  // NHS now expects the location (postcode or town) in the path segment.
-  // Example: https://www.nhs.uk/service-search/find-a-dentist/results/TW1%203SD
   const pc = encodeURIComponent(normalisePostcode(postcode));
-  // Radius is still stored/used for grouping, but NHS radius is handled on their side now.
-  safeRadius(radiusMiles); // keep call in case we later extend logic
+  // Radius still used for grouping / your own semantics; NHS distance is handled their side.
+  safeRadius(radiusMiles); // keep call for future extension
   return `${NHS_BASE}/service-search/find-a-dentist/results/${pc}`;
 }
 
@@ -94,20 +93,25 @@ async function fetchHtml(url) {
 // ---------------- NHS parsing ----------------
 
 // Extract all dentist detail URLs from the search results page
+// FIX: handle both relative "/services/dentist/..." and absolute "https://www.nhs.uk/services/dentist/..."
 function extractPracticeDetailUrls(searchHtml) {
   const $ = cheerio.load(searchHtml);
   const urls = new Set();
 
-  // NHS site tends to use <a> with href like /services/dentist/....
   $("a[href*='/services/dentist/']").each((_, el) => {
-    const href = $(el).attr("href");
+    let href = $(el).attr("href");
     if (!href) return;
 
-    // avoid query-string-only and fragments
-    if (!href.startsWith("/services/dentist/")) return;
+    href = href.trim();
 
-    // ignore already /appointments links here (we’ll handle later)
-    urls.add(href.split("#")[0].split("?")[0]);
+    // strip query/fragment
+    href = href.split("#")[0].split("?")[0];
+
+    // At this point href can be:
+    //   - "/services/dentist/.../XV001026"
+    //   - "https://www.nhs.uk/services/dentist/.../XV001026"
+    // Both are fine – toAppointmentsUrl can cope with either.
+    urls.add(href);
   });
 
   return Array.from(urls);
@@ -115,7 +119,7 @@ function extractPracticeDetailUrls(searchHtml) {
 
 // Given a detail URL, build the corresponding appointments URL
 function toAppointmentsUrl(detailHrefOrUrl) {
-  // Examples:
+  // Examples input:
   //   /services/dentist/covent-garden-dental-clinic/XV003761
   //   /services/dentist/covent-garden-dental-clinic/XV003761/appointments
   //   https://www.nhs.uk/services/dentist/.../appointments
@@ -459,7 +463,6 @@ export async function runAllScans() {
 
   await connectMongo();
 
-  // Adjust this query to match your Watch schema if needed.
   const watches = await Watch.find({
     unsubscribed: { $ne: true },
   }).lean();
