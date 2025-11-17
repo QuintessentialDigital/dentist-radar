@@ -23,7 +23,6 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.use(cors());
-// JSON body parsing for normal APIs (no Stripe signature verification yet)
 app.use(express.json());
 app.use(express.static("public"));
 
@@ -67,23 +66,20 @@ async function sendEmailHTML(to, subject, html, type = "other", meta = {}) {
 
     const ok = r.status >= 200 && r.status < 300;
     const body = r.data || {};
-    if (ok) {
+    if (ok && type === "alert") {
       try {
-        // Only log scanner alert emails to avoid duplicate key on (null, null, null)
-        if (type === "alert") {
-          await EmailLog.create({
-            to,
-            subject,
-            type,
-            providerId: body.MessageID,
-            meta,
-            sentAt: new Date(),
-          });
-        }
+        await EmailLog.create({
+          to,
+          subject,
+          type,
+          providerId: body.MessageID,
+          meta,
+          sentAt: new Date(),
+        });
       } catch (e) {
         console.error("⚠️ EmailLog save error:", e?.message || e);
       }
-    } else {
+    } else if (!ok) {
       console.error("❌ Postmark error:", r.status, body);
     }
     return { ok, status: r.status, body };
@@ -95,31 +91,26 @@ async function sendEmailHTML(to, subject, html, type = "other", meta = {}) {
 
 const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const normEmail = (s) => String(s || "").trim().toLowerCase();
+
 function normalizePostcode(raw = "") {
   const t = raw.toUpperCase().replace(/[^A-Z0-9]/g, "");
   if (t.length < 5) return raw.toUpperCase().trim();
   return `${t.slice(0, t.length - 3)} ${t.slice(-3)}`.trim();
 }
+
 function looksLikeUkPostcode(pc) {
   return /^([A-Z]{1,2}\d[A-Z\d]?)\s?\d[A-Z]{2}$/i.test((pc || "").toUpperCase());
 }
 
-// Robust planLimitFor: works even if schema doesn't yet store plan/postcode_limit
 async function planLimitFor(email) {
   const e = normEmail(email);
   const u = await User.findOne({ email: e }).lean();
-
-  // No user doc = free plan
   if (!u) return 1;
 
   const plan = (u.plan || "").toLowerCase();
-
-  // If plan is explicitly set, respect it
   if (plan === "family") return 10;
   if (plan === "pro") return 5;
 
-  // Fallback: any existing User doc = at least Pro for now
-  // (we only create User records via paid Stripe webhook)
   return 5;
 }
 
@@ -133,7 +124,6 @@ app.get("/health", (req, res) =>
   res.json({ ok: true, db: mongoose.connection?.name, time: new Date().toISOString() })
 );
 
-// Quick peek to verify we're on the correct DB/collection
 app.get("/api/debug/peek", async (req, res) => {
   try {
     const info = await peek();
@@ -144,7 +134,7 @@ app.get("/api/debug/peek", async (req, res) => {
 });
 
 /* ---------------------------
-   Create Watch (Welcome email improved)
+   Create Watch (Welcome email)
 --------------------------- */
 app.post("/api/watch/create", async (req, res) => {
   try {
@@ -153,115 +143,74 @@ app.post("/api/watch/create", async (req, res) => {
     const radius = Number(req.body?.radius);
 
     if (!emailRe.test(email))
-      return res
-        .status(400)
-        .json({ ok: false, error: "invalid_email", message: "Please enter a valid email address." });
-    if (!looksLikeUkPostcode(postcode))
-      return res.status(400).json({
-        ok: false,
-        error: "invalid_postcode",
-        message: "Please enter a valid UK postcode (e.g. RG1 2AB).",
-      });
-    if (!radius || radius < 1 || radius > 30)
-      return res.status(400).json({
-        ok: false,
-        error: "invalid_radius",
-        message: "Please select a radius between 1 and 30 miles.",
-      });
+      return res.status(400).json({ ok: false, error: "invalid_email" });
 
-    // Duplicate check
+    if (!looksLikeUkPostcode(postcode))
+      return res.status(400).json({ ok: false, error: "invalid_postcode" });
+
+    if (!radius || radius < 1 || radius > 30)
+      return res.status(400).json({ ok: false, error: "invalid_radius" });
+
     const exists = await Watch.findOne({ email, postcode }).lean();
     if (exists)
-      return res
-        .status(400)
-        .json({ ok: false, error: "duplicate", message: "Alert already exists for this postcode." });
+      return res.status(400).json({ ok: false, error: "duplicate" });
 
-    // Plan limit
     const limit = await planLimitFor(email);
     const count = await Watch.countDocuments({ email });
     if (count >= limit) {
       return res.status(402).json({
         ok: false,
         error: "upgrade_required",
-        message: `Your plan allows up to ${limit} postcode${limit > 1 ? "s" : ""}.`,
         upgradeLink: "/pricing.html",
       });
     }
 
     await Watch.create({ email, postcode, radius });
 
-    // Curated Welcome email
     const { subject, html } = renderEmail("welcome", { postcode, radius });
     await sendEmailHTML(email, subject, html, "welcome", { postcode, radius });
 
-    res.json({ ok: true, message: "✅ Alert created — check your inbox!" });
+    res.json({ ok: true, message: "Alert created!" });
   } catch (e) {
     console.error("watch/create error:", e);
-    res
-      .status(500)
-      .json({ ok: false, error: "server_error", message: "Something went wrong. Please try again later." });
+    res.status(500).json({ ok: false, error: "server_error" });
   }
 });
 
 /* ---------------------------
-   "My Alerts" APIs (list + delete)
+   My Alerts APIs
 --------------------------- */
-
-// List all watches for a given email
 app.get("/api/watch/list", async (req, res) => {
   try {
-    const emailRaw = req.query.email || "";
-    const email = normEmail(emailRaw);
-
-    if (!emailRe.test(email)) {
-      return res.status(400).json({
-        ok: false,
-        error: "invalid_email",
-        message: "Please enter a valid email address.",
-      });
-    }
+    const email = normEmail(req.query.email || "");
+    if (!emailRe.test(email))
+      return res.status(400).json({ ok: false, error: "invalid_email" });
 
     const watches = await Watch.find({ email }).sort({ createdAt: -1 }).lean();
     res.json({ ok: true, email, watches });
   } catch (e) {
-    console.error("watch/list error:", e);
     res.status(500).json({ ok: false, error: "server_error" });
   }
 });
 
-// Delete a single watch (only if it belongs to that email)
 app.delete("/api/watch/:id", async (req, res) => {
   try {
-    const emailRaw = req.query.email || "";
-    const email = normEmail(emailRaw);
+    const email = normEmail(req.query.email || "");
+    if (!emailRe.test(email))
+      return res.status(400).json({ ok: false, error: "invalid_email" });
+
     const id = req.params.id;
-
-    if (!emailRe.test(email)) {
-      return res.status(400).json({
-        ok: false,
-        error: "invalid_email",
-        message: "Please enter a valid email address.",
-      });
-    }
-
-    if (!id) {
-      return res.status(400).json({ ok: false, error: "missing_id" });
-    }
-
     const deleted = await Watch.findOneAndDelete({ _id: id, email });
-    if (!deleted) {
-      return res.status(404).json({ ok: false, error: "not_found" });
-    }
+    if (!deleted) return res.status(404).json({ ok: false, error: "not_found" });
 
     res.json({ ok: true, deletedId: id });
   } catch (e) {
-    console.error("watch/delete error:", e);
     res.status(500).json({ ok: false, error: "server_error" });
   }
 });
 
 /* ---------------------------
-   Stripe Checkout (compat route names)
+   Stripe Checkout + Webhook
 --------------------------- */
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || "";
 const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
@@ -275,6 +224,7 @@ async function handleCheckoutSession(req, res) {
     const SITE = process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
     const pricePro = process.env.STRIPE_PRICE_PRO;
     const priceFamily = process.env.STRIPE_PRICE_FAMILY;
+
     const planKey = (plan || "pro").toLowerCase() === "family" ? "family" : "pro";
     const priceId = planKey === "family" ? priceFamily : pricePro;
     if (!priceId) return res.json({ ok: false, error: "missing_price" });
@@ -284,37 +234,25 @@ async function handleCheckoutSession(req, res) {
       payment_method_types: ["card"],
       line_items: [{ price: priceId, quantity: 1 }],
       customer_email: email,
-      metadata: {
-        plan: planKey, // so webhook knows whether it's pro or family
-      },
+      metadata: { plan: planKey },
       success_url: `${SITE}/thankyou.html?plan=${planKey}`,
       cancel_url: `${SITE}/upgrade.html?canceled=true`,
     });
     return res.json({ ok: true, url: session.url });
   } catch (err) {
-    console.error("Stripe session error:", err?.type, err?.code, err?.message);
-    return res
-      .status(500)
-      .json({ ok: false, error: "stripe_error", message: err?.message || "unknown" });
+    console.error("Stripe session error:", err?.message);
+    return res.status(500).json({ ok: false, error: "stripe_error" });
   }
 }
 
 app.post("/api/create-checkout-session", handleCheckoutSession);
 app.post("/api/stripe/create-checkout-session", handleCheckoutSession);
 
-/* ---------------------------
-   Stripe Webhook (plan activation + email)
-   NOTE: this version assumes JSON body (no signature verification yet).
---------------------------- */
 app.post("/api/stripe/webhook", async (req, res) => {
   try {
     const event = req.body;
+    if (!event || !event.type) return res.status(400).send("invalid payload");
 
-    if (!event || !event.type) {
-      return res.status(400).send(`Webhook Error: invalid payload`);
-    }
-
-    // Handle successful checkout
     if (event.type === "checkout.session.completed") {
       const session = event.data?.object || {};
       const rawEmail =
@@ -324,220 +262,102 @@ app.post("/api/stripe/webhook", async (req, res) => {
       const plan = planRaw === "family" ? "family" : "pro";
       const postcode_limit = plan === "family" ? 10 : 5;
 
-      if (email && emailRe.test(email)) {
-        // Upsert User with plan, status, and limit
-        const update = {
-          email,
-          plan,
-          status: "active",
-          postcode_limit,
-        };
-
+      if (emailRe.test(email)) {
         await User.findOneAndUpdate(
           { email },
-          { $set: update },
+          { $set: { email, plan, status: "active", postcode_limit } },
           { upsert: true, new: true }
         );
 
-        // Send DentistRadar plan activation email
         const planLabel = plan === "family" ? "Family" : "Pro";
-        const subject = `Your DentistRadar ${planLabel} plan is now active`;
-
         const SITE = process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
         const manageUrl = `${SITE}/my-alerts.html?email=${encodeURIComponent(email)}`;
 
         const html = `
-          <html>
-            <body style="font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#333;line-height:1.6;">
-              <h2 style="color:#0b63ff;">Your ${planLabel} plan is active 🎉</h2>
-              <p>Hi,</p>
-              <p>Thank you for upgrading to <strong>DentistRadar ${planLabel}</strong>.</p>
-              <p>You can now track up to <strong>${postcode_limit} postcode${
-                postcode_limit > 1 ? "s" : ""
-              }</strong> for NHS dentist availability.</p>
-              <p>What you can do next:</p>
-              <ul>
-                <li>Add or update your alerts on the homepage using your email.</li>
-                <li>View and manage all your alerts on the <a href="${manageUrl}">My Alerts</a> page.</li>
-              </ul>
-              <p>If you have any questions or feedback, just reply to this email.</p>
-              <p>Best regards,<br>DentistRadar</p>
-            </body>
-          </html>
+          <h2>Your ${planLabel} plan is active 🎉</h2>
+          <p>You can now track up to <strong>${postcode_limit} postcodes</strong>.</p>
+          <p><a href="${manageUrl}">Manage your alerts</a></p>
         `;
 
-        await sendEmailHTML(email, subject, html, "plan_activated", {
+        await sendEmailHTML(email, `Your ${planLabel} plan is active`, html, "plan_activated", {
           plan,
           postcode_limit,
           stripeSessionId: session.id,
         });
-
-        console.log(`✅ Stripe webhook: activated ${planLabel} for ${email}`);
-      } else {
-        console.warn("⚠️ Stripe webhook: missing or invalid email on checkout.session.completed");
       }
     }
 
-    // You can extend here later for subscription cancellations, etc.
     res.json({ received: true });
   } catch (err) {
-    console.error("❌ Stripe webhook error:", err?.message || err);
-    res.status(500).send(`Webhook Error: ${err?.message || "unknown"}`);
+    console.error("Stripe webhook error:", err?.message);
+    res.status(500).send(`Webhook Error: ${err?.message}`);
   }
 });
 
 /* ---------------------------
-   Manual / Cron Scan Endpoint (token-gated)
+   Manual Scan (token-gated)
 --------------------------- */
 app.post("/api/scan", async (req, res) => {
   const token = process.env.SCAN_TOKEN || "";
   if (!token || (req.query.token !== token && req.headers["x-scan-token"] !== token)) {
     return res.status(403).json({ ok: false, error: "forbidden" });
   }
+
   try {
-    const result = await runScan(); // from scanner.js
-    res.json(
-      result && typeof result === "object"
-        ? result
-        : { ok: true, checked: 0, found: 0, alertsSent: 0 }
-    );
+    await runAllScans();
+    res.json({ ok: true, note: "runAllScans_completed" });
   } catch (err) {
     console.error("❌ /api/scan error:", err);
-    res.json({
-      ok: true,
-      checked: 0,
-      found: 0,
-      alertsSent: 0,
-      note: "scan_exception",
-    });
+    res.status(500).json({ ok: false, error: "scan_exception" });
   }
 });
 
 /* ---------------------------
-   Unsubscribe (confirmation page)
+   Unsubscribe Routes
 --------------------------- */
-
-// Generic HTML response helper
 function renderUnsubscribePage(success, infoText) {
   const title = success ? "You have been unsubscribed" : "Unsubscribe";
-  const bodyText =
-    infoText ||
-    (success
-      ? "You will no longer receive alerts for this postcode."
-      : "We could not find that alert. It may have already been removed.");
+  const body = infoText;
 
   return `
     <html>
-      <head>
-        <meta charset="utf-8" />
-        <title>${title} — DentistRadar</title>
-        <meta name="viewport" content="width=device-width,initial-scale=1" />
-      </head>
-      <body style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif;background:#fafafa;color:#222;line-height:1.6;">
-        <div style="max-width:480px;margin:40px auto;padding:24px 20px;background:#fff;border-radius:12px;border:1px solid #eee;box-shadow:0 2px 10px rgba(0,0,0,0.05);text-align:center;">
-          <h1 style="font-size:1.5rem;margin-bottom:10px;color:#0b63ff;">${title}</h1>
-          <p style="margin-bottom:18px;">${bodyText}</p>
-          <a href="/" style="display:inline-block;margin-top:6px;padding:10px 18px;border-radius:8px;background:#0b63ff;color:#fff;text-decoration:none;font-weight:600;">Back to DentistRadar</a>
+      <body style="font-family:system-ui;background:#fafafa;padding:40px;">
+        <div style="max-width:480px;margin:auto;background:#fff;border-radius:10px;padding:25px;border:1px solid #eee;">
+          <h1>${title}</h1>
+          <p>${body}</p>
+          <a href="/" style="padding:10px 18px;background:#0b63ff;color:#fff;border-radius:8px;text-decoration:none;">Back</a>
         </div>
       </body>
     </html>
   `;
 }
 
-// Support /unsubscribe?alertId=... or ?alert=... or /unsubscribe/:id
 app.get("/unsubscribe", async (req, res) => {
   try {
-    const alertId = req.query.alertId || req.query.alert || null;
-    if (!alertId) {
-      return res
-        .status(400)
-        .send(
-          renderUnsubscribePage(
-            false,
-            "We couldn't identify which alert to remove. The link might be incomplete."
-          )
-        );
-    }
+    const id = req.query.alertId || req.query.alert;
+    if (!id) return res.status(400).send(renderUnsubscribePage(false, "Invalid unsubscribe link."));
 
-    const deleted = await Watch.findByIdAndDelete(alertId);
-    if (!deleted) {
-      return res
-        .status(404)
-        .send(
-          renderUnsubscribePage(
-            false,
-            "We couldn't find that alert. It may have already been removed."
-          )
-        );
-    }
+    const deleted = await Watch.findByIdAndDelete(id);
+    if (!deleted) return res.status(404).send(renderUnsubscribePage(false, "Alert not found."));
 
     const pc = deleted.postcode || "";
-    return res.send(
-      renderUnsubscribePage(
-        true,
-        pc
-          ? `You will no longer receive alerts for <strong>${pc}</strong>.`
-          : "You will no longer receive alerts for this postcode."
-      )
-    );
+    return res.send(renderUnsubscribePage(true, `You will no longer receive alerts for <strong>${pc}</strong>.`));
   } catch (e) {
-    console.error("unsubscribe error:", e);
-    return res
-      .status(500)
-      .send(
-        renderUnsubscribePage(
-          false,
-          "Something went wrong while removing your alert. Please try again later."
-        )
-      );
+    return res.status(500).send(renderUnsubscribePage(false, "Something went wrong."));
   }
 });
 
 app.get("/unsubscribe/:id", async (req, res) => {
   try {
-    const alertId = req.params.id;
-    if (!alertId) {
-      return res
-        .status(400)
-        .send(
-          renderUnsubscribePage(
-            false,
-            "We couldn't identify which alert to remove. The link might be incomplete."
-          )
-        );
-    }
+    const id = req.params.id;
+    const deleted = await Watch.findByIdAndDelete(id);
 
-    const deleted = await Watch.findByIdAndDelete(alertId);
-    if (!deleted) {
-      return res
-        .status(404)
-        .send(
-          renderUnsubscribePage(
-            false,
-            "We couldn't find that alert. It may have already been removed."
-          )
-        );
-    }
-
+    if (!deleted) return res.status(404).send(renderUnsubscribePage(false, "Alert not found."));
     const pc = deleted.postcode || "";
-    return res.send(
-      renderUnsubscribePage(
-        true,
-        pc
-          ? `You will no longer receive alerts for <strong>${pc}</strong>.`
-          : "You will no longer receive alerts for this postcode."
-      )
-    );
+
+    return res.send(renderUnsubscribePage(true, `You will no longer receive alerts for <strong>${pc}</strong>.`));
   } catch (e) {
-    console.error("unsubscribe/:id error:", e);
-    return res
-      .status(500)
-      .send(
-        renderUnsubscribePage(
-          false,
-          "Something went wrong while removing your alert. Please try again later."
-        )
-      );
+    return res.status(500).send(renderUnsubscribePage(false, "Something went wrong."));
   }
 });
 
@@ -551,8 +371,8 @@ app.get("*", (req, res) =>
 );
 
 /* ---------------------------
-   Start
+   Start server
 --------------------------- */
 app.listen(PORT, () => {
-  console.log(`🚀 Dentist Radar running on :${PORT}`);
+  console.log(`🚀 DentistRadar running on :${PORT}`);
 });
