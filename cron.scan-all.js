@@ -12,7 +12,7 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { connectMongo } from "./models.js";
-import { runScan } from "./scanner.js";
+import { runAllScans } from "./scanner.js";
 
 dotenv.config();
 
