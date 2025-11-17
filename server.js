@@ -13,7 +13,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import axios from "axios";
 
-import { runScan } from "./scanner.js";
+import { runAllScans } from "./scanner.js";
 import { renderEmail } from "./emailTemplates.js";
 import { connectMongo, Watch, User, EmailLog, peek } from "./models.js";
 
