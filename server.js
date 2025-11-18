@@ -3,6 +3,7 @@
 // - Welcome email uses HTML template via Postmark
 // - Adds /api/debug/peek to verify DB/collections
 // - Stripe webhook + plan activation email + "My Alerts" APIs + Unsubscribe
+// - Phase 2: Grouped scans (runAllScans) + admin endpoint for dryRun/testing
 
 import express from "express";
 import { scanPostcode } from "./scanner.js";
@@ -121,6 +122,161 @@ async function planLimitFor(email) {
   return 5;
 }
 
+/**
+ * Build the acceptance alert email (subject + HTML)
+ * shared between:
+ *  - immediate scan on signup
+ *  - grouped cron scans (runAllScans)
+ */
+function buildAcceptanceEmail(postcode, radius, practices) {
+  const year = new Date().getFullYear();
+
+  const rowsHtml = practices
+    .map((p) => {
+      const name = p.name || "Unknown practice";
+      const phone = p.phone || "Not available";
+
+      const patientType =
+        p.patientType ||
+        (p.childOnly ? "Children only" : "Adults & children");
+
+      const distance =
+        p.distanceText ||
+        (typeof p.distanceMiles === "number"
+          ? `${p.distanceMiles.toFixed(1)} miles`
+          : "");
+
+      const nhsUrl = p.nhsUrl || "#";
+
+      const mapUrl =
+        p.mapUrl ||
+        `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+          `${name} ${p.address || ""} ${postcode}`
+        )}`;
+
+      return `
+        <tr>
+          <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
+            <strong>${name}</strong><br/>
+            <span style="font-size:12px; color:#6b7280;">${p.address || ""}</span>
+          </td>
+          <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
+            ${patientType}
+          </td>
+          <td style="padding:10px; border-bottom:1px solid #f0f0f0; white-space:nowrap;">
+            ${distance || ""}
+          </td>
+          <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
+            ${phone}
+          </td>
+          <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
+            ${
+              nhsUrl && nhsUrl !== "#"
+                ? `<a href="${nhsUrl}" style="color:#0b63ff; text-decoration:none;">View on NHS</a>`
+                : `<span style="color:#9ca3af;">N/A</span>`
+            }
+          </td>
+          <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
+            <a href="${mapUrl}" style="color:#0b63ff; text-decoration:none;">View map</a>
+          </td>
+        </tr>
+      `;
+    })
+    .join("");
+
+  const subject = `DentistRadar: ${practices.length} NHS dentist(s) accepting near ${postcode}`;
+
+  const html = `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>DentistRadar – NHS dentist alert</title>
+  </head>
+  <body style="margin:0; padding:0; background-color:#f4f6fb; font-family:system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;">
+    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
+      <tr>
+        <td align="center" style="padding:24px 12px;">
+          <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:640px; background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 8px 20px rgba(15, 23, 42, 0.08);">
+            <tr>
+              <td style="background:#0b63ff; padding:16px 24px; color:#ffffff;">
+                <div style="font-size:20px; font-weight:700;">
+                  DentistRadar
+                </div>
+                <div style="font-size:13px; opacity:0.85;">
+                  NHS dentist availability alert
+                </div>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:24px 24px 16px 24px;">
+                <h2 style="margin:0 0 12px 0; font-size:20px; color:#111827;">
+                  Good news – NHS dentists are accepting new patients near you
+                </h2>
+
+                <p style="margin:0 0 10px 0; font-size:14px; color:#4b5563; line-height:1.6;">
+                  You are receiving this alert from <strong>DentistRadar</strong> because you registered 
+                  for updates for postcode <strong>${postcode}</strong> within 
+                  <strong>${radius} miles</strong>.
+                </p>
+
+                <p style="margin:0 0 18px 0; font-size:14px; color:#4b5563; line-height:1.6;">
+                  Based on the latest information from the NHS website, the following practices are currently 
+                  shown as <strong>accepting new NHS patients</strong> (subject to change and availability):
+                </p>
+
+                <div style="border:1px solid #e5e7eb; border-radius:10px; overflow:hidden;">
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse; font-size:13px;">
+                    <thead>
+                      <tr style="background:#f5f8ff; text-align:left;">
+                        <th align="left" style="padding:10px;">Practice</th>
+                        <th align="left" style="padding:10px;">Patient type</th>
+                        <th align="left" style="padding:10px;">Distance</th>
+                        <th align="left" style="padding:10px;">Phone</th>
+                        <th align="left" style="padding:10px;">NHS page</th>
+                        <th align="left" style="padding:10px;">Map</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${rowsHtml}
+                    </tbody>
+                  </table>
+                </div>
+
+                <p style="margin:18px 0 8px 0; font-size:14px; color:#374151; line-height:1.6;">
+                  <strong>Tip:</strong> NHS availability can change quickly. If you find a suitable practice, 
+                  contact them as soon as possible to confirm they are still accepting new patients and to check 
+                  appointment availability.
+                </p>
+
+                <p style="margin:8px 0 0 0; font-size:12px; color:#6b7280; line-height:1.6;">
+                  This email is based on publicly available information from the NHS website at the time of scanning.
+                  DentistRadar does not guarantee availability and cannot book appointments on your behalf.
+                </p>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:12px 24px 18px 24px; border-top:1px solid #e5e7eb; font-size:12px; color:#9ca3af;">
+                <div>
+                  You are receiving this because you created an alert on DentistRadar for postcode ${postcode}.
+                </div>
+                <div style="margin-top:4px;">
+                  © ${year} DentistRadar. All rights reserved.
+                </div>
+              </td>
+            </tr>
+
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+  return { subject, html };
+}
+
 /* ---------------------------
    Health / Debug
 --------------------------- */
@@ -212,156 +368,18 @@ async function handleCreateWatch(req, res) {
 
     if (scanResult.acceptingCount > 0) {
       const practices = scanResult.accepting || [];
-      const year = new Date().getFullYear();
+      const { subject, html } = buildAcceptanceEmail(
+        postcode,
+        radius,
+        practices
+      );
 
-      const rowsHtml = practices
-        .map((p) => {
-          const name = p.name || "Unknown practice";
-          const phone = p.phone || "Not available";
-
-          const patientType =
-            p.patientType ||
-            (p.childOnly ? "Children only" : "Adults & children");
-
-          const distance =
-            p.distanceText ||
-            (typeof p.distanceMiles === "number"
-              ? `${p.distanceMiles.toFixed(1)} miles`
-              : "");
-
-          const nhsUrl = p.nhsUrl || "#";
-
-          const mapUrl =
-            p.mapUrl ||
-            `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-              `${name} ${p.address || ""} ${postcode}`
-            )}`;
-
-          return `
-            <tr>
-              <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
-                <strong>${name}</strong><br/>
-                <span style="font-size:12px; color:#6b7280;">${p.address || ""}</span>
-              </td>
-              <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
-                ${patientType}
-              </td>
-              <td style="padding:10px; border-bottom:1px solid #f0f0f0; white-space:nowrap;">
-                ${distance || ""}
-              </td>
-              <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
-                ${phone}
-              </td>
-              <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
-                ${
-                  nhsUrl && nhsUrl !== "#"
-                    ? `<a href="${nhsUrl}" style="color:#0b63ff; text-decoration:none;">View on NHS</a>`
-                    : `<span style="color:#9ca3af;">N/A</span>`
-                }
-              </td>
-              <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
-                <a href="${mapUrl}" style="color:#0b63ff; text-decoration:none;">View map</a>
-              </td>
-            </tr>
-          `;
-        })
-        .join("");
-
-      const alertSubject = `DentistRadar: ${practices.length} NHS dentist(s) accepting near ${postcode}`;
-
-      const alertHtml = `<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="UTF-8" />
-    <title>DentistRadar – NHS dentist alert</title>
-  </head>
-  <body style="margin:0; padding:0; background-color:#f4f6fb; font-family:system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;">
-    <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%">
-      <tr>
-        <td align="center" style="padding:24px 12px;">
-          <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:640px; background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 8px 20px rgba(15, 23, 42, 0.08);">
-            <tr>
-              <td style="background:#0b63ff; padding:16px 24px; color:#ffffff;">
-                <div style="font-size:20px; font-weight:700;">
-                  DentistRadar
-                </div>
-                <div style="font-size:13px; opacity:0.85;">
-                  NHS dentist availability alert
-                </div>
-              </td>
-            </tr>
-
-            <tr>
-              <td style="padding:24px 24px 16px 24px;">
-                <h2 style="margin:0 0 12px 0; font-size:20px; color:#111827;">
-                  Good news – NHS dentists are accepting new patients near you
-                </h2>
-
-                <p style="margin:0 0 10px 0; font-size:14px; color:#4b5563; line-height:1.6;">
-                  You are receiving this alert from <strong>DentistRadar</strong> because you registered 
-                  for updates for postcode <strong>${postcode}</strong> within 
-                  <strong>${radius} miles</strong>.
-                </p>
-
-                <p style="margin:0 0 18px 0; font-size:14px; color:#4b5563; line-height:1.6;">
-                  Based on the latest information from the NHS website, the following practices are currently 
-                  shown as <strong>accepting new NHS patients</strong> (subject to change and availability):
-                </p>
-
-                <div style="border:1px solid #e5e7eb; border-radius:10px; overflow:hidden;">
-                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse; font-size:13px;">
-                    <thead>
-                      <tr style="background:#f5f8ff; text-align:left;">
-                        <th align="left" style="padding:10px;">Practice</th>
-                        <th align="left" style="padding:10px;">Patient type</th>
-                        <th align="left" style="padding:10px;">Distance</th>
-                        <th align="left" style="padding:10px;">Phone</th>
-                        <th align="left" style="padding:10px;">NHS page</th>
-                        <th align="left" style="padding:10px;">Map</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${rowsHtml}
-                    </tbody>
-                  </table>
-                </div>
-
-                <p style="margin:18px 0 8px 0; font-size:14px; color:#374151; line-height:1.6;">
-                  <strong>Tip:</strong> NHS availability can change quickly. If you find a suitable practice, 
-                  contact them as soon as possible to confirm they are still accepting new patients and to check 
-                  appointment availability.
-                </p>
-
-                <p style="margin:8px 0 0 0; font-size:12px; color:#6b7280; line-height:1.6;">
-                  This email is based on publicly available information from the NHS website at the time of scanning.
-                  DentistRadar does not guarantee availability and cannot book appointments on your behalf.
-                </p>
-              </td>
-            </tr>
-
-            <tr>
-              <td style="padding:12px 24px 18px 24px; border-top:1px solid #e5e7eb; font-size:12px; color:#9ca3af;">
-                <div>
-                  You are receiving this because you created an alert on DentistRadar for postcode ${postcode}.
-                </div>
-                <div style="margin-top:4px;">
-                  © ${year} DentistRadar. All rights reserved.
-                </div>
-              </td>
-            </tr>
-
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>`;
-
-      await sendEmailHTML(email, alertSubject, alertHtml, "alert", {
+      await sendEmailHTML(email, subject, html, "alert", {
         postcode,
         radius,
         acceptingCount: practices.length,
         watchId: watch._id,
+        runMode: "signup",
       });
 
       console.log(
@@ -455,6 +473,191 @@ app.get("/api/scan", async (req, res) => {
     res
       .status(500)
       .json({ error: "Scan failed", details: err.message });
+  }
+});
+
+/* ---------------------------
+   Grouped Scans (Phase 2) – for cron + testing
+--------------------------- */
+
+/**
+ * Run grouped scans for all watches in DB.
+ * - Groups by (postcode, radius)
+ * - Calls scanPostcode once per group
+ * - For each watch:
+ *     - If dryRun: just record summary
+ *     - Else: send acceptance email if:
+ *         - acceptingCount > 0
+ *         - no alert in last 12 hours for that email+postcode+radius
+ */
+async function runAllScans({ dryRun = false } = {}) {
+  const started = Date.now();
+  const watches = await Watch.find({}).lean();
+  const groups = new Map();
+
+  for (const w of watches) {
+    const pc = w.postcode;
+    const radius = w.radius || 5;
+    const key = `${pc}::${radius}`;
+    if (!groups.has(key)) {
+      groups.set(key, { postcode: pc, radius, watches: [] });
+    }
+    groups.get(key).watches.push(w);
+  }
+
+  console.log(
+    `[CRON] runAllScans – ${watches.length} watches, ${groups.size} group(s). dryRun=${dryRun}`
+  );
+
+  let totalScans = 0;
+  let totalEmails = 0;
+  let totalSkippedRecent = 0;
+
+  const results = [];
+
+  for (const [key, group] of groups.entries()) {
+    const { postcode, radius, watches: groupWatches } = group;
+    totalScans++;
+
+    console.log(
+      `[CRON] Scanning group ${key} – ${groupWatches.length} watch(es)`
+    );
+
+    let scan;
+    try {
+      scan = await scanPostcode(postcode, radius);
+    } catch (e) {
+      console.error(
+        `[CRON] scanPostcode error for ${key}:`,
+        e?.message || e
+      );
+      results.push({
+        key,
+        postcode,
+        radius,
+        error: e?.message || String(e),
+      });
+      continue;
+    }
+
+    const practices = scan.accepting || [];
+    const acceptingCount = practices.length;
+
+    if (acceptingCount === 0) {
+      console.log(
+        `[CRON] No accepting practices for ${key} – skipping emails.`
+      );
+      results.push({
+        key,
+        postcode,
+        radius,
+        watches: groupWatches.length,
+        acceptingCount,
+        emailsSent: 0,
+        reason: "no_accepting",
+      });
+      continue;
+    }
+
+    const { subject, html } = buildAcceptanceEmail(
+      postcode,
+      radius,
+      practices
+    );
+
+    for (const w of groupWatches) {
+      const email = normEmail(w.email || "");
+      if (!emailRe.test(email)) continue;
+
+      // Check last alert in last 12 hours for this email+postcode+radius
+      const lastAlert = await EmailLog.findOne({
+        to: email,
+        type: "alert",
+        "meta.postcode": postcode,
+        "meta.radius": radius,
+      })
+        .sort({ sentAt: -1 })
+        .lean();
+
+      const now = Date.now();
+      const twelveHoursMs = 12 * 60 * 60 * 1000;
+      if (
+        lastAlert &&
+        lastAlert.sentAt &&
+        now - new Date(lastAlert.sentAt).getTime() < twelveHoursMs
+      ) {
+        totalSkippedRecent++;
+        continue;
+      }
+
+      if (dryRun) {
+        // For dryRun, do not send – just record that it WOULD send
+        results.push({
+          key,
+          postcode,
+          radius,
+          email,
+          acceptingCount,
+          wouldSend: true,
+        });
+      } else {
+        const meta = {
+          postcode,
+          radius,
+          acceptingCount,
+          watchId: w._id,
+          runMode: "cron",
+        };
+        await sendEmailHTML(email, subject, html, "alert", meta);
+        totalEmails++;
+        console.log(
+          `[CRON] Sent acceptance alert to ${email} for ${key} with ${acceptingCount} practice(s).`
+        );
+      }
+    }
+  }
+
+  const tookMs = Date.now() - started;
+
+  return {
+    totalWatches: watches.length,
+    groups: groups.size,
+    totalScans,
+    totalEmails,
+    totalSkippedRecent,
+    tookMs,
+    results,
+  };
+}
+
+/**
+ * Admin endpoint to trigger grouped scans.
+ * Use:
+ *   POST /api/admin/run-all-scans?token=ADMIN_TOKEN&dryRun=true
+ */
+app.post("/api/admin/run-all-scans", async (req, res) => {
+  try {
+    const token =
+      req.query.token || (req.body && req.body.token) || "";
+    const adminToken = process.env.ADMIN_TOKEN || "";
+
+    if (!adminToken || token !== adminToken) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+
+    const dryRunParam =
+      req.query.dryRun ||
+      (req.body && req.body.dryRun && String(req.body.dryRun));
+    const dryRun = String(dryRunParam).toLowerCase() === "true";
+
+    const summary = await runAllScans({ dryRun });
+
+    return res.json({ ok: true, dryRun, summary });
+  } catch (e) {
+    console.error("run-all-scans error:", e?.message || e);
+    return res
+      .status(500)
+      .json({ ok: false, error: "server_error" });
   }
 });
 
