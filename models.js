@@ -2,7 +2,7 @@
 // Central Mongoose models for DentistRadar
 // - User: registered user
 // - Watch: an "alert" (postcode + radius + email)
-// - EmailLog: history & de-duplication for alerts/emails
+// - EmailLog: alert/email history & de-duplication
 
 import mongoose from "mongoose";
 
@@ -53,7 +53,7 @@ const watchSchema = new mongoose.Schema(
     createdAt: { type: Date, default: Date.now },
     lastRunAt: { type: Date },
 
-    // Some code uses unsubscribed flag instead of active=false
+    // Some paths use unsubscribed instead of active=false
     unsubscribed: { type: Boolean },
   },
   { timestamps: true }
@@ -67,11 +67,12 @@ watchSchema.index({ email: 1, postcode: 1, radiusMiles: 1, radius: 1 });
 /**
  * EmailLog is where we prevent duplicates and keep a history of alerts.
  *
- * It is used in two ways:
- *  - Per-practice logging (legacy) via alertId + practiceId + appointmentUrl
- *  - Per-watch snapshot logging (current scanner) via watchId + signature
+ * It is used in multiple ways:
+ *  - Legacy scanner: per-practice logging using alertId + practiceId + appointmentUrl
+ *  - Current scanner: per-watch logging using watchId + signature
+ *  - Server-side email logging (Postmark) using type/subject/providerId/meta
  *
- * We keep the schema broad and optional so both styles continue to work.
+ * All fields are optional so legacy records continue to work.
  */
 
 const emailLogSchema = new mongoose.Schema(
@@ -98,12 +99,12 @@ const emailLogSchema = new mongoose.Schema(
     practiceId: { type: String }, // e.g. NHS service ID or slug
     appointmentUrl: { type: String },
 
-    // Current scanner: summary info for de-duplication
+    // Current scanner summary info for de-duplication
     acceptingCount: { type: Number },
     signature: { type: String }, // concatenated list of accepting URLs
 
-    // Generic email logging (Postmark / other senders)
-    type: { type: String }, // e.g. "alert", "welcome", "plan_activated"
+    // Generic email logging (e.g. Postmark)
+    type: { type: String }, // "alert", "welcome", "plan_activated", etc.
     subject: { type: String },
     providerId: { type: String }, // e.g. Postmark MessageID
     meta: { type: mongoose.Schema.Types.Mixed },
@@ -113,10 +114,10 @@ const emailLogSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-// Helpful analytics indices (non-unique to avoid conflicts with partial rows)
+// Helpful analytics indices (non-unique)
 emailLogSchema.index({ email: 1, postcode: 1 });
 emailLogSchema.index({ practiceId: 1 });
-// watchId already has an index via the field definition
+// watchId already has an index via field definition
 
 // ----------------- Peek helper -----------------
 
