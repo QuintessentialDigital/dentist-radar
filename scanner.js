@@ -1,586 +1,387 @@
-// DentistRadar scanner (v3.1 – distance + phone + resilient URL + per-group error handling)
-//
-// Modes:
-//   1) TEST mode (CLI):
-//        node scanner.js --test "PR25 1QX" 25
-//        -> Scans NHS, prints JSON + sample email HTML, DOES NOT send any emails
-//
-//   2) DB mode (cron / server):
-//        import { runAllScans } from "./scanner.js";
-//        -> Reads active Watches from Mongo, groups by (postcode, radiusMiles),
-//           scans NHS once per group, sends alert emails, logs EmailLog.
-//
-//   3) Single group mode (if you wire it from /api/scan):
-//        import { runSingleScan } from "./scanner.js";
-//        await runSingleScan("PR25 1QX", 25, { dryRun: true });
-//
-// Notes:
-//   - Uses appointments page ONLY for acceptance logic
-//   - Distance comes from NHS search results page
-//   - Phone comes from NHS profile page
-//   - radiusMiles is always set so email never shows "undefined miles"
+// scanner.js – DentistRadar scanner v2.5 (grouped, with single-watch mode)
 
 import "dotenv/config";
 import nodemailer from "nodemailer";
 import { connectMongo, Watch, EmailLog } from "./models.js";
 
-// If you're on Node < 18, uncomment this and add dependency:
+// If you're on Node 18+, global fetch exists.
+// If not, install node-fetch and uncomment:
 // import fetch from "node-fetch";
 
-const NHS_BASE = "https://www.nhs.uk";
-
-// ---------------- Small helpers ----------------
+// ---------- Basic helpers ----------
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function slugifyName(name) {
-  return name
-    .toLowerCase()
-    .replace(/&/g, "and")
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
+function buildNhsSearchUrl(postcode, radiusMiles) {
+  const encodedPostcode = encodeURIComponent(postcode.trim());
+  const radius = Number(radiusMiles) || 5;
+  return `https://www.nhs.uk/service-search/find-a-dentist/results?postcode=${encodedPostcode}&distance=${radius}`;
 }
 
-// Very simple UK phone extractor from a text block
-function extractPhone(block) {
-  if (!block) return "";
-  const text = block.replace(/\s+/g, " ");
-  // Look for tel: links first
-  const telMatch = text.match(/tel:([0-9+\s()\-]{8,})/i);
-  if (telMatch) {
-    return telMatch[1].trim();
-  }
-  // Fallback: UK-ish number patterns
-  const phoneMatch = text.match(/(0\d{2,4}[\s-]?\d{3,4}[\s-]?\d{3,4})/);
-  if (phoneMatch) {
-    return phoneMatch[1].trim();
-  }
-  return "";
-}
-
-function normalisePostcode(pc) {
-  return (pc || "").toUpperCase().trim();
-}
-
-function getRadiusFromWatch(w) {
-  // Support both radius and radiusMiles fields; default 25
-  return Number(w.radiusMiles ?? w.radius ?? 25);
-}
-
-// ---------------- Nodemailer transport ----------------
-
-let transport = null;
-
-function getTransport() {
-  if (transport) return transport;
-
-  transport = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || "587"),
-    secure: false,
-    auth: process.env.SMTP_USER
-      ? {
-          user: process.env.SMTP_USER,
-          pass: process.env.SMTP_PASS,
-        }
-      : undefined,
-  });
-
-  return transport;
-}
-
-// ---------------- NHS HTTP helpers ----------------
-
-async function fetchHtml(url, label = "fetchHtml") {
+async function fetchText(url) {
   const res = await fetch(url, {
     headers: {
-      "User-Agent": "DentistRadar Scanner / Node",
-      Accept: "text/html,application/xhtml+xml",
+      "User-Agent": "Mozilla/5.0 (DentistRadar scanner)",
+      "Accept": "text/html,application/xhtml+xml",
     },
   });
-
   if (!res.ok) {
-    console.error(`❌ [${label}] HTTP ${res.status} for ${url}`);
-    throw new Error(`Failed to fetch ${url}: ${res.status}`);
+    throw new Error(`Fetch failed ${res.status} for ${url}`);
   }
-
   return await res.text();
 }
 
-// ✅ FIXED: NHS currently uses path-based URL, not ?postcode=
-function buildNhsSearchUrl(postcode, radiusMiles) {
-  const trimmed = (postcode || "").trim();
-  const encodedPostcode = encodeURIComponent(trimmed); // "RG41 4UW" -> "RG41%204UW"
+// Very simple link extractor from NHS search results
+function extractPracticeLinks(searchHtml) {
+  const links = new Set();
 
-  let url = `${NHS_BASE}/service-search/find-a-dentist/results/${encodedPostcode}`;
-  if (radiusMiles) {
-    url += `?distance=${encodeURIComponent(String(radiusMiles))}`;
-  }
-  return url;
-}
-
-// Try to get a practice profile URL from the search result HTML chunk
-function extractProfileUrl(chunk) {
-  const m = chunk.match(/href="(\/services\/dentist\/[^"]+)"/i);
-  if (!m) return "";
-  return NHS_BASE + m[1];
-}
-
-// Try to get an appointments URL (if present) from a search result chunk.
-// Fallback: derive from profile URL.
-function extractAppointmentsUrl(chunk, profileUrl) {
-  // 1) If there is an explicit appointments link in this HTML chunk, use it
-  const m = chunk.match(/href="(\/services\/dentist\/appointments\/[^"]+)"/i);
-  if (m) return NHS_BASE + m[1];
-
-  if (!profileUrl) return "";
-
-  // 2) If the profileUrl is already an appointments URL, just return it
-  if (profileUrl.includes("/services/dentist/appointments/")) {
-    return profileUrl;
-  }
-
-  // 3) If it's a normal dentist profile, derive the appointments URL from it
-  if (profileUrl.includes("/services/dentist/")) {
-    return profileUrl.replace(
-      "/services/dentist/",
-      "/services/dentist/appointments/"
-    );
-  }
-
-  // 4) Last resort: fall back to profile URL
-  return profileUrl;
-}
-
-// Parse the NHS search results page to extract practices + distance + URLs
-function parseSearchResults(html) {
-  const results = [];
-
-  // Match ONLY actual dentist practice profile URLs:
-  //    /services/dentist/<slug>/<id>
-  const re = /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
+  const regex = /href="(\/services\/dentist\/[^\"]+)"/gi;
   let match;
-
-  while ((match = re.exec(html)) !== null) {
-    const href = match[1];           // e.g. /services/dentist/diamond-dental/12345
-    const nameRaw = match[2] || "";
-    const name = nameRaw.replace(/\s+/g, " ").trim();
-    if (!name) continue;
-
-    const profileUrl = NHS_BASE + href;
-
-    // Check the next 500 chars for distance e.g. "1.2 miles"
-    const windowText = html.slice(match.index, match.index + 500);
-    const distMatch =
-      windowText.match(/([\d.,]+)\s*miles?/i) ||
-      windowText.match(/([\d.,]+)\s*mi\b/i);
-
-    const distanceText = distMatch ? distMatch[0].trim() : "";
-
-    // Build appointments URL properly
-    const appointmentsUrl = extractAppointmentsUrl(windowText, profileUrl);
-    const mapUrl = profileUrl;
-
-    results.push({
-      name,
-      distanceText,
-      profileUrl,
-      appointmentsUrl,
-      mapUrl,
-    });
-  }
-  console.log(
-    `🔎 parseSearchResults: extracted ${results.length} dentist practices from HTML`
-  );
-  return results;
-}
-
-// Fetch phone from practice profile page
-async function fetchPhoneFromProfile(profileUrl) {
-  if (!profileUrl) return "";
-  try {
-    const html = await fetchHtml(profileUrl, "profile");
-    const phone = extractPhone(html);
-    return phone;
-  } catch (err) {
-    console.error(
-      "❌ Error fetching phone from profile",
-      profileUrl,
-      err.message
-    );
-    return "";
-  }
-}
-
-// Acceptance classifier based on appointments page text
-function classifyAcceptance(text) {
-  const lower = text.toLowerCase();
-
-  let accepting = false;
-  let childOnly = false;
-  let notAccepting = false;
-
-  if (
-    /currently accepts? new nhs patients/i.test(text) ||
-    /accepting new nhs patients/i.test(text)
-  ) {
-    accepting = true;
-  }
-
-  if (
-    /only accepting.*children/i.test(text) ||
-    /accepts? new nhs patients.*children/i.test(text) ||
-    /new nhs child patients only/i.test(text)
-  ) {
-    childOnly = true;
-  }
-
-  if (
-    /not accepting new nhs patients/i.test(text) ||
-    /no (longer )?accepting new nhs/i.test(text) ||
-    /has no availability for routine nhs dental appointments/i.test(text)
-  ) {
-    notAccepting = true;
-  }
-
-  if (childOnly) {
-    accepting = false;
-  }
-
-  return { accepting, childOnly, notAccepting };
-}
-
-// Scan a single practice (appointments + profile) to see if it's accepting
-async function scanPractice(practice) {
-  const { name, distanceText, profileUrl, appointmentsUrl, mapUrl } = practice;
-
-  // 1) Fetch appointments page for acceptance logic
-  let acceptance = { accepting: false, childOnly: false, notAccepting: false };
-  if (appointmentsUrl) {
-    try {
-      const html = await fetchHtml(appointmentsUrl, "appointments");
-      const text = html.replace(/\s+/g, " ");
-      acceptance = classifyAcceptance(text);
-    } catch (err) {
-      console.error(
-        "❌ Error fetching appointments page",
-        appointmentsUrl,
-        err.message
-      );
+  while ((match = regex.exec(searchHtml)) !== null) {
+    const path = match[1];
+    // Filter obviously wrong links if needed:
+    if (path.includes("/services/dentist/")) {
+      links.add(`https://www.nhs.uk${path}`);
     }
   }
 
-  // 2) Fetch phone from profile page
-  const phone = await fetchPhoneFromProfile(profileUrl);
-
-  return {
-    name,
-    distanceText,
-    profileUrl,
-    appointmentsUrl,
-    mapUrl,
-    phone,
-    ...acceptance,
-  };
+  return Array.from(links);
 }
 
-// ---------------- Email rendering ----------------
+function textBetween(html, startMarker, endMarker) {
+  const lowerHtml = html.toLowerCase();
+  const start = lowerHtml.indexOf(startMarker.toLowerCase());
+  if (start === -1) return "";
+  const end = lowerHtml.indexOf(endMarker.toLowerCase(), start + startMarker.length);
+  const slice = end === -1 ? html.slice(start) : html.slice(start, end);
+  // Strip tags very roughly:
+  return slice.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
 
-function renderAcceptingEmailHtml({ postcode, radiusMiles, practices }) {
-  const safeRadius = radiusMiles ?? "your chosen";
+// Very simple get-name/address/phone – tweak as needed
+function extractPracticeName(detailHtml) {
+  // NHS pages usually have <h1>Practice Name</h1>
+  const match = detailHtml.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+  return match ? match[1].trim() : "Unknown practice";
+}
 
-  const rowsHtml =
-    practices
-      .map((p) => {
-        const distanceCell = p.distanceText || "";
-        const phoneCell = p.phone || "";
-        const nhsLink = p.profileUrl || "#";
-        const mapLink = p.mapUrl || nhsLink;
+function extractAddress(detailHtml) {
+  // Grab block around "Address"
+  const block = textBetween(detailHtml, "Address", "Get directions");
+  return block || "Address not available";
+}
 
-        return `
+// Simple UK phone extractor
+function extractPhone(detailHtml) {
+  const text = detailHtml.replace(/<[^>]+>/g, " ");
+  const phoneMatch = text.match(/0\d{2,4}\s?\d{3,4}\s?\d{3,4}/);
+  return phoneMatch ? phoneMatch[0].trim() : "Not available";
+}
+
+// ---------- Acceptance classification ----------
+
+function classifyAcceptance(appointmentHtml = "") {
+  if (!appointmentHtml) return "unknown";
+
+  const text = appointmentHtml.toLowerCase();
+
+  const acceptingPatterns = [
+    "accepts new nhs patients",
+    "currently accepts new nhs patients",
+    "currently accepting new nhs patients",
+    "taking on new nhs patients",
+    "is taking new nhs patients",
+    "accepting new nhs patients",
+    "accepting new adult nhs patients",
+    "accepting new child nhs patients",
+    "this dentist currently accepts new nhs patients",
+  ];
+
+  const notAcceptingPatterns = [
+    "not accepting new nhs patients",
+    "not taking on new nhs patients",
+    "currently not accepting nhs patients",
+    "not currently accepting new nhs patients",
+    "this dentist is not taking on any new nhs patients",
+  ];
+
+  if (acceptingPatterns.some((p) => text.includes(p))) return "accepting";
+  if (notAcceptingPatterns.some((p) => text.includes(p))) return "notAccepting";
+  return "unknown";
+}
+
+function extractAppointmentsSection(detailHtml) {
+  // Grab everything around the "Appointments" heading
+  return textBetween(detailHtml, "Appointments", "Back to top");
+}
+
+// ---------- Core pure scanner (no DB, no email) ----------
+
+export async function scanPostcode(postcode, radiusMiles) {
+  const started = Date.now();
+  const searchUrl = buildNhsSearchUrl(postcode, radiusMiles);
+  console.log(`[SCAN] Searching NHS for ${postcode} (${radiusMiles} miles) – ${searchUrl}`);
+
+  const searchHtml = await fetchText(searchUrl);
+  const practiceLinks = extractPracticeLinks(searchHtml);
+
+  console.log(`[SCAN] Found ${practiceLinks.length} practice link(s) in search results.`);
+
+  const accepting = [];
+  const notAccepting = [];
+  const unknown = [];
+
+  for (const practiceUrl of practiceLinks) {
+    try {
+      await sleep(400); // be gentle with NHS
+      const detailHtml = await fetchText(practiceUrl);
+
+      const appointmentHtml = extractAppointmentsSection(detailHtml);
+      const status = classifyAcceptance(appointmentHtml);
+
+      const practice = {
+        name: extractPracticeName(detailHtml),
+        address: extractAddress(detailHtml),
+        phone: extractPhone(detailHtml),
+        nhsUrl: practiceUrl,
+        status,
+      };
+
+      if (status === "accepting") accepting.push(practice);
+      else if (status === "notAccepting") notAccepting.push(practice);
+      else unknown.push(practice);
+    } catch (err) {
+      console.error(`[SCAN] Error fetching practice ${practiceUrl}:`, err.message);
+    }
+  }
+
+  const tookMs = Date.now() - started;
+
+  const result = {
+    postcode,
+    radiusMiles: Number(radiusMiles) || 5,
+    acceptingCount: accepting.length,
+    notAcceptingCount: notAccepting.length,
+    unknownCount: unknown.length,
+    scanned: practiceLinks.length,
+    accepting,
+    notAccepting,
+    unknown,
+    tookMs,
+  };
+
+  console.log("[SCAN] Result:", {
+    postcode: result.postcode,
+    radiusMiles: result.radiusMiles,
+    accepting: result.acceptingCount,
+    notAccepting: result.notAcceptingCount,
+    unknown: result.unknownCount,
+    scanned: result.scanned,
+    tookMs: result.tookMs,
+  });
+
+  return result;
+}
+
+// ---------- Email transporter + acceptance email ----------
+
+function createTransporter() {
+  // Use your existing SMTP env config
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: false,
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
+    },
+  });
+}
+
+function buildAcceptanceEmail({ to, postcode, radiusMiles, practices }) {
+  const subject = `DentistRadar: ${practices.length} NHS dentist(s) accepting near ${postcode}`;
+
+  const plainPractices = practices
+    .map(
+      (p, idx) =>
+        `${idx + 1}. ${p.name}
+   Address: ${p.address}
+   Phone: ${p.phone}
+   NHS page: ${p.nhsUrl}`
+    )
+    .join("\n\n");
+
+  const text = `
+Good news – NHS dentists are accepting new patients near you.
+
+You are receiving this alert from DentistRadar because you registered for updates for postcode ${postcode} within ${radiusMiles} miles.
+
+Based on the latest information from the NHS website, the following practices are currently shown as accepting new NHS patients (subject to change and availability):
+
+${plainPractices}
+
+Tip: NHS availability can change quickly. If you find a suitable practice, it’s best to contact them as soon as possible to confirm they are still accepting new patients and to check appointment availability.
+
+This email is based on publicly available information from the NHS website at the time of scanning. DentistRadar does not guarantee availability and cannot book appointments on your behalf.
+
+Best regards,
+The DentistRadar Team
+${process.env.SITE_URL || ""}`.trim();
+
+  // Very simple HTML – you can replace with your nicer template if you want
+  const htmlRows = practices
+    .map(
+      (p) => `
       <tr>
-        <td style="padding:6px 8px;border:1px solid #ddd;">${p.name}</td>
-        <td style="padding:6px 8px;border:1px solid #ddd;">Adults &amp; Children</td>
-        <td style="padding:6px 8px;border:1px solid #ddd;">${distanceCell}</td>
-        <td style="padding:6px 8px;border:1px solid #ddd;">${phoneCell}</td>
-        <td style="padding:6px 8px;border:1px solid #ddd;"><a href="${nhsLink}">NHS Profile</a></td>
-        <td style="padding:6px 8px;border:1px solid #ddd;"><a href="${mapLink}">View on map</a></td>
-      </tr>
-    `;
-      })
-      .join("") || `
-      <tr>
-        <td colspan="6" style="padding:6px 8px;border:1px solid #ddd;">No practices are currently shown as accepting new NHS patients.</td>
-      </tr>
-    `;
+        <td style="border-bottom:1px solid #f0f0f0;"><strong>${p.name}</strong></td>
+        <td style="border-bottom:1px solid #f0f0f0;">${p.address}</td>
+        <td style="border-bottom:1px solid #f0f0f0;">${p.phone}</td>
+        <td style="border-bottom:1px solid #f0f0f0;"><a href="${p.nhsUrl}">View on NHS</a></td>
+      </tr>`
+    )
+    .join("");
 
-  return `
-  <div style="font-family:system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size:14px; color:#222;">
-    <p><strong>Good news – NHS dentists are accepting new patients near you</strong></p>
-
-    <p>You are receiving this alert from <strong>DentistRadar</strong> because you registered for updates for postcode <strong>${postcode}</strong> within <strong>${safeRadius} miles</strong>.</p>
-
-    <p>Based on the latest information from the NHS website, the following practices are currently shown as accepting new NHS patients (subject to change and availability):</p>
-
-    <table cellpadding="0" cellspacing="0" style="border-collapse:collapse; width:100%; max-width:800px;">
+  const html = `
+<!DOCTYPE html>
+<html>
+  <body style="font-family: Arial, sans-serif;">
+    <h2>Good news – NHS dentists are accepting new patients near you</h2>
+    <p>You are receiving this alert from <strong>DentistRadar</strong> because you registered for updates for postcode <strong>${postcode}</strong> within <strong>${radiusMiles} miles</strong>.</p>
+    <p>Based on the latest information from the NHS website, the following practices are currently shown as <strong>accepting new NHS patients</strong> (subject to change and availability):</p>
+    <table width="100%" cellpadding="6" cellspacing="0" style="border-collapse:collapse; font-size:14px;">
       <thead>
-        <tr>
-          <th style="text-align:left;padding:6px 8px;border:1px solid #ddd;">Practice</th>
-          <th style="text-align:left;padding:6px 8px;border:1px solid #ddd;">Patient type</th>
-          <th style="text-align:left;padding:6px 8px;border:1px solid #ddd;">Distance</th>
-          <th style="text-align:left;padding:6px 8px;border:1px solid #ddd;">Phone</th>
-          <th style="text-align:left;padding:6px 8px;border:1px solid #ddd;">NHS Page</th>
-          <th style="text-align:left;padding:6px 8px;border:1px solid #ddd;">Map</th>
+        <tr style="background:#f0f4ff;">
+          <th align="left">Practice</th>
+          <th align="left">Address</th>
+          <th align="left">Phone</th>
+          <th align="left">NHS link</th>
         </tr>
       </thead>
       <tbody>
-        ${rowsHtml}
+        ${htmlRows}
       </tbody>
     </table>
-
-    <p style="margin-top:12px;font-size:13px;color:#555;">
-      Tip: NHS availability can change quickly. If you find a suitable practice, it’s best to contact them as soon as possible to confirm they are still accepting new patients.
+    <p style="margin-top:16px;"><strong>Tip:</strong> NHS availability can change quickly. If you find a suitable practice, contact them as soon as possible to confirm they are still accepting new patients and to check appointment availability.</p>
+    <p style="margin-top:16px; font-size:12px; color:#777;">
+      This email is based on publicly available information from the NHS website at the time of scanning. DentistRadar does not guarantee availability and cannot book appointments on your behalf.
     </p>
+    <p>Best regards,<br />The DentistRadar Team</p>
+  </body>
+</html>
+`.trim();
 
-    <p style="margin-top:16px;font-size:12px;color:#777;">
-      You’re receiving this email because you opted in to alerts on DentistRadar. You can unsubscribe or change your alert settings at any time.
-    </p>
-  </div>
-  `;
+  return { subject, text, html };
 }
 
-// ---------------- Core scan for a (postcode, radiusMiles) ----------------
+// ---------- Single-watch scan (for signup / manual use) ----------
 
-async function scanPostcodeRadius(postcodeRaw, radiusMilesRaw, opts = {}) {
-  const postcode = normalisePostcode(postcodeRaw);
-  const radiusMiles = Number(radiusMilesRaw || 25);
-  const started = Date.now();
-
-  const url = buildNhsSearchUrl(postcode, radiusMiles);
-  console.log(
-    `🔍 Scanning NHS for postcode="${postcode}", radius=${radiusMiles} – ${url}`
-  );
-
-  const searchHtml = await fetchHtml(url, "search");
-  const basicPractices = parseSearchResults(searchHtml);
-
-  console.log(
-    `📄 Found ${basicPractices.length} potential practices in search results for ${postcode} (${radiusMiles} miles).`
-  );
-
-  const detailed = [];
-  let accepting = 0;
-  let childOnly = 0;
-  let notAccepting = 0;
-
-  for (const p of basicPractices) {
-    await sleep(400);
-
-    const result = await scanPractice(p);
-    detailed.push(result);
-
-    if (result.accepting) accepting++;
-    if (result.childOnly) childOnly++;
-    if (result.notAccepting) notAccepting++;
-  }
-
-  const acceptingPractices = detailed.filter((p) => p.accepting);
-  const childOnlyPractices = detailed.filter((p) => p.childOnly);
-  const notAcceptingPractices = detailed.filter((p) => p.notAccepting);
-
-  const summary = {
-    postcode,
-    radiusMiles,
-    accepting: acceptingPractices.length,
-    childOnly: childOnlyPractices.length,
-    notAccepting: notAcceptingPractices.length,
-    scanned: detailed.length,
-    tookMs: Date.now() - started,
-    acceptingPractices,
-    allPractices: detailed,
-  };
-
-  console.log(
-    `✅ Scan complete for ${postcode} (${radiusMiles} miles): accepting=${summary.accepting}, childOnly=${summary.childOnly}, notAccepting=${summary.notAccepting}, scanned=${summary.scanned}, tookMs=${summary.tookMs}`
-  );
-
-  return summary;
-}
-
-// ---------------- DB mode: run for all Watches ----------------
-
-async function sendAlertEmail(toEmail, { postcode, radiusMiles, practices }) {
-  const fromEmail = process.env.FROM_EMAIL || "alerts@dentistradar.com";
-
-  const html = renderAcceptingEmailHtml({ postcode, radiusMiles, practices });
-  const subject = `NHS dentists near ${postcode} currently accepting patients`;
-
-  const mailOptions = {
-    from: `DentistRadar <${fromEmail}>`,
-    to: toEmail,
-    subject,
-    html,
-  };
-
-  const tx = getTransport();
-  await tx.sendMail(mailOptions);
-}
-
-async function runAllScans({ dryRun = false } = {}) {
+export async function runSingleWatchScan(watch) {
   await connectMongo();
 
-  const watches = await Watch.find({
-    unsubscribed: { $ne: true },
-  }).lean();
+  const postcode = watch.postcode;
+  const radiusMiles = watch.radiusMiles || watch.radius || 5;
+  const email = watch.email;
 
-  if (!watches.length) {
-    console.log("ℹ️ No active watches found.");
-    return;
+  console.log(`[WATCH] Running single scan for ${email} – ${postcode} (${radiusMiles}mi)`);
+
+  const scanResult = await scanPostcode(postcode, radiusMiles);
+
+  if (scanResult.acceptingCount === 0) {
+    console.log(`[WATCH] No accepting practices for ${postcode} (${radiusMiles}mi)`);
+    return { scanResult, sent: false, newPractices: [] };
   }
 
-  // Group by (postcode, radiusMiles)
-  const groups = new Map();
-  for (const w of watches) {
-    const pc = normalisePostcode(w.postcode);
-    const radiusMiles = getRadiusFromWatch(w);
-    const key = `${pc}::${radiusMiles}`;
-    if (!groups.has(key)) {
-      groups.set(key, {
-        postcode: pc,
-        radiusMiles,
-        watches: [],
-      });
+  // Filter practices this user has NOT been emailed about
+  const newPractices = [];
+  for (const practice of scanResult.accepting) {
+    const already = await EmailLog.findOne({
+      email,
+      postcode,
+      radiusMiles,
+      practiceUrl: practice.nhsUrl,
+    });
+    if (!already) {
+      newPractices.push(practice);
     }
-    groups.get(key).watches.push(w);
   }
+
+  if (newPractices.length === 0) {
+    console.log(`[WATCH] No NEW accepting practices for ${email} at ${postcode}`);
+    return { scanResult, sent: false, newPractices: [] };
+  }
+
+  // Send email
+  const transporter = createTransporter();
+  const { subject, text, html } = buildAcceptanceEmail({
+    to: email,
+    postcode,
+    radiusMiles,
+    practices: newPractices,
+  });
+
+  await transporter.sendMail({
+    from: process.env.MAIL_FROM || process.env.SMTP_USER,
+    to: email,
+    subject,
+    text,
+    html,
+  });
 
   console.log(
-    `📦 Found ${watches.length} watches across ${groups.size} unique (postcode, radius) groups.`
+    `[WATCH] Sent acceptance email to ${email} with ${newPractices.length} new practice(s).`
   );
 
-  for (const [key, group] of groups) {
-    const { postcode, radiusMiles } = group;
+  // Log in EmailLog
+  const docs = newPractices.map((p) => ({
+    email,
+    postcode,
+    radiusMiles,
+    practiceUrl: p.nhsUrl,
+    sentAt: new Date(),
+    type: "accepting",
+  }));
+  await EmailLog.insertMany(docs);
 
-    let summary;
-    try {
-      summary = await scanPostcodeRadius(postcode, radiusMiles, {
-        dryRun: true,
-      });
-    } catch (err) {
-      console.error(
-        `❌ Skipping group ${postcode} (${radiusMiles} miles) due to error: ${err.message}`
-      );
-      continue; // don't kill the whole cron
-    }
+  return { scanResult, sent: true, newPractices };
+}
 
-    const acceptingPractices = summary.acceptingPractices;
+// ---------- Grouped scan (for cron – later) ----------
 
-    if (!acceptingPractices.length) {
-      console.log(
-        `ℹ️ No accepting practices for ${postcode} (${radiusMiles} miles). Skipping emails.`
-      );
+export async function runAllGroupedScans() {
+  await connectMongo();
+
+  const watches = await Watch.find({ unsubscribed: { $ne: true } });
+  console.log(`[CRON] Loaded ${watches.length} active watches from DB`);
+
+  // Group by postcode+radius
+  const groups = {};
+  for (const w of watches) {
+    const radiusMiles = w.radiusMiles || w.radius || 5;
+    const key = `${w.postcode}::${radiusMiles}`;
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(w);
+  }
+
+  for (const [key, group] of Object.entries(groups)) {
+    const [postcode, radiusStr] = key.split("::");
+    const radiusMiles = Number(radiusStr) || 5;
+    console.log(
+      `[CRON] Group ${postcode} (${radiusMiles}mi) – ${group.length} watch(es)`
+    );
+
+    const scanResult = await scanPostcode(postcode, radiusMiles);
+
+    if (scanResult.acceptingCount === 0) {
+      console.log(`[CRON] No accepting practices for group ${key}`);
       continue;
     }
 
-    for (const w of group.watches) {
-      const email = w.email || w.userEmail;
-      if (!email) continue;
-
-      if (dryRun) {
-        console.log(
-          `🧪 [DRY RUN] Would send alert to ${email} for ${postcode} (${radiusMiles} miles) with ${acceptingPractices.length} practices.`
-        );
-        continue;
-      }
-
-      try {
-        await sendAlertEmail(email, {
-          postcode,
-          radiusMiles,
-          practices: acceptingPractices,
-        });
-
-        await EmailLog.create({
-          watchId: w._id,
-          email,
-          postcode,
-          radiusMiles,
-          sentAt: new Date(),
-          type: "accepting-alert",
-        });
-
-        console.log(
-          `📧 Sent accepting alert to ${email} for ${postcode} (${radiusMiles} miles) with ${acceptingPractices.length} practices.`
-        );
-      } catch (err) {
-        console.error("❌ Error sending email to", email, err.message);
-      }
-
-      await sleep(250);
+    for (const watch of group) {
+      await runSingleWatchScan(watch); // reuses same logic
     }
   }
+
+  console.log("[CRON] Grouped scan complete.");
 }
-
-// ---------------- Single-group helper (for /api/scan or manual test) ----------------
-
-async function runSingleScan(postcode, radiusMiles, { dryRun = false } = {}) {
-  await connectMongo();
-  const summary = await scanPostcodeRadius(postcode, radiusMiles, {
-    dryRun: true,
-  });
-
-  if (!dryRun) {
-    console.log(
-      "ℹ️ runSingleScan called with dryRun=false but no recipients wired. No emails sent."
-    );
-  }
-
-  return summary;
-}
-
-// ---------------- CLI entry (TEST MODE) ----------------
-
-if (process.argv[1] && process.argv[1].endsWith("scanner.js")) {
-  const args = process.argv.slice(2);
-  (async () => {
-    if (args[0] === "--test") {
-      const postcode = args[1] || "PR25 1QX";
-      const radiusMiles = Number(args[2] || "25");
-
-      await connectMongo(); // if you don't need DB for test, you can remove
-      const summary = await scanPostcodeRadius(postcode, radiusMiles, {
-        dryRun: true,
-      });
-
-      console.log("🧪 TEST SUMMARY:");
-      console.log(JSON.stringify(summary, null, 2));
-
-      if (summary.acceptingPractices.length) {
-        const sampleHtml = renderAcceptingEmailHtml({
-          postcode,
-          radiusMiles,
-          practices: summary.acceptingPractices,
-        });
-        console.log("\n🧪 SAMPLE EMAIL HTML (first chunk):\n");
-        console.log(sampleHtml.slice(0, 4000));
-      } else {
-        console.log(
-          "\n(no accepting practices found – no email HTML rendered)"
-        );
-      }
-
-      process.exit(0);
-    }
-  })().catch((err) => {
-    console.error("❌ CLI error:", err);
-    process.exit(1);
-  });
-}
-
-// ---------------- Exports ----------------
-
-export { runAllScans, runSingleScan, scanPostcodeRadius };
