@@ -197,12 +197,20 @@ function extractPhoneFromBlock(text) {
  *   URL: https://www.nhs.uk/services/dentist/winnersh-dental-practice-v006578
  */
 function buildNhsProfileUrl(name, rawBlock) {
-  const idMatch = rawBlock.match(/V(\d{6})/i);
+  // Find the V-code, e.g. "V186502"
+  const idMatch = rawBlock.match(/V\d{6}/i);
   if (!idMatch) return "";
 
-  const id = idMatch[0].toLowerCase(); // v006578
+  const vCode = idMatch[0].toUpperCase(); // "V186502"
 
-  const slug = name
+  // Clean HTML entities like &nbsp; and artefacts like "andnbsp"
+  let cleanedName = name
+    .replace(/&nbsp;?/gi, " ")
+    .replace(/\bandnbsp\b/gi, " ")
+    .trim();
+
+  // Slugify the practice name
+  const slug = cleanedName
     .toLowerCase()
     .replace(/&/g, "and")
     .replace(/[^a-z0-9\s-]/g, "")
@@ -210,8 +218,12 @@ function buildNhsProfileUrl(name, rawBlock) {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 
-  return `https://www.nhs.uk/services/dentist/${slug}-${id}`;
+  // Correct NHS pattern:
+  //   /services/dentist/{slug}/{VCODE}
+  return `https://www.nhs.uk/services/dentist/${slug}/${vCode}`;
 }
+
+
 
 /**
  * Parse a single result block into a practice object.
