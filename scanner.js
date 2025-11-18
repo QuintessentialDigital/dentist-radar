@@ -1,5 +1,7 @@
 // scanner.js
-// DentistRadar scanner (v3.2 – grouped, appointments-first, updated NHS URL + link extraction)
+// DentistRadar scanner (v3.3 – grouped, appointments-based classification,
+// but practice metadata (name, distance, phone, map) comes from the NHS search page,
+// so emails look like your original working format).
 //
 // Modes:
 //   1) DB mode (cron or /api/scan with no postcode):
@@ -14,10 +16,10 @@
 //
 // NHS flow:
 //   - Build search URL: /service-search/find-a-dentist/results/<POSTCODE>
-//   - From that page, extract all /services/dentist/... links (relative OR absolute)
-//   - For each, construct /appointments URL, e.g.:
-//       https://www.nhs.uk/services/dentist/covent-garden-dental-clinic/XV003761/appointments
-//   - Classify each appointments page as accepting / not accepting / child-only / unknown
+//   - From that page, extract "Result for ..." blocks for name/phone/distance etc.
+//   - Also extract /services/dentist/... links
+//   - For each, construct /appointments URL, classify accepting/not/child-only
+//   - Merge metadata from search + classification from appointments
 
 import "dotenv/config";
 import nodemailer from "nodemailer";
@@ -30,7 +32,7 @@ const NHS_BASE = "https://www.nhs.uk";
 
 const SCAN_CONFIG = {
   maxPracticesPerSearch: 80, // safety cap per postcode/radius
-  appointmentDelayMs: 800, // delay between appointments fetches (avoid 403)
+  appointmentDelayMs: 800,   // delay between appointments fetches (avoid 403)
   userAgent:
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -65,38 +67,8 @@ function safeRadius(radiusMiles) {
 // Example: https://www.nhs.uk/service-search/find-a-dentist/results/TW1%203SD
 function buildSearchUrl(postcode, radiusMiles) {
   const pc = encodeURIComponent(normalisePostcode(postcode));
-  // Radius still used for grouping / your own semantics; NHS distance is handled their side.
-  safeRadius(radiusMiles); // keep call for future extension
+  safeRadius(radiusMiles); // kept for future use
   return `${NHS_BASE}/service-search/find-a-dentist/results/${pc}`;
-}
-
-// ===== NEW: distance index from accessible text blocks =====
-function buildDistanceIndexFromSearchHtml(searchHtml) {
-  const distanceById = {};
-  // Use the "Result for ... End of result for ..." accessible text blocks
-  const regex =
-    /Result for\s+(.+?)\r?\n([\s\S]*?)(?:End of result for\s+.+?\r?\n)/g;
-  let match;
-  while ((match = regex.exec(searchHtml)) !== null) {
-    const block = match[2];
-    const idMatch = block.match(/\bV[0-9A-Z]{6}\b/);
-    if (!idMatch) continue;
-    const practiceId = idMatch[0].toUpperCase();
-
-    const distMatch = block.match(/([\d.]+)\s*miles?\s+away/i);
-    if (!distMatch) continue;
-    const milesNum = Number(distMatch[1]);
-    const distanceText = `${distMatch[1]} miles away`;
-    distanceById[practiceId] = { miles: milesNum, text: distanceText };
-  }
-  return distanceById;
-}
-
-// Extract NHS practice ID (Vxxxxxx) from a /services/dentist/... href
-function extractPracticeIdFromHref(href) {
-  if (!href) return null;
-  const m = href.match(/\/(V[0-9A-Z]{6})(?:_\d+)?(?:\/|$)/i);
-  return m ? m[1].toUpperCase() : null;
 }
 
 async function fetchHtml(url) {
@@ -117,10 +89,134 @@ async function fetchHtml(url) {
   return await res.text();
 }
 
-// ---------------- NHS parsing ----------------
+// ---------------- Legacy-style search parsing helpers (for metadata) ----------------
+
+// Extract a UK landline-style phone number from a text block
+function extractPhone(block) {
+  const phoneMatch =
+    block.match(/\b0\d{2,4}[\s-]?\d{3}[\s-]?\d{3,4}\b/) ||
+    block.match(/\b0\d{9,10}\b/);
+  return phoneMatch ? phoneMatch[0].trim() : null;
+}
+
+// Build a Google Maps search link
+function buildMapsUrl(name, postcode) {
+  const q = `${name || ""} ${postcode || ""}`.trim();
+  if (!q) return null;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+    q
+  )}`;
+}
+
+// Extract practice data (name, id, distance, phone, etc.) from the search HTML ONLY
+// This is very close to your older working logic.
+function extractPracticesFromSearch(html, searchPostcode) {
+  const results = [];
+
+  const regex =
+    /Result for\s+(.+?)\r?\n([\s\S]*?)(?:End of result for\s+.+?\r?\n)/g;
+
+  let match;
+  while ((match = regex.exec(html)) !== null) {
+    const name = match[1].trim();
+    const block = match[2];
+    const lower = block.toLowerCase();
+
+    // Practice ID: lines like "V003718"
+    const idMatch = block.match(/\bV[0-9A-Z]{6}\b/);
+    const practiceId = idMatch ? idMatch[0].toUpperCase() : null;
+
+    // Distance text: e.g. "1.5 miles away"
+    let distanceText = null;
+    let distanceMiles = null;
+    const distMatch = block.match(/([\d.]+)\s*miles?\s+away/i);
+    if (distMatch) {
+      distanceText = `${distMatch[1]} miles away`;
+      distanceMiles = Number(distMatch[1]);
+    }
+
+    // Phone number (best effort)
+    const phone = extractPhone(block);
+
+    // Adult / child tagging – as before
+    const adultPatterns = [
+      "adults aged 18 or over",
+      "adults aged 18 and over",
+      "adults aged 18+",
+      "adult nhs patients",
+      "adult patients",
+      "adult dental patients",
+      "nhs adult patients",
+      "adults",
+    ];
+
+    const childPatterns = [
+      "children aged 17 or under",
+      "children aged under 18",
+      "child nhs patients",
+      "child patients",
+      "nhs child patients",
+      "nhs children",
+      "children for routine dental care",
+      "children for routine care",
+      "under 18s",
+      "under 18 years",
+      "aged under 18",
+      "children",
+    ];
+
+    const acceptsAdults = adultPatterns.some((p) => lower.includes(p));
+    const acceptsChildren = childPatterns.some((p) => lower.includes(p));
+
+    let patientType = "Not specified";
+    if (acceptsAdults && acceptsChildren) {
+      patientType = "Adults & Children";
+    } else if (acceptsAdults) {
+      patientType = "Adults only";
+    } else if (acceptsChildren) {
+      patientType = "Children only";
+    }
+
+    const profileUrl = practiceId
+      ? `https://www.nhs.uk/services/dentist/${encodeURIComponent(
+          name
+            .toLowerCase()
+            .replace(/&/g, "and")
+            .replace(/[^a-z0-9\s-]/g, "")
+            .replace(/\s+/g, "-")
+            .replace(/-+/g, "-")
+            .replace(/^-|-$/g, "")
+        )}/${practiceId}`
+      : null;
+
+    const mapsUrl = buildMapsUrl(name, searchPostcode);
+
+    results.push({
+      name,
+      practiceId: practiceId || name,
+      distanceText,
+      distanceMiles,
+      phone,
+      patientType,
+      profileUrl,
+      mapsUrl,
+    });
+  }
+
+  return results;
+}
+
+// ---------------- NHS parsing (links + classification) ----------------
+
+// Extract NHS practice ID (Vxxxxxx) from a /services/dentist/... href
+function extractPracticeIdFromHref(href) {
+  if (!href) return null;
+  const m = href.match(/\/(V[0-9A-Z]{6})(?:_\d+)?(?:\/|$)/i);
+  return m ? m[1].toUpperCase() : null;
+}
 
 // Extract all dentist detail URLs from the search results page
-// FIX: handle both relative "/services/dentist/..." and absolute "https://www.nhs.uk/services/dentist/..."
+// Handles both relative "/services/dentist/..." and absolute "https://www.nhs.uk/services/dentist/..."
 function extractPracticeDetailUrls(searchHtml) {
   const $ = cheerio.load(searchHtml);
   const urls = new Set();
@@ -134,10 +230,6 @@ function extractPracticeDetailUrls(searchHtml) {
     // strip query/fragment
     href = href.split("#")[0].split("?")[0];
 
-    // At this point href can be:
-    //   - "/services/dentist/.../XV001026"
-    //   - "https://www.nhs.uk/services/dentist/.../XV001026"
-    // Both are fine – toAppointmentsUrl can cope with either.
     urls.add(href);
   });
 
@@ -146,10 +238,6 @@ function extractPracticeDetailUrls(searchHtml) {
 
 // Given a detail URL, build the corresponding appointments URL
 function toAppointmentsUrl(detailHrefOrUrl) {
-  // Examples input:
-  //   /services/dentist/covent-garden-dental-clinic/XV003761
-  //   /services/dentist/covent-garden-dental-clinic/XV003761/appointments
-  //   https://www.nhs.uk/services/dentist/.../appointments
   let full = detailHrefOrUrl.startsWith("http")
     ? detailHrefOrUrl
     : `${NHS_BASE}${detailHrefOrUrl}`;
@@ -216,7 +304,8 @@ function classifyAppointmentsPage(html) {
   return "unknown";
 }
 
-// Scan a single postcode + radius against NHS, from the appointments pages
+// ---------------- Core scan: postcode + radius ----------------
+
 export async function scanPostcodeRadius(postcode, radiusMiles) {
   const start = Date.now();
   const searchUrl = buildSearchUrl(postcode, radiusMiles);
@@ -247,9 +336,19 @@ export async function scanPostcodeRadius(postcode, radiusMiles) {
     };
   }
 
-  // NEW: build distance index keyed by practiceId (Vxxxxxx)
-  const distanceIndex = buildDistanceIndexFromSearchHtml(searchHtml);
+  // 1) Parse search HTML for metadata (name, distance, phone, maps, etc.)
+  const metaFromSearch = extractPracticesFromSearch(
+    searchHtml,
+    normalisePostcode(postcode)
+  );
+  const metaById = new Map();
+  for (const p of metaFromSearch) {
+    if (p.practiceId) {
+      metaById.set(p.practiceId, p);
+    }
+  }
 
+  // 2) Extract detail hrefs to derive appointments URLs
   const detailHrefs = extractPracticeDetailUrls(searchHtml).slice(
     0,
     SCAN_CONFIG.maxPracticesPerSearch
@@ -276,20 +375,20 @@ export async function scanPostcodeRadius(postcode, radiusMiles) {
 
     if (!apptHtml) {
       unknown += 1;
+
+      const meta = practiceId ? metaById.get(practiceId) : null;
+
       practices.push({
         appointmentsUrl,
-        name: null,
+        name: meta?.name || null,
         status: "unknown",
         practiceId,
+        distanceText: meta?.distanceText || null,
+        phone: meta?.phone || null,
+        mapsUrl: meta?.mapsUrl || null,
       });
       continue;
     }
-
-    const $ = cheerio.load(apptHtml);
-    const name =
-      $("h1").first().text().trim() ||
-      $("title").first().text().trim() ||
-      null;
 
     const status = classifyAppointmentsPage(apptHtml);
 
@@ -307,23 +406,29 @@ export async function scanPostcodeRadius(postcode, radiusMiles) {
         unknown += 1;
     }
 
-    // Extract phone if present
-    let phone = null;
-    const telHref = $("a[href^='tel:']").first().attr("href");
-    if (telHref) {
-      phone = telHref.replace(/^tel:/i, "").trim();
+    const meta = practiceId ? metaById.get(practiceId) : null;
+
+    // Prefer name from search metadata; fall back to appointments page as last resort
+    let name = meta?.name || null;
+
+    // Use phone from search metadata (this used to be correct and avoids "111")
+    let phone = meta?.phone || null;
+
+    // As a fallback only, try to read a tel: link (but ignore "111")
+    if (!phone) {
+      const $ = cheerio.load(apptHtml);
+      const telHref = $("a[href^='tel:']").first().attr("href");
+      if (telHref) {
+        const candidate = telHref.replace(/^tel:/i, "").trim();
+        if (candidate && candidate !== "111") {
+          phone = candidate;
+        }
+      }
     }
 
-    // Look up distance by practiceId (if we have one)
-    let distanceText = null;
-    if (practiceId && distanceIndex[practiceId]) {
-      distanceText = distanceIndex[practiceId].text;
-    }
-
-    // Build a simple Google Maps search URL
-    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-      `${name || "NHS Dentist"} ${normalisePostcode(postcode)}`
-    )}`;
+    const distanceText = meta?.distanceText || null;
+    const mapsUrl =
+      meta?.mapsUrl || buildMapsUrl(name || "NHS Dentist", postcode);
 
     practices.push({
       appointmentsUrl,
@@ -353,10 +458,27 @@ export async function scanPostcodeRadius(postcode, radiusMiles) {
 
   console.log(
     `✅ Scan complete for ${summary.postcode} (${summary.radiusMiles} miles): ` +
-      `accepting=${accepting}, childOnly=${childOnly}, notAccepting=${notAccepting}, unknown=${unknown}, scanned=${scanned}, tookMs=${tookMs}`
+      `accepting=${accepting}, childOnly=${childOnly}, notAccepting=${notAccepting}, ` +
+      `unknown=${unknown}, scanned=${scanned}, tookMs=${tookMs}`
   );
 
   return summary;
+}
+
+// ---------------- Unsubscribe URL helper ----------------
+
+function buildUnsubscribeUrl(alertId, email) {
+  const base =
+    process.env.PUBLIC_BASE_URL ||
+    process.env.APP_BASE_URL ||
+    "https://www.dentistradar.co.uk";
+
+  const params = new URLSearchParams({
+    alert: String(alertId),
+    email: email || "",
+  });
+
+  return `${base.replace(/\/$/, "")}/unsubscribe?${params.toString()}`;
 }
 
 // ---------------- Email + logging ----------------
@@ -388,6 +510,9 @@ function buildAcceptanceEmail(watch, scanResult) {
   const acceptingPractices = scanResult.practices.filter(
     (p) => p.status === "accepting" || p.status === "childOnly"
   );
+
+  const count = acceptingPractices.length;
+  const unsubscribeUrl = buildUnsubscribeUrl(watch._id, watch.email);
 
   const rowsHtml = acceptingPractices
     .map((p) => {
@@ -461,7 +586,11 @@ function buildAcceptanceEmail(watch, scanResult) {
         DentistRadar does not guarantee availability and cannot book appointments on your behalf.
       </p>
       <p style="font-size:12px;color:#777;margin-top:8px;">
-        If you no longer wish to receive alerts for this postcode, you can unsubscribe from your dashboard.
+        If you no longer wish to receive alerts for this postcode, you can
+        <a href="${unsubscribeUrl}" target="_blank" rel="noopener noreferrer">unsubscribe from this alert here</a>.
+      </p>
+      <p style="font-size:12px;color:#777;margin-top:4px;">
+        If you did not register for this alert, please ignore this email or contact DentistRadar support.
       </p>
     </div>
   `;
@@ -480,13 +609,17 @@ function buildAcceptanceEmail(watch, scanResult) {
 
   const text =
     `Good news – we’ve found NHS dentists accepting new patients near ${watch.postcode} (within ${scanResult.radiusMiles} miles):\n\n` +
-    (listText || "(No specific practice names could be extracted, please check NHS links.)") +
+    (listText ||
+      "(No specific practice names could be extracted, please check NHS links.)") +
     `\n\nTip: NHS availability can change quickly. If you find a suitable practice, it’s best to contact them as soon as possible to confirm they are still accepting new patients.\n\n` +
     `This email is based on publicly available information from the NHS website at the time of scanning. DentistRadar does not guarantee availability and cannot book appointments on your behalf.\n\n` +
-    `If you no longer wish to receive alerts for this postcode, you can unsubscribe from your dashboard.\n`;
+    `If you no longer wish to receive alerts for this postcode, you can unsubscribe from this alert here: ${unsubscribeUrl}\n` +
+    `If you did not register for this alert, please ignore this email or contact DentistRadar support.\n`;
+
+  const subject = `DentistRadar: ${count} NHS dentist(s) accepting near ${watch.postcode}`;
 
   return {
-    subject: `NHS dentist availability near ${watch.postcode}`,
+    subject,
     text,
     html,
   };
@@ -545,7 +678,6 @@ async function shouldSendAlertForWatch(watch, scanResult) {
     };
   } catch (err) {
     console.error("Error checking EmailLog, defaulting to send:", err);
-    // If in doubt, send (but you could choose false if you prefer)
     return { send: true, signature: null };
   }
 }
@@ -588,7 +720,7 @@ export async function runAllScans() {
   const groups = new Map();
   for (const w of watches) {
     const pc = normalisePostcode(w.postcode);
-    const r = safeRadius(w.radiusMiles);
+    const r = safeRadius(w.radiusMiles ?? w.radius ?? 10);
     const key = `${pc}::${r}`;
 
     if (!groups.has(key))
@@ -639,12 +771,14 @@ export async function runAllScans() {
   console.log("\n🏁 DB-mode scan complete.");
 }
 
+// Alias expected by server.js
+export async function runScan() {
+  return runAllScans();
+}
+
 // ---------------- CLI entrypoint (for debugging) ----------------
 
 if (process.argv[1] && process.argv[1].endsWith("scanner.js")) {
-  // Example:
-  //   node scanner.js                  -> runAllScans (DB mode)
-  //   node scanner.js RG41 4UW 25     -> single postcode+radius scan only
   (async () => {
     const [, , argPostcode, argRadius] = process.argv;
 
