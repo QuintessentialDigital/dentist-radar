@@ -5,7 +5,7 @@
 // - Stripe webhook + plan activation email + "My Alerts" APIs + Unsubscribe
 
 import express from "express";
-import { scanPostcode } from "./scanner.js"; // Pure scanner: NHS -> JSON summary
+import { scanPostcode } from "./scanner.js";
 import cors from "cors";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
@@ -24,7 +24,7 @@ const PORT = process.env.PORT || 10000;
 
 app.use(cors());
 app.use(express.json());
-// ✅ Allow standard HTML form posts (application/x-www-form-urlencoded)
+// Allow standard HTML form posts
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static("public"));
 
@@ -219,11 +219,9 @@ async function handleCreateWatch(req, res) {
           const name = p.name || "Unknown practice";
           const phone = p.phone || "Not available";
 
-          const patientType = p.patientType
-            ? p.patientType
-            : p.childOnly
-            ? "Children only"
-            : "Adults & children";
+          const patientType =
+            p.patientType ||
+            (p.childOnly ? "Children only" : "Adults & children");
 
           const distance =
             p.distanceText ||
@@ -231,7 +229,7 @@ async function handleCreateWatch(req, res) {
               ? `${p.distanceMiles.toFixed(1)} miles`
               : "");
 
-          const nhsUrl = p.nhsUrl || p.profileUrl || "#";
+          const nhsUrl = p.nhsUrl || "#";
 
           const mapUrl =
             p.mapUrl ||
@@ -241,22 +239,27 @@ async function handleCreateWatch(req, res) {
 
           return `
             <tr>
-              <td style="border-bottom:1px solid #e5e7eb; padding:8px;">
-                <strong>${name}</strong>
+              <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
+                <strong>${name}</strong><br/>
+                <span style="font-size:12px; color:#6b7280;">${p.address || ""}</span>
               </td>
-              <td style="border-bottom:1px solid #e5e7eb; padding:8px;">
+              <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
                 ${patientType}
               </td>
-              <td style="border-bottom:1px solid #e5e7eb; padding:8px; white-space:nowrap;">
+              <td style="padding:10px; border-bottom:1px solid #f0f0f0; white-space:nowrap;">
                 ${distance || ""}
               </td>
-              <td style="border-bottom:1px solid #e5e7eb; padding:8px;">
+              <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
                 ${phone}
               </td>
-              <td style="border-bottom:1px solid #e5e7eb; padding:8px;">
-                <a href="${nhsUrl}" style="color:#0b63ff; text-decoration:none;">View on NHS</a>
+              <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
+                ${
+                  nhsUrl && nhsUrl !== "#"
+                    ? `<a href="${nhsUrl}" style="color:#0b63ff; text-decoration:none;">View on NHS</a>`
+                    : `<span style="color:#9ca3af;">N/A</span>`
+                }
               </td>
-              <td style="border-bottom:1px solid #e5e7eb; padding:8px;">
+              <td style="padding:10px; border-bottom:1px solid #f0f0f0;">
                 <a href="${mapUrl}" style="color:#0b63ff; text-decoration:none;">View map</a>
               </td>
             </tr>
@@ -306,15 +309,15 @@ async function handleCreateWatch(req, res) {
                 </p>
 
                 <div style="border:1px solid #e5e7eb; border-radius:10px; overflow:hidden;">
-                  <table role="presentation" width="100%" cellspacing="0" cellpadding="8" style="border-collapse:collapse; font-size:13px;">
+                  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse; font-size:13px;">
                     <thead>
-                      <tr style="background:#f3f4ff;">
-                        <th align="left" style="padding:10px 8px; border-bottom:1px solid #e5e7eb;">Practice</th>
-                        <th align="left" style="padding:10px 8px; border-bottom:1px solid #e5e7eb;">Patient type</th>
-                        <th align="left" style="padding:10px 8px; border-bottom:1px solid #e5e7eb;">Distance</th>
-                        <th align="left" style="padding:10px 8px; border-bottom:1px solid #e5e7eb;">Phone</th>
-                        <th align="left" style="padding:10px 8px; border-bottom:1px solid #e5e7eb;">NHS page</th>
-                        <th align="left" style="padding:10px 8px; border-bottom:1px solid #e5e7eb;">Map</th>
+                      <tr style="background:#f5f8ff; text-align:left;">
+                        <th align="left" style="padding:10px;">Practice</th>
+                        <th align="left" style="padding:10px;">Patient type</th>
+                        <th align="left" style="padding:10px;">Distance</th>
+                        <th align="left" style="padding:10px;">Phone</th>
+                        <th align="left" style="padding:10px;">NHS page</th>
+                        <th align="left" style="padding:10px;">Map</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -389,7 +392,7 @@ async function handleCreateWatch(req, res) {
    Create Watch routes (old + new)
 --------------------------- */
 
-// OLD path for compatibility (forms or JS calling /api/watch)
+// OLD path for compatibility
 app.post("/api/watch", handleCreateWatch);
 
 // NEW explicit path
@@ -461,7 +464,6 @@ app.get("/api/scan", async (req, res) => {
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || "";
 const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
 
-// (Stripe handlers unchanged – same as before)
 async function handleCheckoutSession(req, res) {
   try {
     if (!stripe)
