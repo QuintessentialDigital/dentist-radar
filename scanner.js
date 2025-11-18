@@ -133,11 +133,18 @@ function extractProfileUrl(chunk) {
 // Try to get an appointments URL (if present) from a search result chunk.
 // Fallback: derive from profile URL.
 function extractAppointmentsUrl(chunk, profileUrl) {
+  // 1) If there is an explicit appointments link in this HTML chunk, use it
   const m = chunk.match(/href="(\/services\/dentist\/appointments\/[^"]+)"/i);
   if (m) return NHS_BASE + m[1];
 
   if (!profileUrl) return "";
 
+  // 2) If the profileUrl is already an appointments URL, just return it
+  if (profileUrl.includes("/services/dentist/appointments/")) {
+    return profileUrl;
+  }
+
+  // 3) If it's a normal dentist profile, derive the appointments URL from it
   if (profileUrl.includes("/services/dentist/")) {
     return profileUrl.replace(
       "/services/dentist/",
@@ -145,6 +152,7 @@ function extractAppointmentsUrl(chunk, profileUrl) {
     );
   }
 
+  // 4) Last resort: fall back to profile URL
   return profileUrl;
 }
 
