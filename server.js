@@ -5,6 +5,7 @@
 // - Phase 2: Stripe webhook + plan activation email + "My Alerts" APIs + Unsubscribe
 
 import express from "express";
+import { scanPostcodeRadius } from "./scanner.js";
 import cors from "cors";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
@@ -297,20 +298,52 @@ app.post("/api/stripe/webhook", async (req, res) => {
 /* ---------------------------
    Manual Scan (token-gated)
 --------------------------- */
-app.post("/api/scan", async (req, res) => {
-  const token = process.env.SCAN_TOKEN || "";
-  if (!token || (req.query.token !== token && req.headers["x-scan-token"] !== token)) {
-    return res.status(403).json({ ok: false, error: "forbidden" });
-  }
-
+// Simple test API – NO EMAILS, just returns JSON summary
+app.get("/api/scan", async (req, res) => {
   try {
-    await runAllScans();
-    res.json({ ok: true, note: "runAllScans_completed" });
+    const postcode = (req.query.postcode || "").toString().trim();
+    const radiusMiles = Number(req.query.radius || "25");
+
+    if (!postcode) {
+      return res
+        .status(400)
+        .json({ error: "postcode query parameter is required" });
+    }
+
+    console.log(
+      `🧪 /api/scan called for postcode="${postcode}", radius=${radiusMiles}`
+    );
+
+    // This only scans and returns data – does NOT send emails
+    const summary = await scanPostcodeRadius(postcode, radiusMiles, {
+      dryRun: true,
+    });
+
+    // Optional: don’t return the full HTML, just JSON
+    return res.json({
+      ok: true,
+      postcode: summary.postcode,
+      radiusMiles: summary.radiusMiles,
+      accepting: summary.accepting,
+      childOnly: summary.childOnly,
+      notAccepting: summary.notAccepting,
+      scanned: summary.scanned,
+      tookMs: summary.tookMs,
+      acceptingPractices: summary.acceptingPractices.map((p) => ({
+        name: p.name,
+        distanceText: p.distanceText,
+        phone: p.phone,
+        profileUrl: p.profileUrl,
+        appointmentsUrl: p.appointmentsUrl,
+      })),
+    });
   } catch (err) {
-    console.error("❌ /api/scan error:", err);
-    res.status(500).json({ ok: false, error: "scan_exception" });
+    console.error("❌ /api/scan error:", err.message);
+    return res.status(500).json({ error: err.message });
   }
 });
+
+
 
 /* ---------------------------
    Unsubscribe Routes
