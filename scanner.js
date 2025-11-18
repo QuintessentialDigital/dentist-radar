@@ -160,26 +160,28 @@ function extractAppointmentsUrl(chunk, profileUrl) {
 function parseSearchResults(html) {
   const results = [];
 
-  // Only pick links that go to actual dentist services:
-  //    /services/dentist/...
+  // Match ONLY actual dentist practice profile URLs:
+  //    /services/dentist/<slug>/<id>
   const re = /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
   let match;
 
   while ((match = re.exec(html)) !== null) {
-    const href = match[1];
+    const href = match[1];           // e.g. /services/dentist/diamond-dental/12345
     const nameRaw = match[2] || "";
     const name = nameRaw.replace(/\s+/g, " ").trim();
     if (!name) continue;
 
     const profileUrl = NHS_BASE + href;
 
-    // Look in the text just after this link for something like "1.2 miles"
+    // Check the next 500 chars for distance e.g. "1.2 miles"
     const windowText = html.slice(match.index, match.index + 500);
     const distMatch =
       windowText.match(/([\d.,]+)\s*miles?/i) ||
       windowText.match(/([\d.,]+)\s*mi\b/i);
+
     const distanceText = distMatch ? distMatch[0].trim() : "";
 
+    // Build appointments URL properly
     const appointmentsUrl = extractAppointmentsUrl(windowText, profileUrl);
     const mapUrl = profileUrl;
 
@@ -191,15 +193,8 @@ function parseSearchResults(html) {
       mapUrl,
     });
   }
-
   console.log(
     `🔎 parseSearchResults: extracted ${results.length} dentist practices from HTML`
-  );
-  return results;
-}
-
-  console.log(
-    `🔎 parseSearchResults: extracted ${results.length} practices from HTML`
   );
   return results;
 }
