@@ -1,4 +1,4 @@
-// DentistRadar scanner (v3.0 – distance + phone + test mode)
+// DentistRadar scanner (v3.1 – distance + phone + resilient URL + per-group error handling)
 //
 // Modes:
 //   1) TEST mode (CLI):
@@ -78,13 +78,6 @@ let transport = null;
 function getTransport() {
   if (transport) return transport;
 
-  // Typical Postmark SMTP settings:
-  //   host: smtp.postmarkapp.com
-  //   port: 587
-  //   secure: false
-  //   auth: { user: POSTMARK_SERVER_TOKEN, pass: POSTMARK_SERVER_TOKEN }
-  //
-  // But we keep it generic to work with any SMTP.
   transport = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || "587"),
@@ -118,12 +111,16 @@ async function fetchHtml(url, label = "fetchHtml") {
   return await res.text();
 }
 
+// ✅ FIXED: NHS currently uses path-based URL, not ?postcode=
 function buildNhsSearchUrl(postcode, radiusMiles) {
-  const params = new URLSearchParams({
-    postcode,
-    distance: String(radiusMiles),
-  });
-  return `${NHS_BASE}/service-search/find-a-dentist/results?${params.toString()}`;
+  const trimmed = (postcode || "").trim();
+  const encodedPostcode = encodeURIComponent(trimmed); // "RG41 4UW" -> "RG41%204UW"
+
+  let url = `${NHS_BASE}/service-search/find-a-dentist/results/${encodedPostcode}`;
+  if (radiusMiles) {
+    url += `?distance=${encodeURIComponent(String(radiusMiles))}`;
+  }
+  return url;
 }
 
 // Try to get a practice profile URL from the search result HTML chunk
@@ -141,7 +138,6 @@ function extractAppointmentsUrl(chunk, profileUrl) {
 
   if (!profileUrl) return "";
 
-  // Heuristic: many NHS URLs work with this replacement
   if (profileUrl.includes("/services/dentist/")) {
     return profileUrl.replace(
       "/services/dentist/",
@@ -149,15 +145,17 @@ function extractAppointmentsUrl(chunk, profileUrl) {
     );
   }
 
-  return profileUrl; // last-resort fallback
+  return profileUrl;
 }
 
 // Parse the NHS search results page to extract practices + distance + URLs
 function parseSearchResults(html) {
   const results = [];
 
-  // Each result is often in an <article> or list block – we use a broad split
-  const blocks = html.split(/<article[\s\S]*?class="nhsuk-search-result"[\s\S]*?>/i);
+  // Broad split on search-result article blocks – NHS markup can vary a bit
+  const blocks = html.split(
+    /<article[\s\S]*?class="nhsuk-search-result"[\s\S]*?>/i
+  );
   if (blocks.length <= 1) return results;
 
   for (let i = 1; i < blocks.length; i++) {
@@ -167,7 +165,9 @@ function parseSearchResults(html) {
     let nameMatch =
       block.match(
         /class="nhsuk-search-result__title"[^>]*>\s*<a[^>]*>([^<]+)<\/a>/i
-      ) || block.match(/<h2[^>]*>\s*<a[^>]*>([^<]+)<\/a>/i);
+      ) ||
+      block.match(/<h2[^>]*>\s*<a[^>]*>([^<]+)<\/a>/i) ||
+      block.match(/<a[^>]*class="nhsuk-heading-m[^"]*"[^>]*>([^<]+)<\/a>/i);
 
     const name = nameMatch ? nameMatch[1].trim() : null;
     if (!name) continue;
@@ -184,8 +184,7 @@ function parseSearchResults(html) {
 
     if (!profileUrl) continue;
 
-    // Map link: keep simple – just use Google Maps with name + postcode later, or NHS profile
-    const mapUrl = profileUrl; // we can point to NHS page as "map/profile" link
+    const mapUrl = profileUrl;
 
     results.push({
       name,
@@ -207,7 +206,11 @@ async function fetchPhoneFromProfile(profileUrl) {
     const phone = extractPhone(html);
     return phone;
   } catch (err) {
-    console.error("❌ Error fetching phone from profile", profileUrl, err.message);
+    console.error(
+      "❌ Error fetching phone from profile",
+      profileUrl,
+      err.message
+    );
     return "";
   }
 }
@@ -220,7 +223,6 @@ function classifyAcceptance(text) {
   let childOnly = false;
   let notAccepting = false;
 
-  // Very positive patterns
   if (
     /currently accepts? new nhs patients/i.test(text) ||
     /accepting new nhs patients/i.test(text)
@@ -228,7 +230,6 @@ function classifyAcceptance(text) {
     accepting = true;
   }
 
-  // Children-only patterns
   if (
     /only accepting.*children/i.test(text) ||
     /accepts? new nhs patients.*children/i.test(text) ||
@@ -237,7 +238,6 @@ function classifyAcceptance(text) {
     childOnly = true;
   }
 
-  // Negative patterns
   if (
     /not accepting new nhs patients/i.test(text) ||
     /no (longer )?accepting new nhs/i.test(text) ||
@@ -246,9 +246,8 @@ function classifyAcceptance(text) {
     notAccepting = true;
   }
 
-  // Clean up overlaps
   if (childOnly) {
-    accepting = false; // treat child-only separately
+    accepting = false;
   }
 
   return { accepting, childOnly, notAccepting };
@@ -266,7 +265,11 @@ async function scanPractice(practice) {
       const text = html.replace(/\s+/g, " ");
       acceptance = classifyAcceptance(text);
     } catch (err) {
-      console.error("❌ Error fetching appointments page", appointmentsUrl, err.message);
+      console.error(
+        "❌ Error fetching appointments page",
+        appointmentsUrl,
+        err.message
+      );
     }
   }
 
@@ -357,7 +360,9 @@ async function scanPostcodeRadius(postcodeRaw, radiusMilesRaw, opts = {}) {
   const started = Date.now();
 
   const url = buildNhsSearchUrl(postcode, radiusMiles);
-  console.log(`🔍 Scanning NHS for postcode="${postcode}", radius=${radiusMiles} – ${url}`);
+  console.log(
+    `🔍 Scanning NHS for postcode="${postcode}", radius=${radiusMiles} – ${url}`
+  );
 
   const searchHtml = await fetchHtml(url, "search");
   const basicPractices = parseSearchResults(searchHtml);
@@ -371,9 +376,8 @@ async function scanPostcodeRadius(postcodeRaw, radiusMilesRaw, opts = {}) {
   let childOnly = 0;
   let notAccepting = 0;
 
-  // Scan each practice (appointments + profile)
   for (const p of basicPractices) {
-    await sleep(400); // be kind to NHS website
+    await sleep(400);
 
     const result = await scanPractice(p);
     detailed.push(result);
@@ -453,16 +457,31 @@ async function runAllScans({ dryRun = false } = {}) {
     groups.get(key).watches.push(w);
   }
 
-  console.log(`📦 Found ${watches.length} watches across ${groups.size} unique (postcode, radius) groups.`);
+  console.log(
+    `📦 Found ${watches.length} watches across ${groups.size} unique (postcode, radius) groups.`
+  );
 
   for (const [key, group] of groups) {
     const { postcode, radiusMiles } = group;
 
-    const summary = await scanPostcodeRadius(postcode, radiusMiles, { dryRun: true });
+    let summary;
+    try {
+      summary = await scanPostcodeRadius(postcode, radiusMiles, {
+        dryRun: true,
+      });
+    } catch (err) {
+      console.error(
+        `❌ Skipping group ${postcode} (${radiusMiles} miles) due to error: ${err.message}`
+      );
+      continue; // don't kill the whole cron
+    }
+
     const acceptingPractices = summary.acceptingPractices;
 
     if (!acceptingPractices.length) {
-      console.log(`ℹ️ No accepting practices for ${postcode} (${radiusMiles} miles). Skipping emails.`);
+      console.log(
+        `ℹ️ No accepting practices for ${postcode} (${radiusMiles} miles). Skipping emails.`
+      );
       continue;
     }
 
@@ -509,11 +528,14 @@ async function runAllScans({ dryRun = false } = {}) {
 
 async function runSingleScan(postcode, radiusMiles, { dryRun = false } = {}) {
   await connectMongo();
-  const summary = await scanPostcodeRadius(postcode, radiusMiles, { dryRun: true });
+  const summary = await scanPostcodeRadius(postcode, radiusMiles, {
+    dryRun: true,
+  });
 
   if (!dryRun) {
-    // If you want to wire this to a specific test email, do it here.
-    console.log("ℹ️ runSingleScan called with dryRun=false but no recipients wired. No emails sent.");
+    console.log(
+      "ℹ️ runSingleScan called with dryRun=false but no recipients wired. No emails sent."
+    );
   }
 
   return summary;
@@ -529,7 +551,9 @@ if (process.argv[1] && process.argv[1].endsWith("scanner.js")) {
       const radiusMiles = Number(args[2] || "25");
 
       await connectMongo(); // if you don't need DB for test, you can remove
-      const summary = await scanPostcodeRadius(postcode, radiusMiles, { dryRun: true });
+      const summary = await scanPostcodeRadius(postcode, radiusMiles, {
+        dryRun: true,
+      });
 
       console.log("🧪 TEST SUMMARY:");
       console.log(JSON.stringify(summary, null, 2));
@@ -540,10 +564,12 @@ if (process.argv[1] && process.argv[1].endsWith("scanner.js")) {
           radiusMiles,
           practices: summary.acceptingPractices,
         });
-        console.log("\n🧪 SAMPLE EMAIL HTML (first 1–2 practices):\n");
-        console.log(sampleHtml.slice(0, 4000)); // avoid insane console spam
+        console.log("\n🧪 SAMPLE EMAIL HTML (first chunk):\n");
+        console.log(sampleHtml.slice(0, 4000));
       } else {
-        console.log("\n(no accepting practices found – no email HTML rendered)");
+        console.log(
+          "\n(no accepting practices found – no email HTML rendered)"
+        );
       }
 
       process.exit(0);
