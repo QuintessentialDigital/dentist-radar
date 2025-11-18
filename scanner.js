@@ -1,4 +1,4 @@
-// scanner.js – DentistRadar NHS scanner (v5 – results-page based with patient type)
+// scanner.js – DentistRadar NHS scanner (v5.2 – results-page based, enriched)
 //
 // Exports:
 //   - scanPostcode(postcode, radiusMiles)
@@ -6,30 +6,17 @@
 //            postcode, radiusMiles,
 //            acceptingCount, notAcceptingCount, unknownCount,
 //            scanned,
-//            accepting: [ { name, address, phone, distanceText, status, patientType, childOnly } ],
+//            accepting: [ { name, address, phone, distanceText, status, patientType, childOnly, nhsUrl } ],
 //            notAccepting: [...],
 //            unknown: [...],
 //            tookMs
 //          }
-//
-// Logic:
-//   1) Build NHS search URL: /results/POSTCODE?distance=X
-//   2) Fetch search HTML
-//   3) Convert to plain text
-//   4) Split into "Result for ... End of result for ..." blocks
-//   5) For each block:
-//        - Parse name, distance, address, phone
-//        - Classify accepting/notAccepting/unknown from wording
-//        - Extract patientType (Adults & children, Children only, Adults only) + childOnly flag
-//
-// No DB / email here – server.js handles that.
 
 import "dotenv/config";
 
 /**
  * Build the NHS dentist search URL.
- *
- * NHS pattern (current):
+ * Example:
  *   https://www.nhs.uk/service-search/find-a-dentist/results/RG41-4UW?distance=10
  */
 function buildNhsSearchUrl(postcode, radiusMiles) {
@@ -85,9 +72,6 @@ function htmlToText(html = "") {
 
 /**
  * Extract individual "result blocks" from the search results text.
- *
- * We expect repetitive patterns like:
- *   "Result for Winnersh Dental Practice ... End of result for Winnersh Dental Practice"
  */
 function extractResultBlocks(text) {
   if (!text) return [];
@@ -106,27 +90,52 @@ function extractResultBlocks(text) {
 }
 
 /**
- * Parse patient type from a result block:
+ * Extract profile links in order of appearance, so we can align them
+ * positionally with result blocks.
+ *
+ * We look for:
+ *   href="/services/dentist/...."
+ */
+function extractProfileLinks(html) {
+  if (!html) return [];
+
+  const links = [];
+  const regex = /href="(\/services\/dentist\/[^"]+)"/gi;
+  let match;
+  while ((match = regex.exec(html)) !== null) {
+    const path = match[1];
+    if (path.includes("/services/dentist/")) {
+      links.push(`https://www.nhs.uk${path}`);
+    }
+  }
+
+  console.log(
+    `[SCAN] Found ${links.length} dentist profile link(s) in search HTML.`
+  );
+  return links;
+}
+
+/**
+ * Parse patient type from block text:
  *   - Adults & children
  *   - Children only
  *   - Adults only
- * Sets:
- *   patientType: string
- *   childOnly: boolean
  */
 function parsePatientType(lowerText) {
+  // Be generous: look for generic "adult"/"adults"/"children"/"child" words
+  const hasAdults =
+    lowerText.includes("adult nhs patients") ||
+    lowerText.includes("adults aged") ||
+    lowerText.includes("adults ") ||
+    lowerText.includes(" adult ");
+  const hasChildren =
+    lowerText.includes("child nhs patients") ||
+    lowerText.includes("children aged") ||
+    lowerText.includes("children ") ||
+    lowerText.includes(" child ");
+
   let patientType = "Unknown";
   let childOnly = false;
-
-  const hasAdults =
-    lowerText.includes("adults aged 18 or over") ||
-    lowerText.includes("adult nhs patients");
-  const hasChildren =
-    lowerText.includes("children aged 0 to 17") ||
-    lowerText.includes("children aged 0 to 18") ||
-    lowerText.includes("children aged under 18") ||
-    lowerText.includes("child nhs patients") ||
-    lowerText.includes("children only");
 
   if (hasAdults && hasChildren) {
     patientType = "Adults & children";
@@ -144,7 +153,6 @@ function parsePatientType(lowerText) {
 
 /**
  * Classify acceptance status from the result block text.
- * Uses the same phrases you'd see on the NHS results page.
  */
 function classifyAcceptanceFromBlock(lower) {
   // Not accepting patterns
@@ -194,9 +202,18 @@ function classifyAcceptanceFromBlock(lower) {
       "only taking new nhs patients for specialist dental care by referral"
     )
   )
-    return "accepting"; // still "accepting" from a discovery POV
+    return "accepting";
 
   return "unknown";
+}
+
+/**
+ * Extract a UK-looking phone number from a block of text.
+ */
+function extractPhoneFromBlock(text) {
+  if (!text) return "Not available";
+  const match = text.match(/0\d{2,4}\s?\d{3,4}\s?\d{3,4}/);
+  return match ? match[0].trim() : "Not available";
 }
 
 /**
@@ -213,6 +230,9 @@ function parsePracticeFromBlock(block, postcode) {
   if (nameMatch) {
     name = nameMatch[1].trim();
   }
+
+  // Strip trailing "V006578 DEN" style codes
+  name = name.replace(/\s+V\d{6}\s+DEN$/i, "").trim();
 
   // Distance
   let distanceText = "";
@@ -233,13 +253,7 @@ function parsePracticeFromBlock(block, postcode) {
   }
 
   // Phone
-  let phone = "Not available";
-  const phoneMatch = block.match(
-    /Phone:\s*Phone number for this organisation is\s+([0-9 ()+]+?)(?:\s{2,}|$)/i
-  );
-  if (phoneMatch) {
-    phone = phoneMatch[1].trim();
-  }
+  const phone = extractPhoneFromBlock(block);
 
   const { patientType, childOnly } = parsePatientType(lower);
   const status = classifyAcceptanceFromBlock(lower);
@@ -259,6 +273,8 @@ function parsePracticeFromBlock(block, postcode) {
 /**
  * Core scanner: postcode + radius -> classify practices by acceptance status,
  * using ONLY the search results page text (no appointments pages).
+ *
+ * Also aligns each result block with a profile link if available.
  */
 export async function scanPostcode(postcode, radiusMiles) {
   const started = Date.now();
@@ -270,6 +286,7 @@ export async function scanPostcode(postcode, radiusMiles) {
   const html = await fetchText(searchUrl);
   const text = htmlToText(html);
   const blocks = extractResultBlocks(text);
+  const profileLinks = extractProfileLinks(html); // in page order
 
   console.log(
     `[SCAN] Parsed ${blocks.length} result block(s) from search results.`
@@ -279,8 +296,11 @@ export async function scanPostcode(postcode, radiusMiles) {
   const notAccepting = [];
   const unknown = [];
 
-  for (const block of blocks) {
+  blocks.forEach((block, idx) => {
     const practice = parsePracticeFromBlock(block, postcode);
+
+    // Attach NHS profile URL if we have one at same index
+    practice.nhsUrl = profileLinks[idx] || "";
 
     if (practice.status === "accepting") {
       accepting.push(practice);
@@ -289,7 +309,7 @@ export async function scanPostcode(postcode, radiusMiles) {
     } else {
       unknown.push(practice);
     }
-  }
+  });
 
   const tookMs = Date.now() - started;
 
