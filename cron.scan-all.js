@@ -1,48 +1,50 @@
 // cron.scan-all.js
-// DentistRadar – Cron entrypoint for DB-mode scanning
+// Lightweight cron runner that calls the server's admin endpoint.
 //
-// Usage (Render cron / manual):
+// Usage (Render worker command):
 //   node cron.scan-all.js
 //
-// Behaviour:
-//   - Ensures MONGO_URI is set
-//   - Calls runAllScans() from scanner.js → DB mode (grouped by postcode+radius)
-//   - scanner.js itself handles Mongo connection via connectMongo()
+// Env:
+//   ADMIN_TOKEN    – must match process.env.ADMIN_TOKEN in server
+//   PUBLIC_ORIGIN  – e.g. "https://www.dentistradar.co.uk"
+//   CRON_DRY_RUN   – "true" or "false" (optional, default false)
 
 import "dotenv/config";
-import { runAllScans } from "./scanner.js";
+import axios from "axios";
 
 async function main() {
-  const startedAt = new Date();
-  console.log("🕒 Cron start", startedAt.toISOString());
-  console.log(
-    `⚙️  Env: NODE_ENV=${process.env.NODE_ENV || "unknown"} | POSTCODE=${
-      process.env.POSTCODE || "ALL"
-    }`
-  );
+  const token = process.env.ADMIN_TOKEN;
+  const origin =
+    process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
+  const dryRun =
+    String(process.env.CRON_DRY_RUN || "false").toLowerCase() === "true";
 
-  const rawUri = process.env.MONGO_URI || "";
-  if (!rawUri) {
-    console.error("❌ MONGO_URI is not set. Exiting.");
+  if (!token) {
+    console.error(
+      "❌ ADMIN_TOKEN is not set in environment – cannot call admin scan endpoint."
+    );
     process.exit(1);
   }
 
+  const url = `${origin}/api/admin/run-all-scans?token=${encodeURIComponent(
+    token
+  )}&dryRun=${dryRun ? "true" : "false"}`;
+
+  console.log(
+    `⏱  cron.scan-all.js calling: ${url} (dryRun=${dryRun})`
+  );
+
   try {
-    // DB mode (scanner.js will call connectMongo() and do all grouping + emailing)
-    await runAllScans();
-    console.log("[cron] runAllScans() completed successfully.");
+    const res = await axios.post(url, {});
+    console.log("✅ Admin run-all-scans response:", JSON.stringify(res.data, null, 2));
   } catch (err) {
-    console.error("❌ Cron scan error:", err?.message || err);
-  } finally {
-    const finishedAt = new Date();
-    console.log(
-      "=== DentistRadar cron.scan-all.js finished ===",
-      finishedAt.toISOString()
+    console.error(
+      "❌ Error calling admin run-all-scans:",
+      err?.response?.status,
+      err?.response?.data || err?.message || err
     );
+    process.exit(1);
   }
 }
 
-main().catch((err) => {
-  console.error("❌ Cron top-level error:", err?.message || err);
-  process.exit(1);
-});
+main();
