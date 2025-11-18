@@ -1,4 +1,4 @@
-// scanner.js – DentistRadar NHS scanner (v4 – appointments-based)
+// scanner.js – DentistRadar NHS scanner (v5 – results-page based with patient type)
 //
 // Exports:
 //   - scanPostcode(postcode, radiusMiles)
@@ -6,7 +6,7 @@
 //            postcode, radiusMiles,
 //            acceptingCount, notAcceptingCount, unknownCount,
 //            scanned,
-//            accepting: [ { name, address, phone, nhsUrl, distanceText, status } ],
+//            accepting: [ { name, address, phone, distanceText, status, patientType, childOnly } ],
 //            notAccepting: [...],
 //            unknown: [...],
 //            tookMs
@@ -15,18 +15,16 @@
 // Logic:
 //   1) Build NHS search URL: /results/POSTCODE?distance=X
 //   2) Fetch search HTML
-//   3) Extract all /services/dentist/.../appointments links
-//   4) For each appointments page:
-//        - Parse name/address/phone
-//        - Classify accepting/notAccepting/unknown from appointments text
+//   3) Convert to plain text
+//   4) Split into "Result for ... End of result for ..." blocks
+//   5) For each block:
+//        - Parse name, distance, address, phone
+//        - Classify accepting/notAccepting/unknown from wording
+//        - Extract patientType (Adults & children, Children only, Adults only) + childOnly flag
 //
 // No DB / email here – server.js handles that.
 
 import "dotenv/config";
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /**
  * Build the NHS dentist search URL.
@@ -63,7 +61,7 @@ async function fetchText(url) {
 
   if (!res.ok) {
     console.error(`[SCAN] Fetch failed ${res.status} for ${url}`);
-    // Graceful behaviour: for 404/500, return empty HTML
+    // Graceful for 404/500 – behave like "no results"
     if (res.status === 404 || res.status === 500) {
       return "";
     }
@@ -74,45 +72,9 @@ async function fetchText(url) {
 }
 
 /**
- * Extract all appointments links from the search results page.
- *
- * We look for href="/services/dentist/.../appointments"
+ * Turn HTML into a linear text string for regex / substring search.
  */
-function extractAppointmentLinks(searchHtml) {
-  if (!searchHtml) return [];
-
-  const links = new Set();
-
-  const regex = /href="(\/services\/dentist\/[^"]*\/appointments)"/gi;
-  let match;
-  while ((match = regex.exec(searchHtml)) !== null) {
-    const path = match[1];
-    if (path.includes("/services/dentist/") && path.endsWith("/appointments")) {
-      links.add(`https://www.nhs.uk${path}`);
-    }
-  }
-
-  const arr = Array.from(links);
-  console.log(
-    `[SCAN] Found ${arr.length} appointments link(s) in search results.`
-  );
-  return arr;
-}
-
-function textBetween(html, startMarker, endMarker) {
-  if (!html) return "";
-  const lowerHtml = html.toLowerCase();
-  const start = lowerHtml.indexOf(startMarker.toLowerCase());
-  if (start === -1) return "";
-  const end = lowerHtml.indexOf(
-    endMarker.toLowerCase(),
-    start + startMarker.length
-  );
-  const slice = end === -1 ? html.slice(start) : html.slice(start, end);
-  return slice.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function stripTagsToText(html = "") {
+function htmlToText(html = "") {
   if (!html) return "";
   let text = html.replace(/<script[\s\S]*?<\/script>/gi, " ");
   text = text.replace(/<style[\s\S]*?<\/style>/gi, " ");
@@ -121,84 +83,182 @@ function stripTagsToText(html = "") {
   return text;
 }
 
-function extractPracticeName(detailHtml) {
-  if (!detailHtml) return "Unknown practice";
-  const match = detailHtml.match(/<h1[^>]*>([^<]+)<\/h1>/i);
-  return match ? match[1].trim() : "Unknown practice";
-}
+/**
+ * Extract individual "result blocks" from the search results text.
+ *
+ * We expect repetitive patterns like:
+ *   "Result for Winnersh Dental Practice ... End of result for Winnersh Dental Practice"
+ */
+function extractResultBlocks(text) {
+  if (!text) return [];
 
-function extractAddress(detailHtml) {
-  const block =
-    textBetween(detailHtml, "Address", "Get directions") ||
-    textBetween(detailHtml, "Address", "Opening times");
-  return block || "Address not available";
-}
+  const blocks = [];
+  const regex = /Result for\s+([\s\S]*?)(?=End of result for|Result for\s+|$)/gi;
+  let match;
+  while ((match = regex.exec(text)) !== null) {
+    const body = match[1].trim();
+    if (!body) continue;
+    const block = `Result for ${body}`;
+    blocks.push(block);
+  }
 
-// Simple UK phone extractor
-function extractPhone(detailHtml) {
-  if (!detailHtml) return "Not available";
-  const text = detailHtml.replace(/<[^>]+>/g, " ");
-  const phoneMatch = text.match(/0\d{2,4}\s?\d{3,4}\s?\d{3,4}/);
-  return phoneMatch ? phoneMatch[0].trim() : "Not available";
+  return blocks;
 }
 
 /**
- * Extract the appointments section text from the appointments page.
- * We basically take the main content area and turn it into text.
+ * Parse patient type from a result block:
+ *   - Adults & children
+ *   - Children only
+ *   - Adults only
+ * Sets:
+ *   patientType: string
+ *   childOnly: boolean
  */
-function extractAppointmentsText(appointmentsHtml) {
-  // Keep it simple: strip to text and use classifier on that.
-  return stripTagsToText(appointmentsHtml);
+function parsePatientType(lowerText) {
+  let patientType = "Unknown";
+  let childOnly = false;
+
+  const hasAdults =
+    lowerText.includes("adults aged 18 or over") ||
+    lowerText.includes("adult nhs patients");
+  const hasChildren =
+    lowerText.includes("children aged 0 to 17") ||
+    lowerText.includes("children aged 0 to 18") ||
+    lowerText.includes("children aged under 18") ||
+    lowerText.includes("child nhs patients") ||
+    lowerText.includes("children only");
+
+  if (hasAdults && hasChildren) {
+    patientType = "Adults & children";
+    childOnly = false;
+  } else if (hasChildren && !hasAdults) {
+    patientType = "Children only";
+    childOnly = true;
+  } else if (hasAdults && !hasChildren) {
+    patientType = "Adults only";
+    childOnly = false;
+  }
+
+  return { patientType, childOnly };
 }
 
 /**
- * Classify acceptance status from appointments text.
- * This is where we encode all the wording you shared from the appointments page.
+ * Classify acceptance status from the result block text.
+ * Uses the same phrases you'd see on the NHS results page.
  */
-function classifyAcceptanceFromAppointmentsText(text = "") {
-  if (!text) return "unknown";
-
-  const lower = text.toLowerCase();
-
-  const acceptingPatterns = [
-    // Existing / older patterns
-    "accepts new nhs patients",
-    "currently accepts new nhs patients",
-    "currently accepting new nhs patients",
-    "taking on new nhs patients",
-    "is taking new nhs patients",
-    "accepting new nhs patients",
-    "accepting new adult nhs patients",
-    "accepting new child nhs patients",
-    "this dentist currently accepts new nhs patients",
-    // Patterns you described for appointments page
-    "this dentist currently accepts new nhs patients for routine dental care if they are",
-    "when availability allows, this dentist accepts new nhs patients if they are",
-    "when availability allows, this dentist accepts new adult nhs patients if they are",
-    "when availability allows, this dentist accepts new child nhs patients if they are",
-    // Specialist but still accepting via referral
-    "only taking new nhs patients for specialist dental care by referral",
-  ];
-
-  const notAcceptingPatterns = [
-    "not accepting new nhs patients",
-    "not taking on new nhs patients",
-    "currently not accepting nhs patients",
-    "not currently accepting new nhs patients",
-    "this dentist is not taking on any new nhs patients",
-    "this dentist is not currently taking on new nhs patients",
-  ];
-
-  if (acceptingPatterns.some((p) => lower.includes(p))) return "accepting";
-  if (notAcceptingPatterns.some((p) => lower.includes(p)))
+function classifyAcceptanceFromBlock(lower) {
+  // Not accepting patterns
+  if (lower.includes("not accepting new nhs patients")) return "notAccepting";
+  if (lower.includes("not taking on new nhs patients")) return "notAccepting";
+  if (lower.includes("currently not accepting nhs patients"))
     return "notAccepting";
+  if (lower.includes("not currently accepting new nhs patients"))
+    return "notAccepting";
+  if (
+    lower.includes(
+      "this dentist is not taking on any new nhs patients"
+    )
+  )
+    return "notAccepting";
+  if (
+    lower.includes(
+      "this dentist is not currently taking on new nhs patients"
+    )
+  )
+    return "notAccepting";
+
+  // Unknown / no update patterns
+  if (
+    lower.includes(
+      "has not given a recent update on whether they're taking new nhs patients"
+    )
+  ) {
+    return "unknown";
+  }
+
+  // Accepting patterns
+  if (
+    lower.includes(
+      "when availability allows, this dentist accepts new nhs patients"
+    )
+  )
+    return "accepting";
+  if (lower.includes("accepts new nhs patients")) return "accepting";
+  if (lower.includes("accepting new nhs patients")) return "accepting";
+  if (lower.includes("taking on new nhs patients")) return "accepting";
+  if (lower.includes("is taking new nhs patients")) return "accepting";
+  if (lower.includes("accepting new adult nhs patients")) return "accepting";
+  if (lower.includes("accepting new child nhs patients")) return "accepting";
+  if (
+    lower.includes(
+      "only taking new nhs patients for specialist dental care by referral"
+    )
+  )
+    return "accepting"; // still "accepting" from a discovery POV
 
   return "unknown";
 }
 
 /**
+ * Parse a single result block into a practice object.
+ */
+function parsePracticeFromBlock(block, postcode) {
+  const lower = block.toLowerCase();
+
+  // Name
+  let name = "Unknown practice";
+  const nameMatch = block.match(
+    /Result for\s+(.+?)(?=\s{2,}|This organisation is|Address for this organisation is|Phone:|$)/i
+  );
+  if (nameMatch) {
+    name = nameMatch[1].trim();
+  }
+
+  // Distance
+  let distanceText = "";
+  const distMatch = block.match(
+    /This organisation is\s+(.+?)\s+away/i
+  );
+  if (distMatch) {
+    distanceText = distMatch[1].trim(); // e.g. "1 mile"
+  }
+
+  // Address
+  let address = "";
+  const addrMatch = block.match(
+    /Address for this organisation is\s+(.+?)(?:Phone:|This dentist surgery|When availability allows|Not accepting new NHS patients|has not given a recent update|End of result for|$)/i
+  );
+  if (addrMatch) {
+    address = addrMatch[1].trim();
+  }
+
+  // Phone
+  let phone = "Not available";
+  const phoneMatch = block.match(
+    /Phone:\s*Phone number for this organisation is\s+([0-9 ()+]+?)(?:\s{2,}|$)/i
+  );
+  if (phoneMatch) {
+    phone = phoneMatch[1].trim();
+  }
+
+  const { patientType, childOnly } = parsePatientType(lower);
+  const status = classifyAcceptanceFromBlock(lower);
+
+  return {
+    name,
+    address,
+    phone,
+    distanceText,
+    status,
+    patientType,
+    childOnly,
+    postcode: postcode || "",
+  };
+}
+
+/**
  * Core scanner: postcode + radius -> classify practices by acceptance status,
- * using ONLY the appointments page for acceptance.
+ * using ONLY the search results page text (no appointments pages).
  */
 export async function scanPostcode(postcode, radiusMiles) {
   const started = Date.now();
@@ -207,53 +267,27 @@ export async function scanPostcode(postcode, radiusMiles) {
     `[SCAN] Searching NHS for ${postcode} (${radiusMiles} miles) – ${searchUrl}`
   );
 
-  const searchHtml = await fetchText(searchUrl);
-  const appointmentLinks = extractAppointmentLinks(searchHtml);
+  const html = await fetchText(searchUrl);
+  const text = htmlToText(html);
+  const blocks = extractResultBlocks(text);
+
+  console.log(
+    `[SCAN] Parsed ${blocks.length} result block(s) from search results.`
+  );
 
   const accepting = [];
   const notAccepting = [];
   const unknown = [];
 
-  for (const apptUrl of appointmentLinks) {
-    try {
-      await sleep(400); // be gentle with NHS
-      const appointmentsHtml = await fetchText(apptUrl);
-      if (!appointmentsHtml) {
-        console.warn(`[SCAN] Empty appointments HTML for ${apptUrl}`);
-        continue;
-      }
+  for (const block of blocks) {
+    const practice = parsePracticeFromBlock(block, postcode);
 
-      const appointmentsText = extractAppointmentsText(appointmentsHtml);
-      const status = classifyAcceptanceFromAppointmentsText(appointmentsText);
-
-      // Use appointments page itself to get name/address/phone
-      const name = extractPracticeName(appointmentsHtml);
-      const address = extractAddress(appointmentsHtml);
-      const phone = extractPhone(appointmentsHtml);
-
-      // Derive main NHS page (without /appointments)
-      let nhsUrl = apptUrl;
-      if (nhsUrl.endsWith("/appointments")) {
-        nhsUrl = nhsUrl.replace(/\/appointments\/?$/i, "");
-      }
-
-      const practice = {
-        name,
-        address,
-        phone,
-        nhsUrl,
-        distanceText: "", // distance isn't on appointments page; could add later from searchHtml
-        status,
-      };
-
-      if (status === "accepting") accepting.push(practice);
-      else if (status === "notAccepting") notAccepting.push(practice);
-      else unknown.push(practice);
-    } catch (err) {
-      console.error(
-        `[SCAN] Error fetching appointments ${apptUrl}:`,
-        err.message || err
-      );
+    if (practice.status === "accepting") {
+      accepting.push(practice);
+    } else if (practice.status === "notAccepting") {
+      notAccepting.push(practice);
+    } else {
+      unknown.push(practice);
     }
   }
 
@@ -265,7 +299,7 @@ export async function scanPostcode(postcode, radiusMiles) {
     acceptingCount: accepting.length,
     notAcceptingCount: notAccepting.length,
     unknownCount: unknown.length,
-    scanned: appointmentLinks.length,
+    scanned: blocks.length,
     accepting,
     notAccepting,
     unknown,
