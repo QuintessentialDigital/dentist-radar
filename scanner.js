@@ -160,35 +160,21 @@ function extractAppointmentsUrl(chunk, profileUrl) {
 function parseSearchResults(html) {
   const results = [];
 
-  // Super-generic: look at ALL links, then filter down to dentist-related ones
-  const re = /<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
+  // Only pick links that go to actual dentist services:
+  //    /services/dentist/...
+  const re = /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
   let match;
 
   while ((match = re.exec(html)) !== null) {
-    const hrefRaw = match[1];
-    const textRaw = match[2].trim();
-    if (!textRaw) continue;
+    const href = match[1];
+    const nameRaw = match[2] || "";
+    const name = nameRaw.replace(/\s+/g, " ").trim();
+    if (!name) continue;
 
-    const text = textRaw.replace(/\s+/g, " ");
+    const profileUrl = NHS_BASE + href;
 
-    // Keep only links that look like actual dental practices
-    // (very loose on purpose so we don't miss anything)
-    const looksLikePracticeName =
-      /appointments/i.test(text) ||
-      /dental|dentist/i.test(text);
-
-    const looksLikeDentistUrl =
-      /dentist/i.test(hrefRaw) || /find-a-dentist/i.test(hrefRaw);
-
-    if (!looksLikePracticeName || !looksLikeDentistUrl) continue;
-
-    // Normalise URL: relative -> absolute
-    const profileUrl = hrefRaw.startsWith("http")
-      ? hrefRaw
-      : NHS_BASE + hrefRaw;
-
-    // Look around the link for something like "2.3 miles"
-    const windowText = html.slice(match.index, match.index + 400);
+    // Look in the text just after this link for something like "1.2 miles"
+    const windowText = html.slice(match.index, match.index + 500);
     const distMatch =
       windowText.match(/([\d.,]+)\s*miles?/i) ||
       windowText.match(/([\d.,]+)\s*mi\b/i);
@@ -198,13 +184,19 @@ function parseSearchResults(html) {
     const mapUrl = profileUrl;
 
     results.push({
-      name: text,
+      name,
       distanceText,
       profileUrl,
       appointmentsUrl,
       mapUrl,
     });
   }
+
+  console.log(
+    `🔎 parseSearchResults: extracted ${results.length} dentist practices from HTML`
+  );
+  return results;
+}
 
   console.log(
     `🔎 parseSearchResults: extracted ${results.length} practices from HTML`
