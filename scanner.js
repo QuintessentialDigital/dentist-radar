@@ -152,30 +152,45 @@ function extractAppointmentsUrl(chunk, profileUrl) {
 function parseSearchResults(html) {
   const results = [];
 
-  // Generic search: every link that goes to /services/dentist/...
-  const re = /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
+  // Super-generic: look at ALL links, then filter down to dentist-related ones
+  const re = /<a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a>/gi;
   let match;
 
   while ((match = re.exec(html)) !== null) {
-    const href = match[1];
-    const name = match[2].trim();
-    if (!name) continue;
+    const hrefRaw = match[1];
+    const textRaw = match[2].trim();
+    if (!textRaw) continue;
 
-    const profileUrl = NHS_BASE + href;
+    const text = textRaw.replace(/\s+/g, " ");
 
-    // Look in the next ~400 chars after the link for something like "1.2 miles"
+    // Keep only links that look like actual dental practices
+    // (very loose on purpose so we don't miss anything)
+    const looksLikePracticeName =
+      /appointments/i.test(text) ||
+      /dental|dentist/i.test(text);
+
+    const looksLikeDentistUrl =
+      /dentist/i.test(hrefRaw) || /find-a-dentist/i.test(hrefRaw);
+
+    if (!looksLikePracticeName || !looksLikeDentistUrl) continue;
+
+    // Normalise URL: relative -> absolute
+    const profileUrl = hrefRaw.startsWith("http")
+      ? hrefRaw
+      : NHS_BASE + hrefRaw;
+
+    // Look around the link for something like "2.3 miles"
     const windowText = html.slice(match.index, match.index + 400);
     const distMatch =
       windowText.match(/([\d.,]+)\s*miles?/i) ||
       windowText.match(/([\d.,]+)\s*mi\b/i);
     const distanceText = distMatch ? distMatch[0].trim() : "";
 
-    // Try to guess appointments URL from profile URL
     const appointmentsUrl = extractAppointmentsUrl(windowText, profileUrl);
     const mapUrl = profileUrl;
 
     results.push({
-      name,
+      name: text,
       distanceText,
       profileUrl,
       appointmentsUrl,
@@ -183,10 +198,11 @@ function parseSearchResults(html) {
     });
   }
 
-  console.log(`🔎 parseSearchResults: extracted ${results.length} practices from HTML`);
+  console.log(
+    `🔎 parseSearchResults: extracted ${results.length} practices from HTML`
+  );
   return results;
 }
-
 
 // Fetch phone from practice profile page
 async function fetchPhoneFromProfile(profileUrl) {
