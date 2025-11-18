@@ -1,7 +1,8 @@
 // scanner.js
-// DentistRadar scanner (v3.3 – grouped, appointments-based classification,
-// but practice metadata (name, distance, phone, map) comes from the NHS search page,
-// so emails look like your original working format).
+// DentistRadar scanner (v3.4 – grouped, appointments-based classification,
+// but practice metadata (name, distance, phone, map) comes from the NHS search page
+// where possible; otherwise we fall back to the appointments page header/title,
+// while still avoiding the "Appointments" / "111" issues).
 //
 // Modes:
 //   1) DB mode (cron or /api/scan with no postcode):
@@ -109,7 +110,6 @@ function buildMapsUrl(name, postcode) {
 }
 
 // Extract practice data (name, id, distance, phone, etc.) from the search HTML ONLY
-// This is very close to your older working logic.
 function extractPracticesFromSearch(html, searchPostcode) {
   const results = [];
 
@@ -177,17 +177,20 @@ function extractPracticesFromSearch(html, searchPostcode) {
       patientType = "Children only";
     }
 
-    const profileUrl = practiceId
-      ? `https://www.nhs.uk/services/dentist/${encodeURIComponent(
-          name
-            .toLowerCase()
-            .replace(/&/g, "and")
-            .replace(/[^a-z0-9\s-]/g, "")
-            .replace(/\s+/g, "-")
-            .replace(/-+/g, "-")
-            .replace(/^-|-$/g, "")
-        )}/${practiceId}`
-      : null;
+    const slug = name
+      .toLowerCase()
+      .replace(/&/g, "and")
+      .replace(/[^a-z0-9\s-]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+
+    const profileUrl =
+      practiceId && slug
+        ? `https://www.nhs.uk/services/dentist/${encodeURIComponent(
+            slug
+          )}/${practiceId}`
+        : null;
 
     const mapsUrl = buildMapsUrl(name, searchPostcode);
 
@@ -390,6 +393,7 @@ export async function scanPostcodeRadius(postcode, radiusMiles) {
       continue;
     }
 
+    const $ = cheerio.load(apptHtml);
     const status = classifyAppointmentsPage(apptHtml);
 
     switch (status) {
@@ -408,15 +412,31 @@ export async function scanPostcodeRadius(postcode, radiusMiles) {
 
     const meta = practiceId ? metaById.get(practiceId) : null;
 
-    // Prefer name from search metadata; fall back to appointments page as last resort
+    // ---------- Name logic ----------
     let name = meta?.name || null;
 
-    // Use phone from search metadata (this used to be correct and avoids "111")
+    // Fallback 1: <h1> on appointments page, as long as it's not literally "Appointments"
+    if (!name) {
+      const h1 = $("h1").first().text().trim();
+      if (h1 && h1.toLowerCase() !== "appointments") {
+        name = h1;
+      }
+    }
+
+    // Fallback 2: <title>, stripping a trailing " - NHS" if present
+    if (!name) {
+      const title = $("title").first().text().trim();
+      if (title) {
+        name = title.replace(/\s*-\s*NHS\s*$/i, "").trim();
+      }
+    }
+
+    // ---------- Phone logic ----------
+    // Prefer phone from search metadata (this used to be correct and avoids "111")
     let phone = meta?.phone || null;
 
     // As a fallback only, try to read a tel: link (but ignore "111")
     if (!phone) {
-      const $ = cheerio.load(apptHtml);
       const telHref = $("a[href^='tel:']").first().attr("href");
       if (telHref) {
         const candidate = telHref.replace(/^tel:/i, "").trim();
@@ -652,7 +672,7 @@ async function shouldSendAlertForWatch(watch, scanResult) {
       .sort({ sentAt: -1 })
       .lean();
 
-    const currentAcceptingUrls = scanResult.practices
+  const currentAcceptingUrls = scanResult.practices
       .filter((p) => p.status === "accepting" || p.status === "childOnly")
       .map((p) => p.appointmentsUrl)
       .sort();
