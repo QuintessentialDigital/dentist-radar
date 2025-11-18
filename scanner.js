@@ -152,38 +152,26 @@ function extractAppointmentsUrl(chunk, profileUrl) {
 function parseSearchResults(html) {
   const results = [];
 
-  // Broad split on search-result article blocks – NHS markup can vary a bit
-  const blocks = html.split(
-    /<article[\s\S]*?class="nhsuk-search-result"[\s\S]*?>/i
-  );
-  if (blocks.length <= 1) return results;
+  // Generic search: every link that goes to /services/dentist/...
+  const re = /<a[^>]+href="(\/services\/dentist\/[^"]+)"[^>]*>([^<]+)<\/a>/gi;
+  let match;
 
-  for (let i = 1; i < blocks.length; i++) {
-    const block = blocks[i];
-
-    // Name: usually inside <a ... class="nhsuk-search-result__title">Name</a>
-    let nameMatch =
-      block.match(
-        /class="nhsuk-search-result__title"[^>]*>\s*<a[^>]*>([^<]+)<\/a>/i
-      ) ||
-      block.match(/<h2[^>]*>\s*<a[^>]*>([^<]+)<\/a>/i) ||
-      block.match(/<a[^>]*class="nhsuk-heading-m[^"]*"[^>]*>([^<]+)<\/a>/i);
-
-    const name = nameMatch ? nameMatch[1].trim() : null;
+  while ((match = re.exec(html)) !== null) {
+    const href = match[1];
+    const name = match[2].trim();
     if (!name) continue;
 
-    // Distance: something like "0.5 miles"
-    const distMatch =
-      block.match(/([\d.,]+)\s*miles?/i) ||
-      block.match(/([\d.,]+)\s*mi\b/i);
+    const profileUrl = NHS_BASE + href;
 
+    // Look in the next ~400 chars after the link for something like "1.2 miles"
+    const windowText = html.slice(match.index, match.index + 400);
+    const distMatch =
+      windowText.match(/([\d.,]+)\s*miles?/i) ||
+      windowText.match(/([\d.,]+)\s*mi\b/i);
     const distanceText = distMatch ? distMatch[0].trim() : "";
 
-    const profileUrl = extractProfileUrl(block);
-    const appointmentsUrl = extractAppointmentsUrl(block, profileUrl);
-
-    if (!profileUrl) continue;
-
+    // Try to guess appointments URL from profile URL
+    const appointmentsUrl = extractAppointmentsUrl(windowText, profileUrl);
     const mapUrl = profileUrl;
 
     results.push({
@@ -195,8 +183,10 @@ function parseSearchResults(html) {
     });
   }
 
+  console.log(`🔎 parseSearchResults: extracted ${results.length} practices from HTML`);
   return results;
 }
+
 
 // Fetch phone from practice profile page
 async function fetchPhoneFromProfile(profileUrl) {
