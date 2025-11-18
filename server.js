@@ -2,7 +2,7 @@
 // - Uses shared models.js (watches/users/emaillogs)
 // - Welcome email uses HTML template via Postmark
 // - Adds /api/debug/peek to verify DB/collections
-// - Phase 2: Stripe webhook + plan activation email + "My Alerts" APIs + Unsubscribe
+// - Stripe webhook + plan activation email + "My Alerts" APIs + Unsubscribe
 
 import express from "express";
 import { scanPostcode } from "./scanner.js"; // Pure scanner: NHS -> JSON summary
@@ -24,6 +24,8 @@ const PORT = process.env.PORT || 10000;
 
 app.use(cors());
 app.use(express.json());
+// ✅ Allow standard HTML form posts (application/x-www-form-urlencoded)
+app.use(express.urlencoded({ extended: false }));
 app.use(express.static("public"));
 
 /* ---------------------------
@@ -147,13 +149,15 @@ app.get("/api/debug/peek", async (req, res) => {
 });
 
 /* ---------------------------
-   Create Watch (Welcome + Premium Acceptance Email)
+   Shared Watch Creation Handler
 --------------------------- */
-app.post("/api/watch/create", async (req, res) => {
+async function handleCreateWatch(req, res) {
   try {
     const email = normEmail(req.body?.email);
     const postcode = normalizePostcode(String(req.body?.postcode || ""));
     const radius = Number(req.body?.radius);
+
+    console.log("🔔 /api/watch(create) body:", req.body);
 
     if (!emailRe.test(email))
       return res.status(400).json({ ok: false, error: "invalid_email" });
@@ -180,7 +184,7 @@ app.post("/api/watch/create", async (req, res) => {
 
     const watch = await Watch.create({ email, postcode, radius });
 
-    // 1) Send Welcome email as before
+    // 1) Welcome email
     const { subject: welcomeSubject, html: welcomeHtml } = renderEmail(
       "welcome",
       { postcode, radius }
@@ -190,30 +194,37 @@ app.post("/api/watch/create", async (req, res) => {
       radius,
     });
 
-    // 2) Run scanner once for this postcode+radius and send premium acceptance email if any
+    // 2) Run scanner once and send premium acceptance email if any
     console.log(
       `[WATCH] Running immediate scan for ${email} – ${postcode} (${radius}mi)`
     );
-    const scanResult = await scanPostcode(postcode, radius);
+    let scanResult;
+    try {
+      scanResult = await scanPostcode(postcode, radius);
+    } catch (err) {
+      console.error("[WATCH] scanPostcode error:", err?.message || err);
+      // Don't break signup if scan fails; just return success without alert
+      return res.json({
+        ok: true,
+        message: "Alert created (scan failed, no acceptance email).",
+      });
+    }
 
     if (scanResult.acceptingCount > 0) {
       const practices = scanResult.accepting || [];
       const year = new Date().getFullYear();
 
-      // Build premium table rows
       const rowsHtml = practices
         .map((p) => {
           const name = p.name || "Unknown practice";
           const phone = p.phone || "Not available";
 
-          // Patient type: use explicit p.patientType if present, else infer from flags
           const patientType = p.patientType
             ? p.patientType
             : p.childOnly
             ? "Children only"
             : "Adults & children";
 
-          // Distance: prefer distanceText, else distanceMiles if you add it later
           const distance =
             p.distanceText ||
             (typeof p.distanceMiles === "number"
@@ -222,7 +233,6 @@ app.post("/api/watch/create", async (req, res) => {
 
           const nhsUrl = p.nhsUrl || p.profileUrl || "#";
 
-          // Map link: prefer explicit mapUrl if scanner provides one, else build Google Maps query
           const mapUrl =
             p.mapUrl ||
             `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
@@ -267,7 +277,6 @@ app.post("/api/watch/create", async (req, res) => {
       <tr>
         <td align="center" style="padding:24px 12px;">
           <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:640px; background:#ffffff; border-radius:12px; overflow:hidden; box-shadow:0 8px 20px rgba(15, 23, 42, 0.08);">
-            <!-- Header bar -->
             <tr>
               <td style="background:#0b63ff; padding:16px 24px; color:#ffffff;">
                 <div style="font-size:20px; font-weight:700;">
@@ -279,7 +288,6 @@ app.post("/api/watch/create", async (req, res) => {
               </td>
             </tr>
 
-            <!-- Content -->
             <tr>
               <td style="padding:24px 24px 16px 24px;">
                 <h2 style="margin:0 0 12px 0; font-size:20px; color:#111827;">
@@ -297,7 +305,6 @@ app.post("/api/watch/create", async (req, res) => {
                   shown as <strong>accepting new NHS patients</strong> (subject to change and availability):
                 </p>
 
-                <!-- Practices table -->
                 <div style="border:1px solid #e5e7eb; border-radius:10px; overflow:hidden;">
                   <table role="presentation" width="100%" cellspacing="0" cellpadding="8" style="border-collapse:collapse; font-size:13px;">
                     <thead>
@@ -329,7 +336,6 @@ app.post("/api/watch/create", async (req, res) => {
               </td>
             </tr>
 
-            <!-- Footer -->
             <tr>
               <td style="padding:12px 24px 18px 24px; border-top:1px solid #e5e7eb; font-size:12px; color:#9ca3af;">
                 <div>
@@ -364,7 +370,7 @@ app.post("/api/watch/create", async (req, res) => {
       );
     }
 
-    res.json({
+    return res.json({
       ok: true,
       message: "Alert created!",
       scanSummary: {
@@ -375,9 +381,19 @@ app.post("/api/watch/create", async (req, res) => {
     });
   } catch (e) {
     console.error("watch/create error:", e);
-    res.status(500).json({ ok: false, error: "server_error" });
+    return res.status(500).json({ ok: false, error: "server_error" });
   }
-});
+}
+
+/* ---------------------------
+   Create Watch routes (old + new)
+--------------------------- */
+
+// OLD path for compatibility (forms or JS calling /api/watch)
+app.post("/api/watch", handleCreateWatch);
+
+// NEW explicit path
+app.post("/api/watch/create", handleCreateWatch);
 
 /* ---------------------------
    My Alerts APIs
@@ -445,6 +461,7 @@ app.get("/api/scan", async (req, res) => {
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || "";
 const stripe = STRIPE_KEY ? new Stripe(STRIPE_KEY) : null;
 
+// (Stripe handlers unchanged – same as before)
 async function handleCheckoutSession(req, res) {
   try {
     if (!stripe)
