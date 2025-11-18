@@ -6,6 +6,7 @@
 
 import express from "express";
 import { scanPostcodeRadius } from "./scanner.js";
+import { scanPostcode, runSingleWatchScan } from "./scanner.js";
 import cors from "cors";
 import mongoose from "mongoose";
 import dotenv from "dotenv";
@@ -209,6 +210,24 @@ app.delete("/api/watch/:id", async (req, res) => {
     res.status(500).json({ ok: false, error: "server_error" });
   }
 });
+
+app.get("/api/scan", async (req, res) => {
+  try {
+    const { postcode, radius } = req.query;
+    if (!postcode) {
+      return res.status(400).json({ error: "postcode is required" });
+    }
+    const radiusMiles = Number(radius) || 5;
+
+    const result = await scanPostcode(postcode, radiusMiles);
+    res.json(result);
+  } catch (err) {
+    console.error("Error in /api/scan:", err);
+    res.status(500).json({ error: "Scan failed", details: err.message });
+  }
+});
+
+
 
 /* ---------------------------
    Stripe Checkout + Webhook
