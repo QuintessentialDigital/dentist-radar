@@ -321,22 +321,26 @@ app.get("/api/scan", async (req, res) => {
 
     // Optional: don’t return the full HTML, just JSON
     return res.json({
-      ok: true,
-      postcode: summary.postcode,
-      radiusMiles: summary.radiusMiles,
-      accepting: summary.accepting,
-      childOnly: summary.childOnly,
-      notAccepting: summary.notAccepting,
-      scanned: summary.scanned,
-      tookMs: summary.tookMs,
-      acceptingPractices: summary.acceptingPractices.map((p) => ({
-        name: p.name,
-        distanceText: p.distanceText,
-        phone: p.phone,
-        profileUrl: p.profileUrl,
-        appointmentsUrl: p.appointmentsUrl,
-      })),
-    });
+  ok: true,
+  postcode: summary.postcode,
+  radiusMiles: summary.radiusMiles,
+  accepting: summary.accepting,
+  childOnly: summary.childOnly,
+  notAccepting: summary.notAccepting,
+  scanned: summary.scanned,
+  tookMs: summary.tookMs,
+  allPractices: summary.allPractices.map((p) => ({
+    name: p.name,
+    distanceText: p.distanceText,
+    phone: p.phone,
+    profileUrl: p.profileUrl,
+    appointmentsUrl: p.appointmentsUrl,
+    accepting: p.accepting,
+    childOnly: p.childOnly,
+    notAccepting: p.notAccepting,
+  })),
+});
+
   } catch (err) {
     console.error("❌ /api/scan error:", err.message);
     return res.status(500).json({ error: err.message });
