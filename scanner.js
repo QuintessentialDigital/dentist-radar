@@ -1,4 +1,4 @@
-// scanner.js – DentistRadar NHS scanner (v5.2 – results-page based, enriched)
+// scanner.js – DentistRadar NHS scanner (v6 – results-page based, enriched)
 //
 // Exports:
 //   - scanPostcode(postcode, radiusMiles)
@@ -90,48 +90,21 @@ function extractResultBlocks(text) {
 }
 
 /**
- * Extract profile links in order of appearance, so we can align them
- * positionally with result blocks.
- *
- * We look for:
- *   href="/services/dentist/...."
- */
-function extractProfileLinks(html) {
-  if (!html) return [];
-
-  const links = [];
-  const regex = /href="(\/services\/dentist\/[^"]+)"/gi;
-  let match;
-  while ((match = regex.exec(html)) !== null) {
-    const path = match[1];
-    if (path.includes("/services/dentist/")) {
-      links.push(`https://www.nhs.uk${path}`);
-    }
-  }
-
-  console.log(
-    `[SCAN] Found ${links.length} dentist profile link(s) in search HTML.`
-  );
-  return links;
-}
-
-/**
  * Parse patient type from block text:
  *   - Adults & children
  *   - Children only
  *   - Adults only
  */
 function parsePatientType(lowerText) {
-  // Be generous: look for generic "adult"/"adults"/"children"/"child" words
   const hasAdults =
     lowerText.includes("adult nhs patients") ||
     lowerText.includes("adults aged") ||
-    lowerText.includes("adults ") ||
+    lowerText.includes(" adults ") ||
     lowerText.includes(" adult ");
   const hasChildren =
     lowerText.includes("child nhs patients") ||
     lowerText.includes("children aged") ||
-    lowerText.includes("children ") ||
+    lowerText.includes(" children ") ||
     lowerText.includes(" child ");
 
   let patientType = "Unknown";
@@ -217,12 +190,36 @@ function extractPhoneFromBlock(text) {
 }
 
 /**
+ * Build NHS profile URL from the practice name and the V-code in the block.
+ * Example:
+ *   Name: "Winnersh Dental Practice"
+ *   Block contains: "V006578 DEN"
+ *   URL: https://www.nhs.uk/services/dentist/winnersh-dental-practice-v006578
+ */
+function buildNhsProfileUrl(name, rawBlock) {
+  const idMatch = rawBlock.match(/V(\d{6})/i);
+  if (!idMatch) return "";
+
+  const id = idMatch[0].toLowerCase(); // v006578
+
+  const slug = name
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+
+  return `https://www.nhs.uk/services/dentist/${slug}-${id}`;
+}
+
+/**
  * Parse a single result block into a practice object.
  */
 function parsePracticeFromBlock(block, postcode) {
   const lower = block.toLowerCase();
 
-  // Name
+  // Name (includes V-code in the raw text, which we strip after)
   let name = "Unknown practice";
   const nameMatch = block.match(
     /Result for\s+(.+?)(?=\s{2,}|This organisation is|Address for this organisation is|Phone:|$)/i
@@ -231,7 +228,7 @@ function parsePracticeFromBlock(block, postcode) {
     name = nameMatch[1].trim();
   }
 
-  // Strip trailing "V006578 DEN" style codes
+  // Strip trailing "V006578 DEN" style codes from display name
   name = name.replace(/\s+V\d{6}\s+DEN$/i, "").trim();
 
   // Distance
@@ -272,9 +269,8 @@ function parsePracticeFromBlock(block, postcode) {
 
 /**
  * Core scanner: postcode + radius -> classify practices by acceptance status,
- * using ONLY the search results page text (no appointments pages).
- *
- * Also aligns each result block with a profile link if available.
+ * using ONLY the search results page text (no appointments pages),
+ * and building NHS profile URLs from the V-code.
  */
 export async function scanPostcode(postcode, radiusMiles) {
   const started = Date.now();
@@ -286,7 +282,6 @@ export async function scanPostcode(postcode, radiusMiles) {
   const html = await fetchText(searchUrl);
   const text = htmlToText(html);
   const blocks = extractResultBlocks(text);
-  const profileLinks = extractProfileLinks(html); // in page order
 
   console.log(
     `[SCAN] Parsed ${blocks.length} result block(s) from search results.`
@@ -296,11 +291,9 @@ export async function scanPostcode(postcode, radiusMiles) {
   const notAccepting = [];
   const unknown = [];
 
-  blocks.forEach((block, idx) => {
+  blocks.forEach((block) => {
     const practice = parsePracticeFromBlock(block, postcode);
-
-    // Attach NHS profile URL if we have one at same index
-    practice.nhsUrl = profileLinks[idx] || "";
+    practice.nhsUrl = buildNhsProfileUrl(practice.name, block);
 
     if (practice.status === "accepting") {
       accepting.push(practice);
