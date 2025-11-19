@@ -113,12 +113,10 @@ function looksLikeUkPostcode(pc) {
 function detectUkRegion(postcode) {
   const pc = (postcode || "").toUpperCase().trim();
 
-  // Outward area = leading 1–2 letters (e.g. RG, BT, CF, G)
   const m = pc.match(/^([A-Z]{1,2})/);
   if (!m) return "OTHER";
   const area = m[1];
 
-  // Very clear mapping — good enough for guardrails
   const NI = ["BT"]; // Northern Ireland
 
   const SCOTLAND = [
@@ -131,8 +129,8 @@ function detectUkRegion(postcode) {
     "CF", "LD", "LL", "NP", "SA", "SY"
   ];
 
-  const CHANNEL_ISLANDS = ["GY", "JE"]; // Guernsey / Jersey
-  const IOM = ["IM"]; // Isle of Man
+  const CHANNEL_ISLANDS = ["GY", "JE"];
+  const IOM = ["IM"];
 
   if (NI.includes(area)) return "NI";
   if (SCOTLAND.includes(area)) return "SCOTLAND";
@@ -140,10 +138,8 @@ function detectUkRegion(postcode) {
   if (CHANNEL_ISLANDS.includes(area)) return "CHANNEL_ISLANDS";
   if (IOM.includes(area)) return "IOM";
 
-  // Everything else we treat as England (or at least "not obviously NI/Scotland/Wales")
   return "ENGLAND";
 }
-
 
 async function planLimitFor(email) {
   const e = normEmail(email);
@@ -381,37 +377,50 @@ app.get("/api/debug/peek", async (req, res) => {
 --------------------------- */
 async function handleCreateWatch(req, res) {
   try {
-    const email = normEmail(req.body?.email);
-    const postcode = normalizePostcode(String(req.body?.postcode || ""));
-    const radius = Number(req.body?.radius);
+    const rawEmail = req.body?.email;
+    const rawPostcode = String(req.body?.postcode || "");
+    const rawRadius = req.body?.radius;
+
+    const email = normEmail(rawEmail);
+    const postcode = normalizePostcode(rawPostcode);
+    const radius = Number(rawRadius);
 
     console.log("🔔 /api/watch(create) body:", req.body);
 
-    if (!emailRe.test(email))
+    // Basic validation
+    if (!emailRe.test(email)) {
       return res.status(400).json({ ok: false, error: "invalid_email" });
+    }
 
-    if (!looksLikeUkPostcode(postcode))
+    if (!looksLikeUkPostcode(postcode)) {
       return res.status(400).json({ ok: false, error: "invalid_postcode" });
+    }
 
-    if (!radius || radius < 1 || radius > 30)
+    if (!radius || radius < 1 || radius > 30) {
       return res.status(400).json({ ok: false, error: "invalid_radius" });
+    }
 
+    // 🔒 Region guardrail — MUST be before Watch.create
     const region = detectUkRegion(postcode);
     if (region !== "ENGLAND") {
-      // Hard guardrail: we don’t create watches outside England
+      console.log(
+        `⛔ Blocked watch for non-England postcode ${postcode} (region=${region})`
+      );
       return res.status(400).json({
         ok: false,
         error: "unsupported_region",
         region,
         message:
           "DentistRadar currently supports NHS dentist searches in England only. " +
-          "Support for Scotland, Wales and Northern Ireland will be added in future."
+          "Support for Scotland, Wales and Northern Ireland will be added in future.",
       });
     }
 
+    // Duplicate & plan limit checks
     const exists = await Watch.findOne({ email, postcode }).lean();
-    if (exists)
+    if (exists) {
       return res.status(400).json({ ok: false, error: "duplicate" });
+    }
 
     const limit = await planLimitFor(email);
     const count = await Watch.countDocuments({ email });
@@ -423,9 +432,9 @@ async function handleCreateWatch(req, res) {
       });
     }
 
+    // ✅ Only here do we actually create the watch
     const watch = await Watch.create({ email, postcode, radius });
 
-    // 👇 Add these lines (with encodeURIComponent, not es / esc)
     const SITE =
       process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
 
@@ -434,11 +443,17 @@ async function handleCreateWatch(req, res) {
     )}`;
     const unsubscribeUrl = `${SITE}/unsubscribe/${watch._id}`;
 
-    // 1) Welcome email (now with manage + unsubscribe)
-    const { subject: welcomeSubject, html: welcomeHtml } = renderEmail(
-      "welcome",
-      { postcode, radius, manageUrl, unsubscribeUrl }
-    );
+    // 1) Welcome email
+    const {
+      subject: welcomeSubject,
+      html: welcomeHtml,
+    } = renderEmail("welcome", {
+      postcode,
+      radius,
+      manageUrl,
+      unsubscribeUrl,
+    });
+
     await sendEmailHTML(email, welcomeSubject, welcomeHtml, "welcome", {
       postcode,
       radius,
@@ -462,12 +477,11 @@ async function handleCreateWatch(req, res) {
     if (scanResult.acceptingCount > 0) {
       const practices = scanResult.accepting || [];
 
-      // If you’re using buildAcceptanceEmail in server.js:
       const { subject, html } = buildAcceptanceEmail(
         postcode,
         radius,
         practices,
-        { manageUrl, unsubscribeUrl } // safe to pass; function can ignore extra arg
+        { manageUrl, unsubscribeUrl }
       );
 
       await sendEmailHTML(email, subject, html, "alert", {
@@ -479,7 +493,7 @@ async function handleCreateWatch(req, res) {
       });
 
       console.log(
-        `[WATCH] Sent premium acceptance alert email to ${email} with ${practices.length} accepting practice(s).`
+        `[WATCH] Sent acceptance alert email to ${email} with ${practices.length} accepting practice(s).`
       );
     } else {
       console.log(
