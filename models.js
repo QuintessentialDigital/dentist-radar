@@ -54,7 +54,7 @@ const watchSchema = new mongoose.Schema(
     lastRunAt: { type: Date },
 
     // Some paths use unsubscribed instead of active=false
-    unsubscribed: { type: Boolean },
+    unsubscribedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
