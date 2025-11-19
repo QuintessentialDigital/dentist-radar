@@ -356,7 +356,8 @@ async function handleCreateWatch(req, res) {
       return res.status(400).json({ ok: false, error: "invalid_email" });
 
     if (!looksLikeUkPostcode(postcode))
-      return res.status(400).json({ ok: false, error: "invalid_postcode" });
+      return r
+         es.status(400).json({ ok: false, error: "invalid_postcode" });
 
     if (!radius || radius < 1 || radius > 30)
       return res.status(400).json({ ok: false, error: "invalid_radius" });
@@ -377,15 +378,24 @@ async function handleCreateWatch(req, res) {
 
     const watch = await Watch.create({ email, postcode, radius });
 
-    // 1) Welcome email
-    const { subject: welcomeSubject, html: welcomeHtml } = renderEmail(
-      "welcome",
-      { postcode, radius }
-    );
-    await sendEmailHTML(email, welcomeSubject, welcomeHtml, "welcome", {
-      postcode,
-      radius,
-    });
+const SITE =
+  process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
+
+const manageUrl = `${SITE}/my-alerts.html?email=${encodeURIComponent(
+  email
+)}`;
+const unsubscribeUrl = `${SITE}/unsubscribe/${watch._id}`;
+
+// 1) Welcome email
+const { subject: welcomeSubject, html: welcomeHtml } = renderEmail(
+  "welcome",
+  { postcode, radius, manageUrl, unsubscribeUrl }
+);
+await sendEmailHTML(email, welcomeSubject, welcomeHtml, "welcome", {
+  postcode,
+  radius,
+});
+
 
     // 2) Run scanner once and send premium acceptance email if any
     console.log(
