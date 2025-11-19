@@ -128,8 +128,9 @@ async function planLimitFor(email) {
  *  - immediate scan on signup
  *  - grouped cron scans (runAllScans)
  */
-function buildAcceptanceEmail(postcode, radius, practices) {
+function buildAcceptanceEmail(postcode, radius, practices, opts = {}) {
   const year = new Date().getFullYear();
+  const { manageUrl, unsubscribeUrl } = opts;
 
   const rowsHtml = practices
     .map((p) => {
@@ -185,6 +186,38 @@ function buildAcceptanceEmail(postcode, radius, practices) {
     .join("");
 
   const subject = `DentistRadar: ${practices.length} NHS dentist(s) accepting near ${postcode}`;
+
+  const manageBlock =
+    manageUrl || unsubscribeUrl
+      ? `
+        <p style="margin:14px 0 4px 0; font-size:12px; color:#4b5563; line-height:1.6;">
+          You can manage or stop these alerts at any time:
+          ${
+            manageUrl
+              ? ` <a href="${manageUrl}" style="color:#0b63ff; text-decoration:none;">Manage your alerts</a>`
+              : ""
+          }
+          ${
+            manageUrl && unsubscribeUrl
+              ? ' &nbsp;•&nbsp;'
+              : ""
+          }
+          ${
+            unsubscribeUrl
+              ? `<a href="${unsubscribeUrl}" style="color:#0b63ff; text-decoration:none;">Unsubscribe instantly</a>`
+              : ""
+          }
+        </p>
+      `
+      : "";
+
+  const englandNote = `
+    <p style="margin:6px 0 0 0; font-size:11px; color:#6b7280; line-height:1.6;">
+      DentistRadar currently supports NHS dentist searches in <strong>England</strong> only.
+      If your postcode is in Scotland, Wales or Northern Ireland, results may be incomplete
+      while we work on support for those regions.
+    </p>
+  `;
 
   const html = `<!DOCTYPE html>
 <html>
@@ -249,10 +282,13 @@ function buildAcceptanceEmail(postcode, radius, practices) {
                   appointment availability.
                 </p>
 
-                <p style="margin:8px 0 0 0; font-size:12px; color:#6b7280; line-height:1.6;">
+                <p style="margin:8px 0 8px 0; font-size:12px; color:#6b7280; line-height:1.6;">
                   This email is based on publicly available information from the NHS website at the time of scanning.
                   DentistRadar does not guarantee availability and cannot book appointments on your behalf.
                 </p>
+
+                ${manageBlock}
+                ${englandNote}
               </td>
             </tr>
 
@@ -276,6 +312,7 @@ function buildAcceptanceEmail(postcode, radius, practices) {
 
   return { subject, html };
 }
+
 
 /* ---------------------------
    Health / Debug
@@ -366,22 +403,37 @@ async function handleCreateWatch(req, res) {
       });
     }
 
-    if (scanResult.acceptingCount > 0) {
-      const practices = scanResult.accepting || [];
-      const { subject, html } = buildAcceptanceEmail(
-        postcode,
-        radius,
-        practices
-      );
+     if (scanResult.acceptingCount > 0) {
+  const practices = scanResult.accepting || [];
 
-      await sendEmailHTML(email, subject, html, "alert", {
-        postcode,
-        radius,
-        acceptingCount: practices.length,
-        watchId: watch._id,
-        runMode: "signup",
-      });
+  const SITE =
+    process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
 
+  const manageUrl = `${SITE}/my-alerts.html?email=${encodeURIComponent(
+    email
+  )}`;
+  const unsubscribeUrl = `${SITE}/unsubscribe/${watch._id}`;
+
+  const { subject, html } = buildAcceptanceEmail(
+    postcode,
+    radius,
+    practices,
+    { manageUrl, unsubscribeUrl }
+  );
+
+  await sendEmailHTML(email, subject, html, "alert", {
+    postcode,
+    radius,
+    acceptingCount: practices.length,
+    watchId: watch._id,
+    runMode: "signup",
+  });
+
+  console.log(
+    `[WATCH] Sent premium acceptance alert email to ${email} with ${practices.length} accepting practice(s).`
+  );
+
+    
       console.log(
         `[WATCH] Sent premium acceptance alert email to ${email} with ${practices.length} accepting practice(s).`
       );
@@ -540,81 +592,89 @@ async function runAllScans({ dryRun = false } = {}) {
       continue;
     }
 
-    const practices = scan.accepting || [];
-    const acceptingCount = practices.length;
+  const practices = scan.accepting || [];
+const acceptingCount = practices.length;
 
-    if (acceptingCount === 0) {
-      console.log(
-        `[CRON] No accepting practices for ${key} – skipping emails.`
-      );
-      results.push({
-        key,
-        postcode,
-        radius,
-        watches: groupWatches.length,
-        acceptingCount,
-        emailsSent: 0,
-        reason: "no_accepting",
-      });
-      continue;
-    }
+if (acceptingCount === 0) {
+  console.log(
+    `[CRON] No accepting practices for ${key} – skipping emails.`
+  );
+  results.push({
+    key,
+    postcode,
+    radius,
+    watches: groupWatches.length,
+    acceptingCount,
+    emailsSent: 0,
+    reason: "no_accepting",
+  });
+  continue;
+}
+
+for (const w of groupWatches) {
+  const email = normEmail(w.email || "");
+  if (!emailRe.test(email)) continue;
+
+  // Check last alert in last 12 hours for this email+postcode+radius
+  const lastAlert = await EmailLog.findOne({
+    to: email,
+    type: "alert",
+    "meta.postcode": postcode,
+    "meta.radius": radius,
+  })
+    .sort({ sentAt: -1 })
+    .lean();
+
+  const now = Date.now();
+  const twelveHoursMs = 12 * 60 * 60 * 1000;
+  if (
+    lastAlert &&
+    lastAlert.sentAt &&
+    now - new Date(lastAlert.sentAt).getTime() < twelveHoursMs
+  ) {
+    totalSkippedRecent++;
+    continue;
+  }
+
+  if (dryRun) {
+    results.push({
+      key,
+      postcode,
+      radius,
+      email,
+      acceptingCount,
+      wouldSend: true,
+    });
+  } else {
+    const SITE =
+      process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
+
+    const manageUrl = `${SITE}/my-alerts.html?email=${encodeURIComponent(
+      email
+    )}`;
+    const unsubscribeUrl = `${SITE}/unsubscribe/${w._id}`;
 
     const { subject, html } = buildAcceptanceEmail(
       postcode,
       radius,
-      practices
+      practices,
+      { manageUrl, unsubscribeUrl }
     );
 
-    for (const w of groupWatches) {
-      const email = normEmail(w.email || "");
-      if (!emailRe.test(email)) continue;
-
-      // Check last alert in last 12 hours for this email+postcode+radius
-      const lastAlert = await EmailLog.findOne({
-        to: email,
-        type: "alert",
-        "meta.postcode": postcode,
-        "meta.radius": radius,
-      })
-        .sort({ sentAt: -1 })
-        .lean();
-
-      const now = Date.now();
-      const twelveHoursMs = 12 * 60 * 60 * 1000;
-      if (
-        lastAlert &&
-        lastAlert.sentAt &&
-        now - new Date(lastAlert.sentAt).getTime() < twelveHoursMs
-      ) {
-        totalSkippedRecent++;
-        continue;
-      }
-
-      if (dryRun) {
-        // For dryRun, do not send – just record that it WOULD send
-        results.push({
-          key,
-          postcode,
-          radius,
-          email,
-          acceptingCount,
-          wouldSend: true,
-        });
-      } else {
-        const meta = {
-          postcode,
-          radius,
-          acceptingCount,
-          watchId: w._id,
-          runMode: "cron",
-        };
-        await sendEmailHTML(email, subject, html, "alert", meta);
-        totalEmails++;
-        console.log(
-          `[CRON] Sent acceptance alert to ${email} for ${key} with ${acceptingCount} practice(s).`
-        );
-      }
-    }
+    const meta = {
+      postcode,
+      radius,
+      acceptingCount,
+      watchId: w._id,
+      runMode: "cron",
+    };
+    await sendEmailHTML(email, subject, html, "alert", meta);
+    totalEmails++;
+    console.log(
+      `[CRON] Sent acceptance alert to ${email} for ${key} with ${acceptingCount} practice(s).`
+    );
+  }
+}
   }
 
   const tookMs = Date.now() - started;
