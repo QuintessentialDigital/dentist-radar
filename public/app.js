@@ -36,7 +36,7 @@
   form?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const email = form.email.value.trim();
-    const postcode = form.postcode.value.trim();
+    const postcode = form.postcode.value.trim().toUpperCase(); // <- small tweak
     const r = form.radius.value.trim();
 
     if (!email || !postcode || !r) {
@@ -70,6 +70,16 @@
         form.reset();
         return;
       }
+
+      // 🔒 New: handle non-England postcodes nicely
+      if (data.error === "unsupported_region") {
+        const text =
+          data.message ||
+          "DentistRadar currently supports NHS dentist searches in England only. Support for Scotland, Wales and Northern Ireland will be added in future.";
+        showMessage(`⚠ ${text}`, "warn");
+        return;
+      }
+
       if (data.error === "invalid_postcode") {
         showMessage(
           "❌ Please enter a valid UK postcode (e.g. RG1 2AB).",
