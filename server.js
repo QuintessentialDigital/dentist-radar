@@ -535,11 +535,10 @@ app.get("/api/watch/list", async (req, res) => {
     const email = normEmail(req.query.email || "");
     if (!emailRe.test(email))
       return res.status(400).json({ ok: false, error: "invalid_email" });
-
-    const watches = await Watch.find({ email })
+     const watches = await Watch.find({ email, active: { $ne: false } })
       .sort({ createdAt: -1 })
       .lean();
-    res.json({ ok: true, email, watches });
+      res.json({ ok: true, email, watches });
   } catch (e) {
     res.status(500).json({ ok: false, error: "server_error" });
   }
@@ -616,7 +615,7 @@ app.get("/api/scan", async (req, res) => {
  */
 async function runAllScans({ dryRun = false } = {}) {
   const started = Date.now();
-  const watches = await Watch.find({}).lean();
+  const watches = await Watch.find({ active: true }).lean();
   const groups = new Map();
 
   for (const w of watches) {
@@ -929,22 +928,29 @@ function renderUnsubscribePage(success, infoText) {
 app.get("/unsubscribe", async (req, res) => {
   try {
     const id = req.query.alertId || req.query.alert;
-    if (!id)
+    if (!id) {
       return res
         .status(400)
         .send(
           renderUnsubscribePage(false, "Invalid unsubscribe link.")
         );
+    }
 
-    const deleted = await Watch.findByIdAndDelete(id);
-    if (!deleted)
+    const updated = await Watch.findByIdAndUpdate(
+      id,
+      { active: false, unsubscribedAt: new Date() },
+      { new: true }
+    );
+
+    if (!updated) {
       return res
         .status(404)
         .send(
           renderUnsubscribePage(false, "Alert not found.")
         );
+    }
 
-    const pc = deleted.postcode || "";
+    const pc = updated.postcode || "";
     return res.send(
       renderUnsubscribePage(
         true,
@@ -966,16 +972,21 @@ app.get("/unsubscribe", async (req, res) => {
 app.get("/unsubscribe/:id", async (req, res) => {
   try {
     const id = req.params.id;
-    const deleted = await Watch.findByIdAndDelete(id);
+    const updated = await Watch.findByIdAndUpdate(
+      id,
+      { active: false, unsubscribedAt: new Date() },
+      { new: true }
+    );
 
-    if (!deleted)
+    if (!updated) {
       return res
         .status(404)
         .send(
           renderUnsubscribePage(false, "Alert not found.")
         );
-    const pc = deleted.postcode || "";
+    }
 
+    const pc = updated.postcode || "";
     return res.send(
       renderUnsubscribePage(
         true,
@@ -993,6 +1004,7 @@ app.get("/unsubscribe/:id", async (req, res) => {
       );
   }
 });
+
 
 /* ---------------------------
    SPA Fallback
