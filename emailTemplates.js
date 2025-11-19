@@ -54,13 +54,56 @@ function rowPractice(p, idx) {
   `;
 }
 
+/* Small shared helper for manage/unsubscribe + England note */
+
+function manageFooter({ manageUrl, unsubscribeUrl }) {
+  const hasManage = !!manageUrl;
+  const hasUnsub = !!unsubscribeUrl;
+
+  const links =
+    hasManage || hasUnsub
+      ? `
+        <p style="margin:10px 0 4px;color:#555;font-size:12px;">
+          You can manage or stop your alerts at any time:
+          ${
+            hasManage
+              ? ` <a href="${esc(manageUrl)}" style="color:#0b57d0;text-decoration:none;">Manage your alerts</a>`
+              : ""
+          }
+          ${
+            hasManage && hasUnsub
+              ? " &nbsp;•&nbsp; "
+              : ""
+          }
+          ${
+            hasUnsub
+              ? `<a href="${esc(unsubscribeUrl)}" style="color:#0b57d0;text-decoration:none;">Unsubscribe instantly</a>`
+              : ""
+          }
+        </p>
+      `
+      : "";
+
+  const englandNote = `
+    <p style="margin:4px 0 0;color:#666;font-size:11px;">
+      DentistRadar currently supports NHS dentist searches in <b>England</b> only.
+      If your postcode is in Scotland, Wales or Northern Ireland, results may be incomplete
+      while we work on support for those regions.
+    </p>
+  `;
+
+  return links + englandNote;
+}
+
 /* ───────── Availability email ───────── */
 
-function availabilityEmail({ postcode, radius, practices, scannedAt }) {
+function availabilityEmail({ postcode, radius, practices, scannedAt, manageUrl, unsubscribeUrl }) {
   const count = practices.length;
   const when = new Date(scannedAt || Date.now()).toLocaleString("en-GB", { hour12: false });
 
   const rows = practices.map((p, i) => rowPractice(p, i + 1)).join("");
+
+  const footerExtras = manageFooter({ manageUrl, unsubscribeUrl });
 
   const html = `
   <div style="background:#f3f5f9;padding:16px 0">
@@ -104,9 +147,11 @@ function availabilityEmail({ postcode, radius, practices, scannedAt }) {
           Availability can change quickly. Please always call the practice before travelling, and confirm that NHS registrations are still open.
         </p>
 
-        <hr style="border:0;border-top:1px solid #edf0f5;margin:16px 0 10px">
+        <hr style="border:0;border-top:1px solid #edf0f5;margin:16px 0 8px">
 
-        <p style="margin:0 0 4px;color:#858b93;font-size:11px;">
+        ${footerExtras}
+
+        <p style="margin:6px 0 0;color:#858b93;font-size:11px;">
           You’re receiving this alert because you set up an NHS dentist watch for <b>${esc(postcode)}</b> on DentistRadar.
         </p>
       </div>
@@ -118,7 +163,9 @@ function availabilityEmail({ postcode, radius, practices, scannedAt }) {
 
 /* ───────── Welcome email ───────── */
 
-function welcomeEmail({ postcode, radius }) {
+function welcomeEmail({ postcode, radius, manageUrl, unsubscribeUrl }) {
+  const footerExtras = manageFooter({ manageUrl, unsubscribeUrl });
+
   const html = `
   <div style="background:#f3f5f9;padding:16px 0">
     <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:8px;border:1px solid #dde2ec;overflow:hidden;font:14px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#111;-webkit-font-smoothing:antialiased">
@@ -178,7 +225,9 @@ function welcomeEmail({ postcode, radius }) {
 
         <hr style="border:0;border-top:1px solid #edf0f5;margin:16px 0 8px">
 
-        <p style="margin:0 0 4px;color:#858b93;font-size:11px;">
+        ${footerExtras}
+
+        <p style="margin:6px 0 0;color:#858b93;font-size:11px;">
           You’re receiving this email because you created an NHS dentist alert on DentistRadar for <b>${esc(postcode)}</b>.
         </p>
       </div>
