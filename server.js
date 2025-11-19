@@ -356,8 +356,7 @@ async function handleCreateWatch(req, res) {
       return res.status(400).json({ ok: false, error: "invalid_email" });
 
     if (!looksLikeUkPostcode(postcode))
-      return r
-         es.status(400).json({ ok: false, error: "invalid_postcode" });
+      return res.status(400).json({ ok: false, error: "invalid_postcode" });
 
     if (!radius || radius < 1 || radius > 30)
       return res.status(400).json({ ok: false, error: "invalid_radius" });
@@ -378,26 +377,26 @@ async function handleCreateWatch(req, res) {
 
     const watch = await Watch.create({ email, postcode, radius });
 
-const SITE =
-  process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
+    // 👇 Add these lines (with encodeURIComponent, not es / esc)
+    const SITE =
+      process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
 
-const manageUrl = `${SITE}/my-alerts.html?email=${encodeURIComponent(
-  email
-)}`;
-const unsubscribeUrl = `${SITE}/unsubscribe/${watch._id}`;
+    const manageUrl = `${SITE}/my-alerts.html?email=${encodeURIComponent(
+      email
+    )}`;
+    const unsubscribeUrl = `${SITE}/unsubscribe/${watch._id}`;
 
-// 1) Welcome email
-const { subject: welcomeSubject, html: welcomeHtml } = renderEmail(
-  "welcome",
-  { postcode, radius, manageUrl, unsubscribeUrl }
-);
-await sendEmailHTML(email, welcomeSubject, welcomeHtml, "welcome", {
-  postcode,
-  radius,
-});
+    // 1) Welcome email (now with manage + unsubscribe)
+    const { subject: welcomeSubject, html: welcomeHtml } = renderEmail(
+      "welcome",
+      { postcode, radius, manageUrl, unsubscribeUrl }
+    );
+    await sendEmailHTML(email, welcomeSubject, welcomeHtml, "welcome", {
+      postcode,
+      radius,
+    });
 
-
-    // 2) Run scanner once and send premium acceptance email if any
+    // 2) Run scanner once and send acceptance email if any
     console.log(
       `[WATCH] Running immediate scan for ${email} – ${postcode} (${radius}mi)`
     );
@@ -406,44 +405,31 @@ await sendEmailHTML(email, welcomeSubject, welcomeHtml, "welcome", {
       scanResult = await scanPostcode(postcode, radius);
     } catch (err) {
       console.error("[WATCH] scanPostcode error:", err?.message || err);
-      // Don't break signup if scan fails; just return success without alert
       return res.json({
         ok: true,
         message: "Alert created (scan failed, no acceptance email).",
       });
     }
 
-     if (scanResult.acceptingCount > 0) {
-  const practices = scanResult.accepting || [];
+    if (scanResult.acceptingCount > 0) {
+      const practices = scanResult.accepting || [];
 
-  const SITE =
-    process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
+      // If you’re using buildAcceptanceEmail in server.js:
+      const { subject, html } = buildAcceptanceEmail(
+        postcode,
+        radius,
+        practices,
+        { manageUrl, unsubscribeUrl } // safe to pass; function can ignore extra arg
+      );
 
-  const manageUrl = `${SITE}/my-alerts.html?email=${encodeURIComponent(
-    email
-  )}`;
-  const unsubscribeUrl = `${SITE}/unsubscribe/${watch._id}`;
+      await sendEmailHTML(email, subject, html, "alert", {
+        postcode,
+        radius,
+        acceptingCount: practices.length,
+        watchId: watch._id,
+        runMode: "signup",
+      });
 
-  const { subject, html } = buildAcceptanceEmail(
-    postcode,
-    radius,
-    practices,
-    { manageUrl, unsubscribeUrl }
-  );
-
-  await sendEmailHTML(email, subject, html, "alert", {
-    postcode,
-    radius,
-    acceptingCount: practices.length,
-    watchId: watch._id,
-    runMode: "signup",
-  });
-
-  console.log(
-    `[WATCH] Sent premium acceptance alert email to ${email} with ${practices.length} accepting practice(s).`
-  );
-
-    
       console.log(
         `[WATCH] Sent premium acceptance alert email to ${email} with ${practices.length} accepting practice(s).`
       );
@@ -467,6 +453,7 @@ await sendEmailHTML(email, welcomeSubject, welcomeHtml, "welcome", {
     return res.status(500).json({ ok: false, error: "server_error" });
   }
 }
+
 
 /* ---------------------------
    Create Watch routes (old + new)
