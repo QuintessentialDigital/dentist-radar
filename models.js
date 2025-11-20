@@ -55,6 +55,8 @@ const watchSchema = new mongoose.Schema(
 
     // Some paths use unsubscribed instead of active=false
     unsubscribedAt: { type: Date, default: null },
+    foundDentist: { type: Boolean, default: null },
+
   },
   { timestamps: true }
 );
