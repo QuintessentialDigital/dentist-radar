@@ -1009,7 +1009,7 @@ app.post("/api/stripe/webhook", async (req, res) => {
 /* ---------------------------
    Unsubscribe Routes
 --------------------------- */
-function renderUnsubscribePage(success, infoText) {
+function renderUnsubscribePage(success, infoText, watchId, thankYou) {
   const title = success ? "You have been unsubscribed" : "Unsubscribe";
   const body = infoText;
 
@@ -1029,6 +1029,30 @@ function renderUnsubscribePage(success, infoText) {
     `
     : "";
 
+  const feedbackBlock =
+    success && watchId
+      ? `
+        <hr style="border:0;border-top:1px solid #e5e7eb;margin:16px 0 10px;">
+        <p style="font-size:13px;color:#4b5563;line-height:1.6;">
+          Quick question (optional): did DentistRadar help you find an NHS dentist?
+        </p>
+        <p style="font-size:12px;line-height:1.6;">
+          <a href="/unsubscribe?alertId=${watchId}&found=yes"
+             style="color:#2563eb;text-decoration:none;">Yes, I found a dentist</a>
+          &nbsp;·&nbsp;
+          <a href="/unsubscribe?alertId=${watchId}&found=no"
+             style="color:#2563eb;text-decoration:none;">Not yet</a>
+        </p>
+        ${
+          thankYou
+            ? `<p style="font-size:11px;color:#6b7280;line-height:1.5;margin-top:6px;">
+                 Thanks, this helps us understand how useful DentistRadar is.
+               </p>`
+            : ""
+        }
+      `
+      : "";
+
   return `
     <html>
       <body style="font-family:system-ui;background:#fafafa;padding:40px;">
@@ -1036,6 +1060,7 @@ function renderUnsubscribePage(success, infoText) {
           <h1>${title}</h1>
           <p>${body}</p>
           ${shareBlock}
+          ${feedbackBlock}
           <a href="/" style="padding:10px 18px;background:#0b63ff;color:#fff;border-radius:8px;text-decoration:none;">Back</a>
         </div>
       </body>
@@ -1043,84 +1068,83 @@ function renderUnsubscribePage(success, infoText) {
   `;
 }
 
+
+
 app.get("/unsubscribe", async (req, res) => {
   try {
-    const id = req.query.alertId || req.query.alert;
+    const id = req.query.alertId || req.query.alert || req.query.id;
+    const found = (req.query.found || "").toLowerCase();
+
     if (!id) {
       return res
         .status(400)
         .send(
-          renderUnsubscribePage(false, "Invalid unsubscribe link.")
+          renderUnsubscribePage(false, "Invalid unsubscribe link.", "", false)
         );
     }
 
-    const updated = await Watch.findByIdAndUpdate(
-      id,
-      { active: false, unsubscribedAt: new Date() },
-      { new: true }
-    );
-
-    if (!updated) {
+    const watch = await Watch.findById(id);
+    if (!watch) {
       return res
         .status(404)
         .send(
-          renderUnsubscribePage(false, "Alert not found.")
+          renderUnsubscribePage(false, "Alert not found.", "", false)
         );
     }
 
+    const update = {};
+    const alreadyUnsubscribed = watch.active === false;
+
+    // Soft delete if not already unsubscribed
+    if (!alreadyUnsubscribed) {
+      update.active = false;
+      update.unsubscribedAt = new Date();
+    }
+
+    // Record feedback if provided
+    if (found === "yes") {
+      update.foundDentist = true;
+    } else if (found === "no") {
+      update.foundDentist = false;
+    }
+
+    let updated = watch;
+    if (Object.keys(update).length > 0) {
+      updated = await Watch.findByIdAndUpdate(
+        id,
+        { $set: update },
+        { new: true }
+      );
+    }
+
     const pc = updated.postcode || "";
+    const infoText = `You will no longer receive alerts for <strong>${pc}</strong>.`;
+    const thankYou = found === "yes" || found === "no";
+
     return res.send(
-      renderUnsubscribePage(
-        true,
-        `You will no longer receive alerts for <strong>${pc}</strong>.`
-      )
+      renderUnsubscribePage(true, infoText, id, thankYou)
     );
   } catch (e) {
+    console.error("unsubscribe error:", e);
     return res
       .status(500)
       .send(
-        renderUnsubscribePage(
-          false,
-          "Something went wrong."
-        )
+        renderUnsubscribePage(false, "Something went wrong.", "", false)
       );
   }
 });
 
-app.get("/unsubscribe/:id", async (req, res) => {
-  try {
-    const id = req.params.id;
-    const updated = await Watch.findByIdAndUpdate(
-      id,
-      { active: false, unsubscribedAt: new Date() },
-      { new: true }
-    );
-
-    if (!updated) {
-      return res
-        .status(404)
-        .send(
-          renderUnsubscribePage(false, "Alert not found.")
-        );
-    }
-
-    const pc = updated.postcode || "";
-    return res.send(
-      renderUnsubscribePage(
-        true,
-        `You will no longer receive alerts for <strong>${pc}</strong>.`
-      )
-    );
-  } catch (e) {
+app.get("/unsubscribe/:id", (req, res) => {
+  const id = req.params.id;
+  if (!id) {
     return res
-      .status(500)
+      .status(400)
       .send(
-        renderUnsubscribePage(
-          false,
-          "Something went wrong."
-        )
+        renderUnsubscribePage(false, "Invalid unsubscribe link.", "", false)
       );
   }
+  const url = `/unsubscribe?alertId=${encodeURIComponent(id)}`;
+  return res.redirect(url);
 });
 
 
