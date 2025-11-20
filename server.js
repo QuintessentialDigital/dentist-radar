@@ -1034,7 +1034,7 @@ function renderUnsubscribePage(success, infoText, watchId, thankYou) {
       ? `
         <hr style="border:0;border-top:1px solid #e5e7eb;margin:16px 0 10px;">
         <p style="font-size:13px;color:#4b5563;line-height:1.6;">
-          Quick question (optional): did DentistRadar help you find an NHS dentist?
+          Quick question (optional): Did DentistRadar help you find an NHS dentist?
         </p>
         <p style="font-size:12px;line-height:1.6;">
           <a href="/unsubscribe?alertId=${watchId}&found=yes"
