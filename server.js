@@ -317,11 +317,7 @@ function buildAcceptanceEmail(postcode, radius, practices, opts = {}) {
                   This email is based on publicly available information from the NHS website at the time of scanning.
                   DentistRadar does not guarantee availability and cannot book appointments on your behalf.
                 </p>
-
-                <p style="margin:18px 0 4px 0; font-size:13px; color:#4b5563; line-height:1.6;">
-                    If this alert helps you, please consider sharing DentistRadar with others who are struggling to find an NHS dentist.
-                </p>
-                
+ 
                 <!-- Share block -->
                 <p style="margin:18px 0 4px 0; font-size:13px; color:#4b5563; line-height:1.6;">
                   If this alert helps you, please consider sharing DentistRadar with others who are struggling to find an NHS dentist.
