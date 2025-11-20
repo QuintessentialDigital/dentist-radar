@@ -850,30 +850,44 @@ app.get("/api/admin/stats", async (req, res) => {
 
     const totalUsers = await User.countDocuments();
     const totalWatches = await Watch.countDocuments();
-  
+
     const activeWatches = await Watch.countDocuments({
-      active: { $ne: false }
+      active: { $ne: false },
     });
     const inactiveWatches = totalWatches - activeWatches;
-  
+
     const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  
+
     const signups24h = await Watch.countDocuments({
-      createdAt: { $gte: last24h }
+      createdAt: { $gte: last24h },
     });
-  
+
     const unsub24h = await Watch.countDocuments({
       active: false,
-      unsubscribedAt: { $gte: last24h }
+      unsubscribedAt: { $gte: last24h },
     });
-  
+
     const topPostcodes = await Watch.aggregate([
       { $match: { active: { $ne: false } } },
       { $group: { _id: "$postcode", count: { $sum: 1 } } },
       { $sort: { count: -1 } },
-      { $limit: 15 }
+      { $limit: 15 },
     ]);
-  
+
+    // 🔹 Success / feedback metrics
+    const foundYesTotal = await Watch.countDocuments({ foundDentist: true });
+    const foundNoTotal = await Watch.countDocuments({ foundDentist: false });
+
+    const unsubWithFeedback = await Watch.countDocuments({
+      active: false,
+      foundDentist: { $ne: null },
+    });
+
+    const successRate =
+      unsubWithFeedback > 0
+        ? (foundYesTotal / unsubWithFeedback) * 100
+        : 0;
+
     return res.json({
       ok: true,
       totalUsers,
@@ -882,7 +896,11 @@ app.get("/api/admin/stats", async (req, res) => {
       inactiveWatches,
       signups24h,
       unsub24h,
-      topPostcodes
+      topPostcodes,
+      foundYesTotal,
+      foundNoTotal,
+      unsubWithFeedback,
+      successRate, // percent (0–100)
     });
   } catch (err) {
     console.error("admin/stats error:", err?.message || err);
