@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>DentistRadar Admin Test</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 20px;
+      background: #f3f4f6;
+    }
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+    input {
+      padding: 6px 8px;
+      font-size: 14px;
+      width: 320px;
+      max-width: 100%;
+    }
+    button {
+      margin-top: 8px;
+      padding: 8px 14px;
+      font-size: 14px;
+      border-radius: 6px;
+      border: none;
+      background: #0b63ff;
+      color: #fff;
+      cursor: pointer;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    pre {
+      margin-top: 16px;
+      padding: 12px;
+      background: #111827;
+      color: #e5e7eb;
+      border-radius: 6px;
+      max-width: 100%;
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <h1>DentistRadar – Run All Scans (dryRun)</h1>
+
+  <label>
+    Admin token:<br>
+    <input id="token" type="text" placeholder="Enter ADMIN_TOKEN value">
+  </label>
+  <button id="runBtn">Run dryRun</button>
+
+  <pre id="output">No request made yet.</pre>
+
+  <script>
+    const btn = document.getElementById("runBtn");
+    const tokenInput = document.getElementById("token");
+    const output = document.getElementById("output");
+
+    btn.addEventListener("click", async () => {
+      const token = tokenInput.value.trim();
+      if (!token) {
+        output.textContent = "Please enter your ADMIN_TOKEN.";
+        return;
+      }
+
+      btn.disabled = true;
+      output.textContent = "Running dryRun… please wait.";
+
+      try {
+        const res = await fetch(`/api/admin/run-all-scans?token=${encodeURIComponent(token)}&dryRun=true`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({})
+        });
+
+        const data = await res.json();
+        output.textContent = JSON.stringify(data, null, 2);
+      } catch (err) {
+        console.error(err);
+        output.textContent = "Error: " + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
