@@ -322,15 +322,15 @@ function buildAcceptanceEmail(postcode, radius, practices, opts = {}) {
                     If this alert helps you, please consider sharing DentistRadar with others who are struggling to find an NHS dentist.
                 </p>
                 
+                <!-- Share block -->
+                <p style="margin:18px 0 4px 0; font-size:13px; color:#4b5563; line-height:1.6;">
+                  If this alert helps you, please consider sharing DentistRadar with others who are struggling to find an NHS dentist.
+                </p>
                 <p style="margin:4px 0 0 0; font-size:12px; color:#2563eb; line-height:1.6;">
-                    <a href="https://wa.me/?text=${encodeURIComponent(
-                      "I found an NHS dentist using DentistRadar – it emails you when local NHS practices start accepting patients. Try it: https://www.dentistradar.co.uk"
-                    )}" style="color:#2563eb; text-decoration:none;">Share on WhatsApp</a>
-                    &nbsp;·&nbsp;
-                    <a href="https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(
-                      "https://www.dentistradar.co.uk"
-                       )}" style="color:#2563eb; text-decoration:none;">Share on Facebook</a>
-                 </p>
+                  <a href="https://wa.me/?text=I%20found%20an%20NHS%20dentist%20using%20DentistRadar%20%E2%80%93%20it%20emails%20you%20when%20local%20NHS%20practices%20start%20accepting%20patients.%20Try%20it:%20https://www.dentistradar.co.uk" style="color:#2563eb; text-decoration:none;">Share on WhatsApp</a>
+                  &nbsp;·&nbsp;
+                  <a href="https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fwww.dentistradar.co.uk" style="color:#2563eb; text-decoration:none;">Share on Facebook</a>
+                </p>
 
                 ${manageBlock}
                 ${englandNote}
@@ -1010,10 +1010,24 @@ app.post("/api/stripe/webhook", async (req, res) => {
    Unsubscribe Routes
 --------------------------- */
 function renderUnsubscribePage(success, infoText) {
-  const title = success
-    ? "You have been unsubscribed"
-    : "Unsubscribe";
+  const title = success ? "You have been unsubscribed" : "Unsubscribe";
   const body = infoText;
+
+  const shareBlock = success
+    ? `
+      <hr style="border:0;border-top:1px solid #e5e7eb;margin:16px 0 10px;">
+      <p style="font-size:13px;color:#4b5563;line-height:1.6;">
+        If DentistRadar helped you find an NHS dentist, you can help others by sharing it in your local groups.
+      </p>
+      <p style="font-size:12px;line-height:1.6;">
+        <a href="https://wa.me/?text=I%20found%20an%20NHS%20dentist%20using%20DentistRadar%20%E2%80%93%20it%20emails%20you%20when%20local%20NHS%20practices%20start%20accepting%20patients.%20Try%20it:%20https://www.dentistradar.co.uk"
+           style="color:#2563eb;text-decoration:none;">Share on WhatsApp</a>
+        &nbsp;·&nbsp;
+        <a href="https://www.facebook.com/sharer/sharer.php?u=https%3A%2F%2Fwww.dentistradar.co.uk"
+           style="color:#2563eb;text-decoration:none;">Share on Facebook</a>
+      </p>
+    `
+    : "";
 
   return `
     <html>
@@ -1021,6 +1035,7 @@ function renderUnsubscribePage(success, infoText) {
         <div style="max-width:480px;margin:auto;background:#fff;border-radius:10px;padding:25px;border:1px solid #eee;">
           <h1>${title}</h1>
           <p>${body}</p>
+          ${shareBlock}
           <a href="/" style="padding:10px 18px;background:#0b63ff;color:#fff;border-radius:8px;text-decoration:none;">Back</a>
         </div>
       </body>
