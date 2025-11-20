@@ -375,6 +375,9 @@ app.get("/api/debug/peek", async (req, res) => {
 /* ---------------------------
    Shared Watch Creation Handler
 --------------------------- */
+/* ---------------------------
+   Shared Watch Creation Handler
+--------------------------- */
 async function handleCreateWatch(req, res) {
   try {
     const rawEmail = req.body?.email;
@@ -416,15 +419,24 @@ async function handleCreateWatch(req, res) {
       });
     }
 
-    // Duplicate & plan limit checks
-    const exists = await Watch.findOne({ email, postcode }).lean();
-    if (exists) {
+    // 1) Check for an *active* watch with same email+postcode
+    const existingActive = await Watch.findOne({
+      email,
+      postcode,
+      active: { $ne: false }, // treat missing or true as active
+    }).lean();
+
+    if (existingActive) {
       return res.status(400).json({ ok: false, error: "duplicate" });
     }
 
+    // 2) Plan limit should only count *active* watches
     const limit = await planLimitFor(email);
-    const count = await Watch.countDocuments({ email });
-    if (count >= limit) {
+    const activeCount = await Watch.countDocuments({
+      email,
+      active: { $ne: false },
+    });
+    if (activeCount >= limit) {
       return res.status(402).json({
         ok: false,
         error: "upgrade_required",
@@ -432,8 +444,28 @@ async function handleCreateWatch(req, res) {
       });
     }
 
-    // ✅ Only here do we actually create the watch
-    const watch = await Watch.create({ email, postcode, radius });
+    // 3) If there's an inactive (unsubscribed) watch, reactivate it; otherwise create new
+    let watch = await Watch.findOne({
+      email,
+      postcode,
+      active: false,
+    });
+
+    if (watch) {
+      watch = await Watch.findByIdAndUpdate(
+        watch._id,
+        { active: true, unsubscribedAt: null, radius },
+        { new: true }
+      );
+      console.log(
+        `[WATCH] Reactivated existing watch ${watch._id} for ${email} – ${postcode} (${radius}mi)`
+      );
+    } else {
+      watch = await Watch.create({ email, postcode, radius });
+      console.log(
+        `[WATCH] Created new watch ${watch._id} for ${email} – ${postcode} (${radius}mi)`
+      );
+    }
 
     const SITE =
       process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
@@ -443,7 +475,7 @@ async function handleCreateWatch(req, res) {
     )}`;
     const unsubscribeUrl = `${SITE}/unsubscribe/${watch._id}`;
 
-    // 1) Welcome email
+    // 4) Welcome email
     const {
       subject: welcomeSubject,
       html: welcomeHtml,
@@ -457,9 +489,10 @@ async function handleCreateWatch(req, res) {
     await sendEmailHTML(email, welcomeSubject, welcomeHtml, "welcome", {
       postcode,
       radius,
+      watchId: watch._id,
     });
 
-    // 2) Run scanner once and send acceptance email if any
+    // 5) Run scanner once and send acceptance email if any
     console.log(
       `[WATCH] Running immediate scan for ${email} – ${postcode} (${radius}mi)`
     );
@@ -515,6 +548,7 @@ async function handleCreateWatch(req, res) {
     return res.status(500).json({ ok: false, error: "server_error" });
   }
 }
+
 
 
 /* ---------------------------
