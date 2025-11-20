@@ -318,6 +318,20 @@ function buildAcceptanceEmail(postcode, radius, practices, opts = {}) {
                   DentistRadar does not guarantee availability and cannot book appointments on your behalf.
                 </p>
 
+                <p style="margin:18px 0 4px 0; font-size:13px; color:#4b5563; line-height:1.6;">
+                    If this alert helps you, please consider sharing DentistRadar with others who are struggling to find an NHS dentist.
+                </p>
+                
+                <p style="margin:4px 0 0 0; font-size:12px; color:#2563eb; line-height:1.6;">
+                    <a href="https://wa.me/?text=${encodeURIComponent(
+                      "I found an NHS dentist using DentistRadar – it emails you when local NHS practices start accepting patients. Try it: https://www.dentistradar.co.uk"
+                    )}" style="color:#2563eb; text-decoration:none;">Share on WhatsApp</a>
+                    &nbsp;·&nbsp;
+                    <a href="https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(
+                      "https://www.dentistradar.co.uk"
+                       )}" style="color:#2563eb; text-decoration:none;">Share on Facebook</a>
+                 </p>
+
                 ${manageBlock}
                 ${englandNote}
               </td>
