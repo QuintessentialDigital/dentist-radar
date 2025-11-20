@@ -1,219 +1,359 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>DentistRadar – My Alerts</title>
+  <meta charset="utf-8" />
+  <title>My Alerts – DentistRadar</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
+    :root {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color-scheme: light;
+    }
     body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f3f4f6;
       margin: 0;
-      padding: 24px 12px;
+      background:#f3f4f6;
     }
-    .container {
-      max-width: 720px;
-      margin: 0 auto;
-      background: #fff;
-      border-radius: 14px;
-      padding: 24px;
-      box-shadow: 0 10px 25px rgba(15,23,42,0.08);
-      border: 1px solid #e5e7eb;
+    header {
+      background:#0b63ff;
+      color:#ffffff;
+      padding:14px 18px;
     }
-    h1 {
-      margin-top: 0;
-      font-size: 1.5rem;
-      color: #111827;
+    header .inner {
+      max-width:900px;
+      margin:0 auto;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:10px;
     }
-    p {
-      font-size: 0.95rem;
-      color: #4b5563;
+    header h1 {
+      margin:0;
+      font-size:18px;
     }
-    .banner {
-      background:#fff7d6;
-      border:1px solid #f0e1a0;
-      border-radius:10px;
-      padding:8px 12px;
+    header a {
+      color:#e5e7eb;
+      text-decoration:none;
       font-size:13px;
-      color:#7a5a00;
-      margin-bottom:16px;
     }
+    main {
+      max-width:900px;
+      margin:18px auto 32px;
+      padding:0 16px;
+    }
+    h2 {
+      margin:0 0 8px;
+      font-size:18px;
+    }
+    .muted {
+      color:#6b7280;
+      font-size:13px;
+    }
+
+    .card {
+      background:#ffffff;
+      border-radius:12px;
+      padding:16px 18px;
+      border:1px solid #e5e7eb;
+      box-shadow:0 8px 20px rgba(15,23,42,0.05);
+      margin-top:16px;
+    }
+
     label {
+      font-size:13px;
       display:block;
-      margin-top:8px;
-      font-size:0.9rem;
-      font-weight:600;
+      margin-bottom:4px;
     }
     input[type="email"] {
       width:100%;
+      max-width:320px;
       padding:8px 10px;
       border-radius:8px;
       border:1px solid #d1d5db;
-      font-size:0.95rem;
-      margin-top:4px;
+      font-size:14px;
     }
     button {
+      padding:8px 14px;
       border-radius:999px;
       border:none;
-      padding:8px 16px;
-      font-size:0.9rem;
-      cursor:pointer;
-    }
-    .btn-primary {
       background:#0b63ff;
-      color:#fff;
+      color:#ffffff;
+      font-size:14px;
+      cursor:pointer;
+      font-weight:500;
+      margin-left:8px;
+    }
+    button:hover { background:#084ccf; }
+    button:disabled {
+      opacity:0.65;
+      cursor:default;
+    }
+
+    .status {
+      margin-top:8px;
+      font-size:13px;
+    }
+    .status.ok { color:#15803d; }
+    .status.err { color:#b91c1c; }
+    .status.info { color:#6b7280; }
+
+    table {
+      width:100%;
+      border-collapse:collapse;
       margin-top:10px;
+      font-size:13px;
     }
-    .btn-danger {
-      background:#dc2626;
-      color:#fff;
+    th, td {
+      padding:8px 6px;
+      border-bottom:1px solid #e5e7eb;
+      text-align:left;
     }
-    .alerts {
-      margin-top:18px;
-      border-top:1px solid #e5e7eb;
-      padding-top:16px;
+    th {
+      font-size:12px;
+      color:#6b7280;
     }
-    .alert-item {
-      display:flex;
-      justify-content:space-between;
-      align-items:center;
-      padding:10px 0;
-      border-bottom:1px solid #f3f4f6;
-      font-size:0.9rem;
-    }
-    .alert-meta {
-      color:#374151;
-    }
-    .muted {
-      color:#9ca3af;
-      font-size:0.85rem;
-    }
-    .badge {
-      display:inline-block;
+    .pill {
+      display:inline-flex;
       padding:2px 8px;
       border-radius:999px;
-      font-size:0.75rem;
-      background:#e5f0ff;
-      color:#0b63ff;
-      margin-left:6px;
+      font-size:11px;
+      border:1px solid #e5e7eb;
+      background:#f9fafb;
+      color:#374151;
+    }
+    .pill.inactive {
+      border-color:#fecaca;
+      background:#fef2f2;
+      color:#b91c1c;
+    }
+    .pill.active {
+      border-color:#bbf7d0;
+      background:#ecfdf3;
+      color:#166534;
+    }
+    .actions button {
+      margin-left:0;
+      margin-right:4px;
+      padding:6px 10px;
+      font-size:12px;
+      box-shadow:none;
+    }
+    .actions button.delete {
+      background:#ef4444;
+    }
+    .actions button.delete:hover {
+      background:#b91c1c;
+    }
+
+    .empty-state {
+      margin-top:10px;
+      font-size:13px;
+      color:#6b7280;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <div class="banner">
-      <strong>Important:</strong>
-      DentistRadar currently supports NHS dentist searches in
-      <strong>England</strong> only. Support for Scotland, Wales and Northern Ireland is planned.
+  <header>
+    <div class="inner">
+      <h1>My Alerts</h1>
+      <a href="/">← Back to DentistRadar</a>
     </div>
+  </header>
 
-    <h1>Manage your alerts</h1>
-    <p>
-      Enter the email address you used when creating your alerts. You can review and delete any active alerts.
-    </p>
+  <main>
+    <section>
+      <h2>Manage your alerts</h2>
+      <p class="muted">
+        Enter the email address you used when creating your alerts.
+        We’ll show all active and previously unsubscribed alerts linked to it.
+      </p>
+      <div class="card">
+        <form id="lookupForm">
+          <label for="email">Email address</label>
+          <input id="email" name="email" type="email" required autocomplete="email" placeholder="you@example.com" />
+          <button type="submit" id="lookupBtn">Show my alerts</button>
+        </form>
+        <div id="lookupStatus" class="status"></div>
+      </div>
+    </section>
 
-    <label for="emailInput">Email address</label>
-    <input id="emailInput" type="email" placeholder="you@example.com" />
-    <button class="btn-primary" id="loadBtn">Load my alerts</button>
-
-    <div class="alerts" id="alertsSection" style="display:none;">
-      <h2 style="font-size:1.1rem; margin:0 0 8px 0;">Your alerts</h2>
-      <div id="alertsList"></div>
-    </div>
-
-    <p class="muted" style="margin-top:18px;">
-      Tip: If you no longer need DentistRadar, you can also unsubscribe directly from any alert email we send you.
-    </p>
-  </div>
+    <section id="alertsSection" style="display:none;">
+      <div class="card" id="alertsCard">
+        <h2 style="margin-top:0;">Your alerts</h2>
+        <p class="muted" id="alertsIntro"></p>
+        <div id="alertsContainer"></div>
+      </div>
+    </section>
+  </main>
 
   <script>
-    const emailInput = document.getElementById("emailInput");
-    const loadBtn = document.getElementById("loadBtn");
-    const alertsSection = document.getElementById("alertsSection");
-    const alertsList = document.getElementById("alertsList");
+    (function () {
+      const $ = (id) => document.getElementById(id);
+      const form = $("lookupForm");
+      const emailInput = $("email");
+      const lookupBtn = $("lookupBtn");
+      const statusEl = $("lookupStatus");
+      const alertsSection = $("alertsSection");
+      const alertsIntro = $("alertsIntro");
+      const alertsContainer = $("alertsContainer");
 
-    function getEmailFromQuery() {
-      const params = new URLSearchParams(window.location.search);
-      return params.get("email") || "";
-    }
-
-    async function loadAlerts() {
-      const email = emailInput.value.trim().toLowerCase();
-      if (!email) {
-        alert("Please enter your email address.");
-        return;
+      function setStatus(msg, type) {
+        statusEl.textContent = msg || "";
+        statusEl.className = "status " + (type || "info");
       }
 
-      alertsList.innerHTML = '<p class="muted">Loading alerts…</p>';
-      alertsSection.style.display = "block";
+      function escapeHtml(s) {
+        return (s || "").toString().replace(/[&<>"']/g, (c) =>
+          ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+        );
+      }
 
-      try {
-        const res = await fetch(`/api/watch/list?email=${encodeURIComponent(email)}`);
-        const data = await res.json();
-        if (!data.ok) {
-          alertsList.innerHTML = '<p class="muted">Could not load alerts. Please check your email.</p>';
+      function renderAlerts(email, watches) {
+        alertsSection.style.display = "block";
+        alertsIntro.textContent =
+          watches.length === 0
+            ? "No alerts found for " + email + "."
+            : "Alerts linked to " + email + ":";
+
+        if (!watches.length) {
+          alertsContainer.innerHTML =
+            '<p class="empty-state">If you have just created an alert, please check your inbox for the confirmation email.</p>';
           return;
         }
 
-        const watches = data.watches || [];
-        if (watches.length === 0) {
-          alertsList.innerHTML = '<p class="muted">You do not have any active alerts yet.</p>';
-          return;
-        }
-
-        alertsList.innerHTML = "";
+        let rows = "";
         watches.forEach((w) => {
-          const div = document.createElement("div");
-          div.className = "alert-item";
-          div.innerHTML = `
-            <div class="alert-meta">
-              <strong>${w.postcode || ""}</strong>
-              <span class="badge">${w.radius || w.radiusMiles || 5} miles</span><br/>
-              <span class="muted">Created: ${
-                w.createdAt ? new Date(w.createdAt).toLocaleDateString() : "N/A"
-              }</span>
-            </div>
-            <div>
-              <button class="btn-danger" data-id="${w._id}">Delete</button>
-            </div>
+          const pc = escapeHtml(w.postcode || "");
+          const radius = w.radius || 0;
+          const active = w.active !== false;
+          const created = w.createdAt
+            ? new Date(w.createdAt).toLocaleString("en-GB", { hour12: false })
+            : "";
+          const unsub = w.unsubscribedAt
+            ? new Date(w.unsubscribedAt).toLocaleString("en-GB", { hour12: false })
+            : "";
+
+          rows += `
+            <tr data-id="${w._id}">
+              <td>${pc}</td>
+              <td>${radius}</td>
+              <td>
+                ${
+                  active
+                    ? '<span class="pill active">Active</span>'
+                    : '<span class="pill inactive">Unsubscribed</span>'
+                }
+              </td>
+              <td>
+                ${created ? escapeHtml(created) : ""}
+                ${unsub ? `<br><span class="muted">Unsubscribed: ${escapeHtml(unsub)}</span>` : ""}
+              </td>
+              <td class="actions">
+                ${
+                  active
+                    ? `<button type="button" class="delete" data-action="unsubscribe">Unsubscribe</button>`
+                    : ""
+                }
+              </td>
+            </tr>
           `;
-          alertsList.appendChild(div);
         });
 
-        alertsList.querySelectorAll("button[data-id]").forEach((btn) => {
-          btn.addEventListener("click", async () => {
-            const id = btn.getAttribute("data-id");
-            if (!confirm("Delete this alert?")) return;
+        alertsContainer.innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Postcode</th>
+                <th>Radius (miles)</th>
+                <th>Status</th>
+                <th>Created / Unsubscribed</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows}
+            </tbody>
+          </table>
+        `;
 
-            const res = await fetch(
-              `/api/watch/${encodeURIComponent(id)}?email=${encodeURIComponent(email)}`,
-              { method: "DELETE" }
-            );
-            const data = await res.json();
-            if (!data.ok) {
-              alert("Could not delete this alert. Please try again.");
-            } else {
-              btn.closest(".alert-item").remove();
-              if (!alertsList.children.length) {
-                alertsList.innerHTML = '<p class="muted">You do not have any active alerts.</p>';
+        // Attach click handlers for Unsubscribe buttons
+        alertsContainer.querySelectorAll("button[data-action='unsubscribe']")
+          .forEach((btn) => {
+            btn.addEventListener("click", async (e) => {
+              const row = e.target.closest("tr");
+              const id = row && row.getAttribute("data-id");
+              if (!id) return;
+
+              if (!confirm("Unsubscribe this alert?")) return;
+
+              try {
+                const res = await fetch(
+                  `/api/watch/${encodeURIComponent(id)}?email=${encodeURIComponent(email)}`,
+                  { method: "DELETE" }
+                );
+                const data = await res.json();
+                if (!data.ok) {
+                  alert("Unable to unsubscribe this alert. Please try again.");
+                  return;
+                }
+                // Mark as unsubscribed in UI
+                row.querySelector("td:nth-child(3)").innerHTML =
+                  '<span class="pill inactive">Unsubscribed</span>';
+                const tsCell = row.querySelector("td:nth-child(4)");
+                const now = new Date().toLocaleString("en-GB", { hour12: false });
+                tsCell.innerHTML += `<br><span class="muted">Unsubscribed: ${escapeHtml(now)}</span>`;
+                const actionsCell = row.querySelector("td:nth-child(5)");
+                actionsCell.innerHTML = "";
+              } catch (err) {
+                console.error(err);
+                alert("Server error, please try again.");
               }
-            }
+            });
           });
-        });
-      } catch (err) {
-        console.error(err);
-        alertsList.innerHTML = '<p class="muted">Something went wrong loading your alerts.</p>';
       }
-    }
 
-    loadBtn.addEventListener("click", loadAlerts);
+      async function loadAlerts(email) {
+        setStatus("Loading alerts…", "info");
+        alertsSection.style.display = "none";
+        alertsContainer.innerHTML = "";
 
-    // If email is present in query string, pre-fill and auto-load
-    const queryEmail = getEmailFromQuery();
-    if (queryEmail) {
-      emailInput.value = queryEmail;
-      loadAlerts();
-    }
+        try {
+          const res = await fetch(
+            `/api/watch/list?email=${encodeURIComponent(email)}`
+          );
+          const data = await res.json();
+          if (!data.ok) {
+            setStatus("Could not load alerts. Please check your email address.", "err");
+            return;
+          }
+          setStatus("Alerts loaded.", "ok");
+          renderAlerts(email, data.watches || []);
+        } catch (err) {
+          console.error(err);
+          setStatus("Server error. Please try again.", "err");
+        }
+      }
+
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const email = emailInput.value.trim();
+        if (!email) {
+          setStatus("Please enter your email address.", "err");
+          return;
+        }
+        lookupBtn.disabled = true;
+        loadAlerts(email).finally(() => {
+          lookupBtn.disabled = false;
+        });
+      });
+
+      // If email comes from URL (?email=...)
+      const params = new URLSearchParams(window.location.search);
+      const preEmail = params.get("email");
+      if (preEmail) {
+        emailInput.value = preEmail;
+        loadAlerts(preEmail);
+      }
+    })();
   </script>
 </body>
 </html>
