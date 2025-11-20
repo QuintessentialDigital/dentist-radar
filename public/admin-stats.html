@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>DentistRadar – Admin Stats</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color-scheme: light;
+    }
+    body {
+      margin: 24px;
+      max-width: 1000px;
+      margin-left: auto;
+      margin-right: auto;
+      background:#f3f4f6;
+    }
+    h1 {
+      margin-bottom: 4px;
+      font-size: 24px;
+    }
+    .muted {
+      color:#6b7280;
+      font-size:13px;
+    }
+    .row {
+      display:flex;
+      flex-wrap:wrap;
+      gap:14px;
+      margin-bottom:14px;
+      align-items:flex-end;
+    }
+    label {
+      display:flex;
+      flex-direction:column;
+      font-size:13px;
+    }
+    input[type="password"], input[type="text"] {
+      padding:8px;
+      min-width:240px;
+      font-size:14px;
+      border-radius:6px;
+      border:1px solid #d1d5db;
+    }
+    button {
+      padding:9px 16px;
+      background:#0b63ff;
+      color:white;
+      border:none;
+      border-radius:999px;
+      cursor:pointer;
+      font-size:14px;
+      font-weight:500;
+      box-shadow:0 4px 10px rgba(15,23,42,0.12);
+    }
+    button:hover { background:#084ccf; }
+    button:disabled {
+      opacity:0.6;
+      box-shadow:none;
+      cursor:default;
+    }
+    .status-ok { color:#15803d; font-weight:500; }
+    .status-err { color:#b91c1c; font-weight:500; }
+    .status-muted { color:#6b7280; }
+
+    .grid {
+      display:grid;
+      grid-template-columns:2fr 3fr;
+      gap:18px;
+      margin-top:18px;
+    }
+    @media (max-width: 800px) {
+      .grid {
+        grid-template-columns:1fr;
+      }
+    }
+    .card {
+      border-radius:12px;
+      padding:14px 16px;
+      background:white;
+      border:1px solid #e5e7eb;
+      box-shadow:0 8px 20px rgba(15,23,42,0.06);
+    }
+    .card h2 {
+      margin:0 0 6px;
+      font-size:16px;
+    }
+    .metric-row {
+      display:flex;
+      justify-content:space-between;
+      margin:3px 0;
+      font-size:13px;
+    }
+    .metric-row span:first-child {
+      color:#6b7280;
+    }
+    .metric-row span:last-child {
+      font-weight:600;
+      color:#111827;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    table {
+      width:100%;
+      border-collapse:collapse;
+      margin-top:8px;
+      font-size:13px;
+    }
+    th, td {
+      text-align:left;
+      padding:6px 4px;
+      border-bottom:1px solid #e5e7eb;
+    }
+    th {
+      font-size:12px;
+      color:#6b7280;
+    }
+
+    .pill {
+      display:inline-flex;
+      align-items:center;
+      padding:2px 8px;
+      border-radius:999px;
+      font-size:11px;
+      border:1px solid #e5e7eb;
+      background:#f9fafb;
+      color:#374151;
+    }
+  </style>
+</head>
+<body>
+  <h1>DentistRadar – Admin Stats</h1>
+  <p class="muted">
+    Quick overview of usage and demand. Reads from
+    <code class="mono">GET /api/admin/stats?token=ADMIN_TOKEN</code>.
+  </p>
+
+  <div class="row">
+    <label>ADMIN Token
+      <input id="adminToken" type="password" placeholder="ADMIN_TOKEN from env" />
+    </label>
+    <button id="loadBtn">Load stats</button>
+    <span id="status" class="muted"></span>
+  </div>
+
+  <div id="summary"></div>
+
+  <script>
+    (function () {
+      const $ = (id) => document.getElementById(id);
+      const adminTokenEl = $("adminToken");
+      const loadBtn = $("loadBtn");
+      const statusEl = $("status");
+      const summaryEl = $("summary");
+
+      // restore last token
+      adminTokenEl.value = localStorage.getItem("dr_admin_token") || "";
+
+      function setStatus(msg, cssClass) {
+        statusEl.textContent = msg || "";
+        statusEl.className = cssClass || "muted";
+      }
+
+      function escapeHtml(s) {
+        return (s || "").toString().replace(/[&<>"']/g, (c) =>
+          ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+        );
+      }
+
+      function renderStats(data) {
+        if (!data || !data.ok) {
+          summaryEl.innerHTML = "<p class='status-err'>No stats available.</p>";
+          return;
+        }
+
+        const {
+          totalUsers = 0,
+          totalWatches = 0,
+          activeWatches = 0,
+          inactiveWatches = 0,
+          signups24h = 0,
+          unsub24h = 0,
+          topPostcodes = [],
+        } = data;
+
+        const pctInactive =
+          totalWatches > 0 ? ((inactiveWatches / totalWatches) * 100).toFixed(1) : "0.0";
+        const pctActive =
+          totalWatches > 0 ? ((activeWatches / totalWatches) * 100).toFixed(1) : "0.0";
+
+        let topRows = "";
+        topPostcodes.forEach((p, idx) => {
+          topRows += `
+            <tr>
+              <td>${idx + 1}</td>
+              <td>${escapeHtml(p._id || "")}</td>
+              <td>${p.count}</td>
+            </tr>
+          `;
+        });
+        if (!topRows) {
+          topRows = `
+            <tr>
+              <td colspan="3" class="muted">No active watches yet.</td>
+            </tr>
+          `;
+        }
+
+        summaryEl.innerHTML = `
+          <div class="grid">
+            <div class="card">
+              <h2>Overview</h2>
+              <div class="metric-row">
+                <span>Total users</span>
+                <span>${totalUsers}</span>
+              </div>
+              <div class="metric-row">
+                <span>Total watches</span>
+                <span>${totalWatches}</span>
+              </div>
+              <div class="metric-row">
+                <span>Active watches</span>
+                <span>${activeWatches} <span class="pill">${pctActive}%</span></span>
+              </div>
+              <div class="metric-row">
+                <span>Inactive (unsubscribed)</span>
+                <span>${inactiveWatches} <span class="pill">${pctInactive}%</span></span>
+              </div>
+              <hr style="margin:10px 0;border:none;border-top:1px solid #e5e7eb;">
+              <div class="metric-row">
+                <span>New watches (last 24h)</span>
+                <span>${signups24h}</span>
+              </div>
+              <div class="metric-row">
+                <span>Unsubscribes (last 24h)</span>
+                <span>${unsub24h}</span>
+              </div>
+            </div>
+
+            <div class="card">
+              <h2>Top Postcodes (active watches)</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width:36px;">#</th>
+                    <th>Postcode</th>
+                    <th style="width:80px;">Watches</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${topRows}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+      }
+
+      async function loadStats() {
+        const token = adminTokenEl.value.trim();
+        if (!token) {
+          setStatus("Missing ADMIN_TOKEN", "status-err");
+          return;
+        }
+        localStorage.setItem("dr_admin_token", token);
+        setStatus("Loading stats…", "status-muted");
+        loadBtn.disabled = true;
+
+        try {
+          const res = await fetch(
+            `/api/admin/stats?token=${encodeURIComponent(token)}`
+          );
+
+          if (res.status === 403) {
+            setStatus("Forbidden — wrong ADMIN_TOKEN", "status-err");
+            summaryEl.innerHTML = "";
+            loadBtn.disabled = false;
+            return;
+          }
+
+          const data = await res.json();
+          if (!data || typeof data !== "object") {
+            setStatus("Invalid response", "status-err");
+            summaryEl.innerHTML =
+              "<pre class='mono'>" +
+              escapeHtml(JSON.stringify(data, null, 2)) +
+              "</pre>";
+            loadBtn.disabled = false;
+            return;
+          }
+
+          setStatus("OK — stats loaded", "status-ok");
+          renderStats(data);
+        } catch (err) {
+          console.error(err);
+          setStatus(err.message || "Error loading stats", "status-err");
+        } finally {
+          loadBtn.disabled = false;
+        }
+      }
+
+      loadBtn.addEventListener("click", loadStats);
+    })();
+  </script>
+</body>
+</html>
