@@ -827,6 +827,61 @@ app.post("/api/admin/run-all-scans", async (req, res) => {
 });
 
 /* ---------------------------
+   Admin: Basic Usage Analytics
+--------------------------- */
+app.get("/api/admin/stats", async (req, res) => {
+  try {
+    const adminToken = process.env.ADMIN_TOKEN || "";
+    const token = req.query.token || "";
+
+    if (!adminToken || token !== adminToken) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+
+    const totalUsers = await User.countDocuments();
+    const totalWatches = await Watch.countDocuments();
+  
+    const activeWatches = await Watch.countDocuments({
+      active: { $ne: false }
+    });
+    const inactiveWatches = totalWatches - activeWatches;
+  
+    const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  
+    const signups24h = await Watch.countDocuments({
+      createdAt: { $gte: last24h }
+    });
+  
+    const unsub24h = await Watch.countDocuments({
+      active: false,
+      unsubscribedAt: { $gte: last24h }
+    });
+  
+    const topPostcodes = await Watch.aggregate([
+      { $match: { active: { $ne: false } } },
+      { $group: { _id: "$postcode", count: { $sum: 1 } } },
+      { $sort: { count: -1 } },
+      { $limit: 15 }
+    ]);
+  
+    return res.json({
+      ok: true,
+      totalUsers,
+      totalWatches,
+      activeWatches,
+      inactiveWatches,
+      signups24h,
+      unsub24h,
+      topPostcodes
+    });
+  } catch (err) {
+    console.error("admin/stats error:", err?.message || err);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+
+/* ---------------------------
    Stripe Checkout + Webhook
 --------------------------- */
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || "";
