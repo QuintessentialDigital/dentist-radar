@@ -1,4 +1,4 @@
-// scanner.js – DentistRadar NHS scanner (v7.1 – search + appointments, strict radius)
+// scanner.js – DentistRadar NHS scanner (v7.2 – search + appointments, strict radius, timeout)
 //
 // Exports:
 //   - scanPostcode(postcode, radiusMiles)
@@ -38,27 +38,38 @@ function buildNhsSearchUrl(postcode, radiusMiles) {
   return url;
 }
 
+/**
+ * Fetch with timeout so NHS can't hang the whole cron.
+ */
 async function fetchText(url, label = "fetch") {
+  const timeoutMs = Number(process.env.SCAN_TIMEOUT_MS) || 8000;
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
     const res = await fetch(url, {
+      signal: controller.signal,
       headers: {
         "User-Agent": "Mozilla/5.0 (DentistRadar scanner)",
         Accept: "text/html,application/xhtml+xml",
       },
     });
 
+    clearTimeout(id);
+
     if (!res.ok) {
       console.error(`[SCAN] ${label} failed ${res.status} for ${url}`);
-      // For 404/500, behave like "no content" instead of crashing
-      if (res.status === 404 || res.status === 500) {
-        return "";
-      }
-      throw new Error(`${label} failed ${res.status} for ${url}`);
+      // For errors, just treat as no content, do not throw
+      return "";
     }
 
     return await res.text();
   } catch (err) {
-    console.error(`[SCAN] ${label} error for ${url}:`, err?.message || err);
+    clearTimeout(id);
+    console.error(
+      `[SCAN] ${label} error for ${url}:`,
+      err?.name === "AbortError" ? "timeout" : err?.message || err
+    );
     return "";
   }
 }
@@ -344,6 +355,7 @@ function parsePracticeFromBlock(block, postcode) {
  *   3) Build base practice objects + NHS profile URLs.
  *   4) STRICT RADIUS: drop practices whose distanceMiles > radiusMiles (if distance known).
  *   5) For each remaining practice, fetch its Appointments page (primary truth for acceptance).
+ *      - Use /appointments (correct pattern).
  *   6) Classify from appointments; fallback to search block if still unknown.
  *   7) Return grouped lists + counts.
  */
@@ -352,7 +364,7 @@ export async function scanPostcode(postcode, radiusMiles) {
   const radius = Number(radiusMiles) || 5;
   const searchUrl = buildNhsSearchUrl(postcode, radius);
   console.log(
-    `[SCAN] (v7.1) Searching NHS for ${postcode} (${radius} miles) – ${searchUrl}`
+    `[SCAN] (v7.2) Searching NHS for ${postcode} (${radius} miles) – ${searchUrl}`
   );
 
   // Step 1: search results
@@ -361,26 +373,28 @@ export async function scanPostcode(postcode, radiusMiles) {
   const blocks = extractResultBlocks(text);
 
   console.log(
-    `[SCAN] (v7.1) Parsed ${blocks.length} result block(s) from search results.`
+    `[SCAN] (v7.2) Parsed ${blocks.length} result block(s) from search results.`
   );
 
   // Step 2: build base practices
   const basePracticesRaw = blocks.map((block) => {
     const p = parsePracticeFromBlock(block, postcode);
     p.nhsUrl = buildNhsProfileUrl(p.name, block) || "";
+
     if (p.nhsUrl) {
-      p.appointmentsUrl = `${p.nhsUrl.replace(/\/$/, "")}/appointments-and-opening-times`;
+      const base = p.nhsUrl.replace(/\/$/, "");
+      // 🔑 Correct NHS path: /appointments (not appointments-and-opening-times)
+      p.appointmentsUrl = `${base}/appointments`;
     } else {
       p.appointmentsUrl = "";
     }
+
     // Keep the lowercased search text for fallback classification
     return { practice: p, searchLower: block.toLowerCase() };
   });
 
   // Step 3: strict radius filter
-  // - Keep practices where distanceMiles is null (NHS didn’t specify, we keep them just in case).
-  // - Drop only those where distanceMiles > radius (+ small tolerance).
-  const RADIUS_TOLERANCE = 0.2; // 0.2 miles tolerance to avoid float weirdness
+  const RADIUS_TOLERANCE = 0.2; // 0.2 miles tolerance
   const basePractices = basePracticesRaw.filter(({ practice }) => {
     if (practice.distanceMiles == null || isNaN(practice.distanceMiles)) {
       return true; // keep if distance unknown
@@ -389,7 +403,7 @@ export async function scanPostcode(postcode, radiusMiles) {
   });
 
   console.log(
-    `[SCAN] (v7.1) After radius filter (${radius} mi): kept ${basePractices.length}/${basePracticesRaw.length} practices.`
+    `[SCAN] (v7.2) After radius filter (${radius} mi): kept ${basePractices.length}/${basePracticesRaw.length} practices.`
   );
 
   const accepting = [];
@@ -451,7 +465,7 @@ export async function scanPostcode(postcode, radiusMiles) {
     tookMs,
   };
 
-  console.log("[SCAN] (v7.1) Result summary:", {
+  console.log("[SCAN] (v7.2) Result summary:", {
     postcode: result.postcode,
     radiusMiles: result.radiusMiles,
     accepting: result.acceptingCount,
