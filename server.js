@@ -1025,6 +1025,78 @@ app.get("/api/admin/stats", async (req, res) => {
 });
 
 /* ---------------------------
+   Admin: Scanner Self-Check
+   - Quick way to see if scanner & NHS pattern still behave
+--------------------------- */
+
+app.get("/api/admin/self-check", async (req, res) => {
+  try {
+    const adminToken = process.env.ADMIN_TOKEN || "";
+    const token = req.query.token || "";
+
+    if (!adminToken || token !== adminToken) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+
+    // You can tweak these test postcodes later or move to env vars.
+    const TESTS = [
+      {
+        postcode:
+          process.env.SELFCHECK_PC1 || "RG41 4UW",
+        radius: Number(process.env.SELFCHECK_RADIUS1 || 25),
+      },
+      {
+        postcode:
+          process.env.SELFCHECK_PC2 || "BS24 7EH",
+        radius: Number(process.env.SELFCHECK_RADIUS2 || 25),
+      },
+    ];
+
+    const results = [];
+    let allOk = true;
+
+    for (const t of TESTS) {
+      try {
+        const r = await scanPostcode(t.postcode, t.radius);
+        results.push({
+          postcode: r.postcode,
+          radius: r.radiusMiles,
+          scanned: r.scanned,
+          acceptingCount: r.acceptingCount,
+          notAcceptingCount: r.notAcceptingCount,
+          unknownCount: r.unknownCount,
+          tookMs: r.tookMs,
+        });
+
+        // Very simple "health" heuristic:
+        // - call succeeded
+        // - and we got *some* results (scanned > 0)
+        if (r.scanned === 0) {
+          allOk = false;
+        }
+      } catch (err) {
+        allOk = false;
+        results.push({
+          postcode: t.postcode,
+          radius: t.radius,
+          error: err?.message || String(err),
+        });
+      }
+    }
+
+    return res.json({
+      ok: allOk,
+      tests: results,
+    });
+  } catch (err) {
+    console.error("admin/self-check error:", err?.message || err);
+    return res.status(500).json({ ok: false, error: "server_error" });
+  }
+});
+
+
+
+/* ---------------------------
    Stripe Checkout + Webhook
 --------------------------- */
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY || "";
