@@ -139,6 +139,12 @@
     <code class="mono">GET /api/admin/stats?token=ADMIN_TOKEN</code>.
   </p>
 
+  // After you get `data` from /api/admin/stats
+     emailsTotalEl.textContent = data.totalEmails;
+     emails24hEl.textContent = data.emails24h;
+
+    emailDailyPre.textContent = JSON.stringify(data.emailDaily, null, 2);
+
   <div class="row">
     <label>ADMIN Token
       <input id="adminToken" type="password" placeholder="ADMIN_TOKEN from env" />
