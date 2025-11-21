@@ -211,7 +211,7 @@ function buildAcceptanceEmail(postcode, radius, practices, opts = {}) {
 
       const patientType =
         p.patientType ||
-        (p.childOnly ? "Children only" : "Adults & children";
+        (p.childOnly ? "Children only" : "Adults & children");
 
       const distance =
         p.distanceText ||
