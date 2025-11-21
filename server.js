@@ -38,6 +38,11 @@ connectMongo(RAW_URI)
   .catch((err) => console.error("❌ MongoDB connection error:", err.message));
 
 /* ---------------------------
+   Global Cron State
+--------------------------- */
+let lastCronRun = null;
+
+/* ---------------------------
    Helpers (email + validation)
 --------------------------- */
 async function sendEmailHTML(to, subject, html, type = "other", meta = {}) {
@@ -46,6 +51,31 @@ async function sendEmailHTML(to, subject, html, type = "other", meta = {}) {
     console.log("ℹ️ POSTMARK token not set → skip email.");
     return { ok: false, skipped: true };
   }
+
+  // 🔒 Global throttle for alert emails: max 1 per user per 6 hours
+  if (type === "alert") {
+    try {
+      const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+      const recentAlert = await EmailLog.findOne({
+        to,
+        type: "alert",
+        sentAt: { $gte: sixHoursAgo },
+      })
+        .sort({ sentAt: -1 })
+        .lean();
+
+      if (recentAlert) {
+        console.log(
+          `⏱ Skipping alert to ${to} due to global throttle (last at ${recentAlert.sentAt})`
+        );
+        return { ok: false, skipped: true, reason: "throttled" };
+      }
+    } catch (e) {
+      console.error("⚠️ Throttle check error:", e?.message || e);
+      // fail open if throttle lookup fails – better to send than break alert flow
+    }
+  }
+
   try {
     const r = await axios.post(
       "https://api.postmarkapp.com/email",
@@ -120,14 +150,25 @@ function detectUkRegion(postcode) {
   const NI = ["BT"]; // Northern Ireland
 
   const SCOTLAND = [
-    "AB", "DD", "DG", "EH", "FK",
-    "G", "HS", "IV", "KA", "KW",
-    "KY", "ML", "PA", "PH", "TD", "ZE"
+    "AB",
+    "DD",
+    "DG",
+    "EH",
+    "FK",
+    "G",
+    "HS",
+    "IV",
+    "KA",
+    "KW",
+    "KY",
+    "ML",
+    "PA",
+    "PH",
+    "TD",
+    "ZE",
   ];
 
-  const WALES = [
-    "CF", "LD", "LL", "NP", "SA", "SY"
-  ];
+  const WALES = ["CF", "LD", "LL", "NP", "SA", "SY"];
 
   const CHANNEL_ISLANDS = ["GY", "JE"];
   const IOM = ["IM"];
@@ -228,11 +269,7 @@ function buildAcceptanceEmail(postcode, radius, practices, opts = {}) {
               ? ` <a href="${manageUrl}" style="color:#0b63ff; text-decoration:none;">Manage your alerts</a>`
               : ""
           }
-          ${
-            manageUrl && unsubscribeUrl
-              ? ' &nbsp;•&nbsp;'
-              : ""
-          }
+          ${manageUrl && unsubscribeUrl ? " &nbsp;•&nbsp;" : ""}
           ${
             unsubscribeUrl
               ? `<a href="${unsubscribeUrl}" style="color:#0b63ff; text-decoration:none;">Unsubscribe instantly</a>`
@@ -317,7 +354,7 @@ function buildAcceptanceEmail(postcode, radius, practices, opts = {}) {
                   This email is based on publicly available information from the NHS website at the time of scanning.
                   DentistRadar does not guarantee availability and cannot book appointments on your behalf.
                 </p>
- 
+
                 <!-- Share block -->
                 <p style="margin:18px 0 4px 0; font-size:13px; color:#4b5563; line-height:1.6;">
                   If this alert helps you, please consider sharing DentistRadar with others who are struggling to find an NHS dentist.
@@ -354,6 +391,50 @@ function buildAcceptanceEmail(postcode, radius, practices, opts = {}) {
   return { subject, html };
 }
 
+/* ---------------------------
+   Rate limiting for /api/watch & /api/watch/create
+--------------------------- */
+const RATE_WINDOW_MS = 60 * 1000; // 1 minute
+const RATE_MAX_REQUESTS = 8; // max requests per IP per window
+
+// Map<ip, { count, windowStart }>
+const rateBuckets = new Map();
+
+function rateLimitWatchCreate(req, res, next) {
+  try {
+    const ip =
+      req.headers["x-forwarded-for"]?.split(",")[0].trim() ||
+      req.socket?.remoteAddress ||
+      "unknown";
+
+    const now = Date.now();
+    let bucket = rateBuckets.get(ip);
+
+    if (!bucket || now - bucket.windowStart > RATE_WINDOW_MS) {
+      bucket = { count: 0, windowStart: now }; // new window
+    }
+
+    bucket.count += 1;
+    rateBuckets.set(ip, bucket);
+
+    if (bucket.count > RATE_MAX_REQUESTS) {
+      console.warn(
+        `⚠️ rateLimit: IP ${ip} exceeded limit (${bucket.count} reqs in ${RATE_WINDOW_MS}ms)`
+      );
+      return res.status(429).json({
+        ok: false,
+        error: "rate_limited",
+        message: "Too many requests. Please try again shortly.",
+      });
+    }
+
+    next();
+  } catch (e) {
+    console.error("rateLimit error:", e?.message || e);
+    // fail open rather than blocking everything
+    next();
+  }
+}
 
 /* ---------------------------
    Health / Debug
@@ -382,9 +463,6 @@ app.get("/api/debug/peek", async (req, res) => {
   }
 });
 
-/* ---------------------------
-   Shared Watch Creation Handler
---------------------------- */
 /* ---------------------------
    Shared Watch Creation Handler
 --------------------------- */
@@ -559,17 +637,15 @@ async function handleCreateWatch(req, res) {
   }
 }
 
-
-
 /* ---------------------------
    Create Watch routes (old + new)
 --------------------------- */
 
 // OLD path for compatibility
-app.post("/api/watch", handleCreateWatch);
+app.post("/api/watch", rateLimitWatchCreate, handleCreateWatch);
 
 // NEW explicit path
-app.post("/api/watch/create", handleCreateWatch);
+app.post("/api/watch/create", rateLimitWatchCreate, handleCreateWatch);
 
 /* ---------------------------
    My Alerts APIs
@@ -579,10 +655,10 @@ app.get("/api/watch/list", async (req, res) => {
     const email = normEmail(req.query.email || "");
     if (!emailRe.test(email))
       return res.status(400).json({ ok: false, error: "invalid_email" });
-     const watches = await Watch.find({ email, active: { $ne: false } })
+    const watches = await Watch.find({ email, active: { $ne: false } })
       .sort({ createdAt: -1 })
       .lean();
-      res.json({ ok: true, email, watches });
+    res.json({ ok: true, email, watches });
   } catch (e) {
     res.status(500).json({ ok: false, error: "server_error" });
   }
@@ -624,7 +700,7 @@ app.get("/api/scan", async (req, res) => {
         error: "unsupported_region",
         region,
         message:
-          "DentistRadar test scan currently only supports England-based NHS postcodes."
+          "DentistRadar test scan currently only supports England-based NHS postcodes.",
       });
     }
 
@@ -636,12 +712,9 @@ app.get("/api/scan", async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("Error in /api/scan:", err);
-    res
-      .status(500)
-      .json({ error: "Scan failed", details: err.message });
+    res.status(500).json({ error: "Scan failed", details: err.message });
   }
 });
-
 
 /* ---------------------------
    Grouped Scans (Phase 2) – for cron + testing
@@ -681,6 +754,7 @@ async function runAllScans({ dryRun = false } = {}) {
   let totalSkippedRecent = 0;
 
   const results = [];
+  let anyAcceptingAcrossAllGroups = false;
 
   for (const [key, group] of groups.entries()) {
     const { postcode, radius, watches: groupWatches } = group;
@@ -707,102 +781,117 @@ async function runAllScans({ dryRun = false } = {}) {
       continue;
     }
 
-  const practices = scan.accepting || [];
-const acceptingCount = practices.length;
+    const practices = scan.accepting || [];
+    const acceptingCount = practices.length;
 
-if (acceptingCount === 0) {
-  console.log(
-    `[CRON] No accepting practices for ${key} – skipping emails.`
-  );
-  results.push({
-    key,
-    postcode,
-    radius,
-    watches: groupWatches.length,
-    acceptingCount,
-    emailsSent: 0,
-    reason: "no_accepting",
-  });
-  continue;
-}
+    if (acceptingCount === 0) {
+      console.log(
+        `[CRON] No accepting practices for ${key} – skipping emails.`
+      );
+      results.push({
+        key,
+        postcode,
+        radius,
+        watches: groupWatches.length,
+        acceptingCount,
+        emailsSent: 0,
+        reason: "no_accepting",
+      });
+      continue;
+    }
 
-for (const w of groupWatches) {
-  const email = normEmail(w.email || "");
-  if (!emailRe.test(email)) continue;
+    anyAcceptingAcrossAllGroups = true;
 
-  // Check last alert in last 12 hours for this email+postcode+radius
-  const lastAlert = await EmailLog.findOne({
-    to: email,
-    type: "alert",
-    "meta.postcode": postcode,
-    "meta.radius": radius,
-  })
-    .sort({ sentAt: -1 })
-    .lean();
+    for (const w of groupWatches) {
+      const email = normEmail(w.email || "");
+      if (!emailRe.test(email)) continue;
 
-  const now = Date.now();
-  const twelveHoursMs = 12 * 60 * 60 * 1000;
-  if (
-    lastAlert &&
-    lastAlert.sentAt &&
-    now - new Date(lastAlert.sentAt).getTime() < twelveHoursMs
-  ) {
-    totalSkippedRecent++;
-    continue;
-  }
+      // Check last alert in last 12 hours for this email+postcode+radius
+      const lastAlert = await EmailLog.findOne({
+        to: email,
+        type: "alert",
+        "meta.postcode": postcode,
+        "meta.radius": radius,
+      })
+        .sort({ sentAt: -1 })
+        .lean();
 
-  if (dryRun) {
-    results.push({
-      key,
-      postcode,
-      radius,
-      email,
-      acceptingCount,
-      wouldSend: true,
-    });
-  } else {
-    const SITE =
-      process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
+      const now = Date.now();
+      const twelveHoursMs = 12 * 60 * 60 * 1000;
+      if (
+        lastAlert &&
+        lastAlert.sentAt &&
+        now - new Date(lastAlert.sentAt).getTime() < twelveHoursMs
+      ) {
+        totalSkippedRecent++;
+        continue;
+      }
 
-    const manageUrl = `${SITE}/my-alerts.html?email=${encodeURIComponent(
-      email
-    )}`;
-    const unsubscribeUrl = `${SITE}/unsubscribe/${w._id}`;
+      if (dryRun) {
+        results.push({
+          key,
+          postcode,
+          radius,
+          email,
+          acceptingCount,
+          wouldSend: true,
+        });
+      } else {
+        const SITE =
+          process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
 
-    const { subject, html } = buildAcceptanceEmail(
-      postcode,
-      radius,
-      practices,
-      { manageUrl, unsubscribeUrl }
-    );
+        const manageUrl = `${SITE}/my-alerts.html?email=${encodeURIComponent(
+          email
+        )}`;
+        const unsubscribeUrl = `${SITE}/unsubscribe/${w._id}`;
 
-    const meta = {
-      postcode,
-      radius,
-      acceptingCount,
-      watchId: w._id,
-      runMode: "cron",
-    };
-    await sendEmailHTML(email, subject, html, "alert", meta);
-    totalEmails++;
-    console.log(
-      `[CRON] Sent acceptance alert to ${email} for ${key} with ${acceptingCount} practice(s).`
-    );
-  }
-}
+        const { subject, html } = buildAcceptanceEmail(
+          postcode,
+          radius,
+          practices,
+          { manageUrl, unsubscribeUrl }
+        );
+
+        const meta = {
+          postcode,
+          radius,
+          acceptingCount,
+          watchId: w._id,
+          runMode: "cron",
+        };
+        await sendEmailHTML(email, subject, html, "alert", meta);
+        totalEmails++;
+        console.log(
+          `[CRON] Sent acceptance alert to ${email} for ${key} with ${acceptingCount} practice(s).`
+        );
+      }
+    }
   }
 
   const tookMs = Date.now() - started;
 
-  return {
+  if (!anyAcceptingAcrossAllGroups && watches.length > 0) {
+    console.warn(
+      "[ALERT] runAllScans found ZERO accepting practices across all groups. " +
+        "This might indicate an NHS wording/HTML change or a parsing bug."
+    );
+  }
+
+  const summary = {
     totalWatches: watches.length,
     groups: groups.size,
     totalScans,
     totalEmails,
     totalSkippedRecent,
     tookMs,
+    ranAt: new Date(),
+    anyAcceptingAcrossAllGroups,
     results,
   };
+
+  lastCronRun = summary;
+
+  return summary;
 }
 
 /**
@@ -833,6 +922,33 @@ app.post("/api/admin/run-all-scans", async (req, res) => {
     return res
       .status(500)
       .json({ ok: false, error: "server_error" });
+  }
+});
+
+/* ---------------------------
+   Admin: Cron heartbeat / status
+--------------------------- */
+app.get("/api/admin/cron-status", (req, res) => {
+  try {
+    const adminToken = process.env.ADMIN_TOKEN || "";
+    const token = req.query.token || "";
+
+    if (!adminToken || token !== adminToken) {
+      return res.status(403).json({ ok: false, error: "forbidden" });
+    }
+
+    if (!lastCronRun) {
+      return res.json({ ok: true, hasRun: false });
+    }
+
+    return res.json({
+      ok: true,
+      hasRun: true,
+      lastRun: lastCronRun,
+    });
+  } catch (e) {
+    console.error("cron-status error:", e?.message || e);
+    return res.status(500).json({ ok: false, error: "server_error" });
   }
 });
 
@@ -907,7 +1023,6 @@ app.get("/api/admin/stats", async (req, res) => {
     return res.status(500).json({ ok: false, error: "server_error" });
   }
 });
-
 
 /* ---------------------------
    Stripe Checkout + Webhook
@@ -1014,9 +1129,7 @@ app.post("/api/stripe/webhook", async (req, res) => {
     res.json({ received: true });
   } catch (err) {
     console.error("Stripe webhook error:", err?.message);
-    res
-      .status(500)
-      .send(`Webhook Error: ${err?.message}`);
+    res.status(500).send(`Webhook Error: ${err?.message}`);
   }
 });
 
@@ -1081,8 +1194,6 @@ function renderUnsubscribePage(success, infoText, watchId, thankYou) {
     </html>
   `;
 }
-
-
 
 app.get("/unsubscribe", async (req, res) => {
   try {
@@ -1160,7 +1271,6 @@ app.get("/unsubscribe/:id", (req, res) => {
   const url = `/unsubscribe?alertId=${encodeURIComponent(id)}`;
   return res.redirect(url);
 });
-
 
 /* ---------------------------
    SPA Fallback
