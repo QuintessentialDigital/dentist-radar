@@ -667,17 +667,45 @@ app.get("/api/watch/list", async (req, res) => {
 app.delete("/api/watch/:id", async (req, res) => {
   try {
     const email = normEmail(req.query.email || "");
-    if (!emailRe.test(email))
-      return res.status(400).json({ ok: false, error: "invalid_email" });
+    if (!emailRe.test(email)) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "invalid_email" });
+    }
 
     const id = req.params.id;
-    const deleted = await Watch.findOneAndDelete({ _id: id, email });
-    if (!deleted)
-      return res.status(404).json({ ok: false, error: "not_found" });
 
-    res.json({ ok: true, deletedId: id });
+    // Soft delete: mark inactive instead of removing the document
+    const watch = await Watch.findOne({ _id: id, email });
+    if (!watch) {
+      return res
+        .status(404)
+        .json({ ok: false, error: "not_found" });
+    }
+
+    if (watch.active === false) {
+      // Already inactive; nothing to do
+      return res.json({
+        ok: true,
+        deletedId: id,
+        status: "already_inactive",
+      });
+    }
+
+    watch.active = false;
+    watch.unsubscribedAt = new Date();
+    await watch.save();
+
+    return res.json({
+      ok: true,
+      deletedId: id,
+      status: "soft_deleted",
+    });
   } catch (e) {
-    res.status(500).json({ ok: false, error: "server_error" });
+    console.error("watch soft-delete error:", e?.message || e);
+    return res
+      .status(500)
+      .json({ ok: false, error: "server_error" });
   }
 });
 
