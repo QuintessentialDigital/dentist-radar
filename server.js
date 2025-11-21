@@ -211,7 +211,7 @@ function buildAcceptanceEmail(postcode, radius, practices, opts = {}) {
 
       const patientType =
         p.patientType ||
-        (p.childOnly ? "Children only" : "Adults & children");
+        (p.childOnly ? "Children only" : "Adults & children";
 
       const distance =
         p.distanceText ||
@@ -729,6 +729,7 @@ app.get("/api/scan", async (req, res) => {
  *     - Else: send acceptance email if:
  *         - acceptingCount > 0
  *         - no alert in last 12 hours for that email+postcode+radius
+ *     - And daily alert emails do not exceed DAILY_EMAIL_LIMIT
  */
 async function runAllScans({ dryRun = false } = {}) {
   const started = Date.now();
@@ -747,6 +748,20 @@ async function runAllScans({ dryRun = false } = {}) {
 
   console.log(
     `[CRON] runAllScans – ${watches.length} watches, ${groups.size} group(s). dryRun=${dryRun}`
+  );
+
+  // 🔒 Daily cap for alert emails (cron + any alerts earlier in the day)
+  const DAILY_EMAIL_LIMIT = 500;
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  let emailsSentToday = await EmailLog.countDocuments({
+    type: "alert",
+    sentAt: { $gte: todayStart },
+  });
+
+  console.log(
+    `[CRON] Alert emails already sent today: ${emailsSentToday}/${DAILY_EMAIL_LIMIT}`
   );
 
   let totalScans = 0;
@@ -837,6 +852,23 @@ async function runAllScans({ dryRun = false } = {}) {
           wouldSend: true,
         });
       } else {
+        // 🔒 Daily cap check: stop sending if we've hit the limit
+        if (emailsSentToday >= DAILY_EMAIL_LIMIT) {
+          console.warn(
+            `[CRON] Daily alert email limit reached (${emailsSentToday}/${DAILY_EMAIL_LIMIT}). Skipping further sends.`
+          );
+          results.push({
+            key,
+            postcode,
+            radius,
+            email,
+            acceptingCount,
+            skipped: true,
+            reason: "daily_limit_reached",
+          });
+          continue;
+        }
+
         const SITE =
           process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
 
@@ -861,8 +893,9 @@ async function runAllScans({ dryRun = false } = {}) {
         };
         await sendEmailHTML(email, subject, html, "alert", meta);
         totalEmails++;
+        emailsSentToday++;
         console.log(
-          `[CRON] Sent acceptance alert to ${email} for ${key} with ${acceptingCount} practice(s).`
+          `[CRON] Sent acceptance alert to ${email} for ${key} with ${acceptingCount} practice(s). (emailsSentToday=${emailsSentToday})`
         );
       }
     }
@@ -886,6 +919,8 @@ async function runAllScans({ dryRun = false } = {}) {
     tookMs,
     ranAt: new Date(),
     anyAcceptingAcrossAllGroups,
+    emailsSentTodayEnd: emailsSentToday,
+    dailyLimit: DAILY_EMAIL_LIMIT,
     results,
   };
 
@@ -1041,13 +1076,11 @@ app.get("/api/admin/self-check", async (req, res) => {
     // You can tweak these test postcodes later or move to env vars.
     const TESTS = [
       {
-        postcode:
-          process.env.SELFCHECK_PC1 || "RG41 4UW",
+        postcode: process.env.SELFCHECK_PC1 || "RG41 4UW",
         radius: Number(process.env.SELFCHECK_RADIUS1 || 25),
       },
       {
-        postcode:
-          process.env.SELFCHECK_PC2 || "BS24 7EH",
+        postcode: process.env.SELFCHECK_PC2 || "BS24 7EH",
         radius: Number(process.env.SELFCHECK_RADIUS2 || 25),
       },
     ];
@@ -1093,8 +1126,6 @@ app.get("/api/admin/self-check", async (req, res) => {
     return res.status(500).json({ ok: false, error: "server_error" });
   }
 });
-
-
 
 /* ---------------------------
    Stripe Checkout + Webhook
