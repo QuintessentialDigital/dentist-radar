@@ -1,4 +1,4 @@
-// scanner.js – DentistRadar NHS scanner (v7 – search + appointments, more accurate)
+// scanner.js – DentistRadar NHS scanner (v7.1 – search + appointments, strict radius)
 //
 // Exports:
 //   - scanPostcode(postcode, radiusMiles)
@@ -6,7 +6,7 @@
 //            postcode, radiusMiles,
 //            acceptingCount, notAcceptingCount, unknownCount,
 //            scanned,
-//            accepting: [ { name, address, phone, distanceText, status, patientType, childOnly, nhsUrl, appointmentsUrl } ],
+//            accepting: [ { name, address, phone, distanceText, distanceMiles, status, patientType, childOnly, nhsUrl, appointmentsUrl } ],
 //            notAccepting: [...],
 //            unknown: [...],
 //            tookMs
@@ -142,7 +142,8 @@ function classifyAcceptanceFromAppointments(lower) {
   if (lower.includes("currently not accepting nhs patients")) return "notAccepting";
   if (lower.includes("not currently accepting new nhs patients")) return "notAccepting";
   if (lower.includes("is not taking on any new nhs patients")) return "notAccepting";
-  if (lower.includes("is not currently taking on new nhs patients")) return "notAccepting";
+  if (lower.includes("is not currently taking on new nhs patients"))
+    return "notAccepting";
 
   // Unknown / no update patterns
   if (
@@ -191,7 +192,8 @@ function classifyAcceptanceFromSearchBlock(lower) {
   if (lower.includes("not taking on new nhs patients")) return "notAccepting";
   if (lower.includes("currently not accepting nhs patients")) return "notAccepting";
   if (lower.includes("not currently accepting new nhs patients")) return "notAccepting";
-  if (lower.includes("this dentist is not taking on any new nhs patients")) return "notAccepting";
+  if (lower.includes("this dentist is not taking on any new nhs patients"))
+    return "notAccepting";
   if (lower.includes("this dentist is not currently taking on new nhs patients"))
     return "notAccepting";
 
@@ -228,6 +230,18 @@ function extractPhoneFromBlock(text) {
   if (!text) return "Not available";
   const match = text.match(/0\d{2,4}\s?\d{3,4}\s?\d{3,4}/);
   return match ? match[0].trim() : "Not available";
+}
+
+/**
+ * Parse distance text ("1 mile", "2.3 miles") into a numeric miles value.
+ */
+function parseDistanceMiles(distanceText) {
+  if (!distanceText) return null;
+  const m = distanceText.match(/([\d.,]+)\s*mile/i);
+  if (!m) return null;
+  const raw = m[1].replace(",", ".");
+  const n = parseFloat(raw);
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -282,12 +296,15 @@ function parsePracticeFromBlock(block, postcode) {
   // Strip trailing "V006578 DEN" style codes from display name
   name = name.replace(/\s+V\d{6}\s+DEN$/i, "").trim();
 
-  // Distance
+  // Distance (text)
   let distanceText = "";
   const distMatch = block.match(/This organisation is\s+(.+?)\s+away/i);
   if (distMatch) {
-    distanceText = distMatch[1].trim(); // e.g. "1 mile"
+    distanceText = distMatch[1].trim(); // e.g. "1 mile" or "7.2 miles"
   }
+
+  // Parse numeric distance (miles) if possible
+  const distanceMiles = parseDistanceMiles(distanceText);
 
   // Address
   let address = "";
@@ -308,6 +325,7 @@ function parsePracticeFromBlock(block, postcode) {
     address,
     phone,
     distanceText,
+    distanceMiles, // numeric for filtering + fallback rendering
     status: "unknown", // placeholder; will be filled after appointments scan
     patientType,
     childOnly,
@@ -324,15 +342,17 @@ function parsePracticeFromBlock(block, postcode) {
  *   1) Fetch NHS search results page.
  *   2) Parse into result blocks.
  *   3) Build base practice objects + NHS profile URLs.
- *   4) For each practice, fetch its Appointments page (primary truth for acceptance).
- *   5) Classify acceptance from Appointments text; if unclear/unavailable, fallback to search block.
- *   6) Return grouped lists + counts.
+ *   4) STRICT RADIUS: drop practices whose distanceMiles > radiusMiles (if distance known).
+ *   5) For each remaining practice, fetch its Appointments page (primary truth for acceptance).
+ *   6) Classify from appointments; fallback to search block if still unknown.
+ *   7) Return grouped lists + counts.
  */
 export async function scanPostcode(postcode, radiusMiles) {
   const started = Date.now();
-  const searchUrl = buildNhsSearchUrl(postcode, radiusMiles);
+  const radius = Number(radiusMiles) || 5;
+  const searchUrl = buildNhsSearchUrl(postcode, radius);
   console.log(
-    `[SCAN] (v7) Searching NHS for ${postcode} (${radiusMiles} miles) – ${searchUrl}`
+    `[SCAN] (v7.1) Searching NHS for ${postcode} (${radius} miles) – ${searchUrl}`
   );
 
   // Step 1: search results
@@ -341,10 +361,11 @@ export async function scanPostcode(postcode, radiusMiles) {
   const blocks = extractResultBlocks(text);
 
   console.log(
-    `[SCAN] (v7) Parsed ${blocks.length} result block(s) from search results.`
+    `[SCAN] (v7.1) Parsed ${blocks.length} result block(s) from search results.`
   );
 
-  const basePractices = blocks.map((block) => {
+  // Step 2: build base practices
+  const basePracticesRaw = blocks.map((block) => {
     const p = parsePracticeFromBlock(block, postcode);
     p.nhsUrl = buildNhsProfileUrl(p.name, block) || "";
     if (p.nhsUrl) {
@@ -352,15 +373,30 @@ export async function scanPostcode(postcode, radiusMiles) {
     } else {
       p.appointmentsUrl = "";
     }
-    // Also keep the lowercased search text for fallback classification
+    // Keep the lowercased search text for fallback classification
     return { practice: p, searchLower: block.toLowerCase() };
   });
+
+  // Step 3: strict radius filter
+  // - Keep practices where distanceMiles is null (NHS didn’t specify, we keep them just in case).
+  // - Drop only those where distanceMiles > radius (+ small tolerance).
+  const RADIUS_TOLERANCE = 0.2; // 0.2 miles tolerance to avoid float weirdness
+  const basePractices = basePracticesRaw.filter(({ practice }) => {
+    if (practice.distanceMiles == null || isNaN(practice.distanceMiles)) {
+      return true; // keep if distance unknown
+    }
+    return practice.distanceMiles <= radius + RADIUS_TOLERANCE;
+  });
+
+  console.log(
+    `[SCAN] (v7.1) After radius filter (${radius} mi): kept ${basePractices.length}/${basePracticesRaw.length} practices.`
+  );
 
   const accepting = [];
   const notAccepting = [];
   const unknown = [];
 
-  // Step 2: For each practice, try to refine status using appointments page
+  // Step 4: For each practice, try to refine status using appointments page
   for (const item of basePractices) {
     const p = item.practice;
     const searchLower = item.searchLower;
@@ -404,7 +440,7 @@ export async function scanPostcode(postcode, radiusMiles) {
 
   const result = {
     postcode,
-    radiusMiles: Number(radiusMiles) || 5,
+    radiusMiles: radius,
     acceptingCount: accepting.length,
     notAcceptingCount: notAccepting.length,
     unknownCount: unknown.length,
@@ -415,7 +451,7 @@ export async function scanPostcode(postcode, radiusMiles) {
     tookMs,
   };
 
-  console.log("[SCAN] (v7) Result summary:", {
+  console.log("[SCAN] (v7.1) Result summary:", {
     postcode: result.postcode,
     radiusMiles: result.radiusMiles,
     accepting: result.acceptingCount,
