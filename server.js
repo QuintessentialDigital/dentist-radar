@@ -1016,7 +1016,7 @@ app.get("/api/admin/cron-status", (req, res) => {
 });
 
 /* ---------------------------
-   Admin: Basic Usage Analytics
+   Admin: Basic Usage Analytics + Email Volume
 --------------------------- */
 app.get("/api/admin/stats", async (req, res) => {
   try {
@@ -1027,6 +1027,7 @@ app.get("/api/admin/stats", async (req, res) => {
       return res.status(403).json({ ok: false, error: "forbidden" });
     }
 
+    // -------- Core user / watch stats --------
     const totalUsers = await User.countDocuments();
     const totalWatches = await Watch.countDocuments();
 
@@ -1053,7 +1054,7 @@ app.get("/api/admin/stats", async (req, res) => {
       { $limit: 15 },
     ]);
 
-    // 🔹 Success / feedback metrics
+    // -------- Success / feedback metrics --------
     const foundYesTotal = await Watch.countDocuments({ foundDentist: true });
     const foundNoTotal = await Watch.countDocuments({ foundDentist: false });
 
@@ -1067,8 +1068,58 @@ app.get("/api/admin/stats", async (req, res) => {
         ? (foundYesTotal / unsubWithFeedback) * 100
         : 0;
 
+    // -------- Email volume (Postmark load) --------
+    const totalEmails = await EmailLog.countDocuments();
+    const emails24h = await EmailLog.countDocuments({
+      sentAt: { $gte: last24h },
+    });
+
+    // Last 7 days, grouped by day and type
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const emailDailyAgg = await EmailLog.aggregate([
+      { $match: { sentAt: { $gte: sevenDaysAgo } } },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: "%Y-%m-%d", date: "$sentAt" },
+          },
+          total: { $sum: 1 },
+          alerts: {
+            $sum: {
+              $cond: [{ $eq: ["$type", "alert"] }, 1, 0],
+            },
+          },
+          welcomes: {
+            $sum: {
+              $cond: [{ $eq: ["$type", "welcome"] }, 1, 0],
+            },
+          },
+          plans: {
+            $sum: {
+              $cond: [{ $eq: ["$type", "plan_activated"] }, 1, 0],
+            },
+          },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    const emailDaily = emailDailyAgg.map((r) => {
+      const other =
+        r.total - (r.alerts || 0) - (r.welcomes || 0) - (r.plans || 0);
+      return {
+        date: r._id,          // "2025-11-21"
+        total: r.total,
+        alerts: r.alerts || 0,
+        welcomes: r.welcomes || 0,
+        plans: r.plans || 0,
+        other: other < 0 ? 0 : other,
+      };
+    });
+
     return res.json({
       ok: true,
+      // Users / watches
       totalUsers,
       totalWatches,
       activeWatches,
@@ -1076,16 +1127,24 @@ app.get("/api/admin/stats", async (req, res) => {
       signups24h,
       unsub24h,
       topPostcodes,
+      // Success metrics
       foundYesTotal,
       foundNoTotal,
       unsubWithFeedback,
       successRate, // percent (0–100)
+      // Email metrics
+      totalEmails,
+      emails24h,
+      emailDaily,
     });
   } catch (err) {
     console.error("admin/stats error:", err?.message || err);
     return res.status(500).json({ ok: false, error: "server_error" });
   }
 });
+
+
+
 
 /* ---------------------------
    Admin: Scanner Self-Check
