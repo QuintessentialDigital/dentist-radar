@@ -1071,40 +1071,65 @@ app.get("/api/admin/stats", async (req, res) => {
         ? (foundYesTotal / unsubWithFeedback) * 100
         : 0;
 
-    // ── Email volume (alerts only + type split) ───────────
+    // ── Email volume: alerts ──────────────────────────────
     const alertMatch = { type: "alert" };
 
     const totalAlertEmails = await EmailLog.countDocuments(alertMatch);
 
-    const totalAlertEmails24h = await EmailLog.countDocuments({
+    const alerts24h = await EmailLog.countDocuments({
       ...alertMatch,
       sentAt: { $gte: last24h },
     });
 
-    const alertsSignupTotal = await EmailLog.countDocuments({
+    const signupAlertsAllTime = await EmailLog.countDocuments({
       ...alertMatch,
       "meta.runMode": "signup",
     });
 
-    const alertsCronTotal = await EmailLog.countDocuments({
+    const cronAlertsAllTime = await EmailLog.countDocuments({
       ...alertMatch,
       "meta.runMode": "cron",
     });
 
-    const alertsSignup24h = await EmailLog.countDocuments({
+    const signupAlerts24h = await EmailLog.countDocuments({
       ...alertMatch,
       "meta.runMode": "signup",
       sentAt: { $gte: last24h },
     });
 
-    const alertsCron24h = await EmailLog.countDocuments({
+    const cronAlerts24h = await EmailLog.countDocuments({
       ...alertMatch,
       "meta.runMode": "cron",
       sentAt: { $gte: last24h },
     });
 
-    // ── Optional: daily breakdown (useful for debugging) ──
-    const emailDaily = await EmailLog.aggregate([
+    // ── Email volume: welcomes + plan activations ─────────
+    const welcomeTotal = await EmailLog.countDocuments({ type: "welcome" });
+    const welcome24h = await EmailLog.countDocuments({
+      type: "welcome",
+      sentAt: { $gte: last24h },
+    });
+
+    const planTotal = await EmailLog.countDocuments({
+      type: "plan_activated",
+    });
+    const plan24h = await EmailLog.countDocuments({
+      type: "plan_activated",
+      sentAt: { $gte: last24h },
+    });
+
+    // ── Daily breakdown (last N days – good for debugging) ─
+    const daysBack = 8;
+    const windowStart = new Date();
+    windowStart.setDate(windowStart.getDate() - (daysBack - 1));
+    windowStart.setHours(0, 0, 0, 0);
+
+    const emailDailyRaw = await EmailLog.aggregate([
+      {
+        $match: {
+          sentAt: { $gte: windowStart },
+        },
+      },
       {
         $group: {
           _id: {
@@ -1128,7 +1153,7 @@ app.get("/api/admin/stats", async (req, res) => {
               $cond: [{ $eq: ["$type", "plan_activated"] }, 1, 0],
             },
           },
-          SignupAlerts: {
+          signupAlerts: {
             $sum: {
               $cond: [
                 {
@@ -1142,7 +1167,7 @@ app.get("/api/admin/stats", async (req, res) => {
               ],
             },
           },
-          CronAlerts: {
+          cronAlerts: {
             $sum: {
               $cond: [
                 {
@@ -1161,14 +1186,14 @@ app.get("/api/admin/stats", async (req, res) => {
       { $sort: { "_id.date": 1 } },
     ]);
 
-    const emailDailyFormatted = emailDaily.map((d) => ({
+    const emailDaily = emailDailyRaw.map((d) => ({
       date: d._id.date,
-      total: d.total,
-      alerts: d.alerts,
-      welcomes: d.welcomes,
-      plans: d.plans,
-      signupAlerts: d.SignupAlerts,
-      cronAlerts: d.CronAlerts,
+      total: d.total || 0,
+      alerts: d.alerts || 0,
+      welcomes: d.welcomes || 0,
+      plans: d.plans || 0,
+      signupAlerts: d.signupAlerts || 0,
+      cronAlerts: d.cronAlerts || 0,
     }));
 
     return res.json({
@@ -1181,20 +1206,25 @@ app.get("/api/admin/stats", async (req, res) => {
       signups24h,
       unsub24h,
       topPostcodes,
-      // Outcome
+      // Outcome / feedback
       foundYesTotal,
       foundNoTotal,
       unsubWithFeedback,
       successRate,
-      // Email volume
+      // Email volume – alerts
       totalAlertEmails,
-      totalAlertEmails24h,
-      alertsSignupTotal,
-      alertsCronTotal,
-      alertsSignup24h,
-      alertsCron24h,
-      // Daily breakdown (for debugging / future charts)
-      emailDaily: emailDailyFormatted,
+      alerts24h,
+      signupAlertsAllTime,
+      cronAlertsAllTime,
+      signupAlerts24h,
+      cronAlerts24h,
+      // Email volume – welcomes & plans
+      welcomeTotal,
+      welcome24h,
+      planTotal,
+      plan24h,
+      // Daily breakdown
+      emailDaily,
     });
   } catch (err) {
     console.error("admin/stats error:", err?.message || err);
