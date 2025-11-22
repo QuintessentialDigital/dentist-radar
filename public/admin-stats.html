@@ -87,6 +87,11 @@
       margin:0 0 6px;
       font-size:16px;
     }
+    .label-help {
+      margin:0 0 8px;
+      font-size:11px;
+      color:#9ca3af;
+    }
     .metric-row {
       display:flex;
       justify-content:space-between;
@@ -133,19 +138,20 @@
       color:#374151;
     }
 
-    .subheading {
-      font-size:12px;
-      color:#6b7280;
-      margin-top:2px;
-      margin-bottom:8px;
+    .section-title {
+      margin-top:22px;
+      margin-bottom:4px;
+      font-size:15px;
+      font-weight:600;
+      color:#111827;
     }
   </style>
 </head>
 <body>
   <h1>DentistRadar – Admin Stats</h1>
   <p class="muted">
-    Quick overview of usage and demand. Reads from
-    <code class="mono">GET /api/admin/stats?token=ADMIN_TOKEN</code>.
+    Internal view of product usage and email volume.<br>
+    Data source: <code class="mono">GET /api/admin/stats?token=ADMIN_TOKEN</code>.
   </p>
 
   <div class="row">
@@ -158,6 +164,10 @@
 
   <div id="summary"></div>
 
+  <h2 class="section-title">Raw email daily breakdown (debug)</h2>
+  <p class="muted">Direct JSON from <code class="mono">emailDaily</code> for sanity checks.</p>
+  <pre id="emailDailyPre" class="mono"></pre>
+
   <script>
     (function () {
       const $ = (id) => document.getElementById(id);
@@ -165,6 +175,7 @@
       const loadBtn = $("loadBtn");
       const statusEl = $("status");
       const summaryEl = $("summary");
+      const emailDailyPre = $("emailDailyPre");
 
       // restore last token
       adminTokenEl.value = localStorage.getItem("dr_admin_token") || "";
@@ -183,11 +194,12 @@
       function renderStats(data) {
         if (!data || !data.ok) {
           summaryEl.innerHTML = "<p class='status-err'>No stats available.</p>";
+          emailDailyPre.textContent = "";
           return;
         }
 
         const {
-          // core metrics
+          // Product / usage
           totalUsers = 0,
           totalWatches = 0,
           activeWatches = 0,
@@ -195,16 +207,19 @@
           signups24h = 0,
           unsub24h = 0,
           topPostcodes = [],
+          // Outcomes
           foundYesTotal = 0,
           foundNoTotal = 0,
           unsubWithFeedback = 0,
           successRate = 0,
-          // email metrics
-          totalEmails = 0,      // alert emails only
-          emails24h = 0,
-          welcomesTotal = 0,
-          plansTotal = 0,
-          otherTotal = 0,
+          // Email volume
+          totalAlertEmails = 0,
+          totalAlertEmails24h = 0,
+          alertsSignupTotal = 0,
+          alertsCronTotal = 0,
+          alertsSignup24h = 0,
+          alertsCron24h = 0,
+          // Daily
           emailDaily = [],
         } = data;
 
@@ -212,9 +227,9 @@
           totalWatches > 0 ? ((inactiveWatches / totalWatches) * 100).toFixed(1) : "0.0";
         const pctActive =
           totalWatches > 0 ? ((activeWatches / totalWatches) * 100).toFixed(1) : "0.0";
-
         const successRateDisplay = successRate ? successRate.toFixed(1) : "0.0";
 
+        // Top postcode table
         let topRows = "";
         topPostcodes.forEach((p, idx) => {
           topRows += `
@@ -228,113 +243,131 @@
         if (!topRows) {
           topRows = `
             <tr>
-              <td colspan="3" class="muted">No active watches yet.</td>
+              <td colspan="3" class="muted">No active alerts yet.</td>
             </tr>
           `;
         }
 
-        // emailDaily JSON pretty-print
-        const emailDailyJson = JSON.stringify(emailDaily || [], null, 2);
-
+        // Build summary UI
         summaryEl.innerHTML = `
-          <div class="card">
-            <h2>Product Overview</h2>
-            <div class="metric-row">
-              <span>Total users</span>
-              <span>${totalUsers}</span>
-            </div>
-            <div class="metric-row">
-              <span>Total watches</span>
-              <span>${totalWatches}</span>
-            </div>
-            <div class="metric-row">
-              <span>Active watches</span>
-              <span>${activeWatches} <span class="pill">${pctActive}%</span></span>
-            </div>
-            <div class="metric-row">
-              <span>Inactive (unsubscribed)</span>
-              <span>${inactiveWatches} <span class="pill">${pctInactive}%</span></span>
-            </div>
-            <hr style="margin:10px 0;border:none;border-top:1px solid #e5e7eb;">
-            <div class="metric-row">
-              <span>New watches (last 24h)</span>
-              <span>${signups24h}</span>
-            </div>
-            <div class="metric-row">
-              <span>Unsubscribes (last 24h)</span>
-              <span>${unsub24h}</span>
-            </div>
-            <hr style="margin:10px 0;border:none;border-top:1px solid #e5e7eb;">
-            <div class="metric-row">
-              <span>Reported “found dentist”</span>
-              <span>${foundYesTotal}</span>
-            </div>
-            <div class="metric-row">
-              <span>Reported “not yet”</span>
-              <span>${foundNoTotal}</span>
-            </div>
-            <div class="metric-row">
-              <span>Unsubscribed with feedback</span>
-              <span>${unsubWithFeedback}</span>
-            </div>
-            <div class="metric-row">
-              <span>Success rate (among feedback)</span>
-              <span>${successRateDisplay}%</span>
-            </div>
-          </div>
-
-          <div class="card">
-            <h2>Email Volume (alerts only)</h2>
-            <p class="subheading">Based on EmailLog entries where Postmark accepted the email.</p>
-            <div class="metric-row">
-              <span>Total alert emails sent</span>
-              <span id="emailsTotal">${totalEmails}</span>
-            </div>
-            <div class="metric-row">
-              <span>Alert emails (last 24h)</span>
-              <span id="emails24h">${emails24h}</span>
-            </div>
-            <hr style="margin:10px 0;border:none;border-top:1px solid #e5e7eb;">
-            <div class="metric-row">
-              <span>Welcome emails</span>
-              <span>${welcomesTotal}</span>
-            </div>
-            <div class="metric-row">
-              <span>Plan activation emails</span>
-              <span>${plansTotal}</span>
-            </div>
-            <div class="metric-row">
-              <span>Other emails</span>
-              <span>${otherTotal}</span>
-            </div>
-          </div>
-
           <div class="grid">
-            <div class="card">
-              <h2>Top Postcodes (active watches)</h2>
-              <table>
-                <thead>
-                  <tr>
-                    <th style="width:36px;">#</th>
-                    <th>Postcode</th>
-                    <th style="width:80px;">Watches</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${topRows}
-                </tbody>
-              </table>
+            <div>
+              <!-- Product overview -->
+              <div class="card">
+                <h2>Product Overview</h2>
+                <p class="label-help">
+                  <b>Pro users</b> = Stripe customers in <code>User</code>.<br>
+                  <b>Alerts</b> = postcode watches in <code>Watch</code> (free + pro).
+                </p>
+                <div class="metric-row">
+                  <span>Pro / paid users (Stripe)</span>
+                  <span>${totalUsers}</span>
+                </div>
+                <div class="metric-row">
+                  <span>Total alerts (all watches)</span>
+                  <span>${totalWatches}</span>
+                </div>
+                <div class="metric-row">
+                  <span>Active alerts</span>
+                  <span>${activeWatches} <span class="pill">${pctActive}%</span></span>
+                </div>
+                <div class="metric-row">
+                  <span>Inactive (unsubscribed) alerts</span>
+                  <span>${inactiveWatches} <span class="pill">${pctInactive}%</span></span>
+                </div>
+                <hr style="margin:10px 0;border:none;border-top:1px solid #e5e7eb;">
+                <div class="metric-row">
+                  <span>New alerts (last 24h)</span>
+                  <span>${signups24h}</span>
+                </div>
+                <div class="metric-row">
+                  <span>Unsubscribes (last 24h)</span>
+                  <span>${unsub24h}</span>
+                </div>
+              </div>
+
+              <!-- Outcomes -->
+              <div class="card">
+                <h2>Outcome Signals</h2>
+                <p class="label-help">
+                  Based on optional feedback on the unsubscribe page.
+                </p>
+                <div class="metric-row">
+                  <span>Reported “found dentist”</span>
+                  <span>${foundYesTotal}</span>
+                </div>
+                <div class="metric-row">
+                  <span>Reported “not yet”</span>
+                  <span>${foundNoTotal}</span>
+                </div>
+                <div class="metric-row">
+                  <span>Unsubscribed with feedback</span>
+                  <span>${unsubWithFeedback}</span>
+                </div>
+                <div class="metric-row">
+                  <span>Success rate (among feedback)</span>
+                  <span>${successRateDisplay}%</span>
+                </div>
+              </div>
             </div>
 
-            <div class="card">
-              <h2>Email Daily Breakdown</h2>
-              <p class="subheading">
-                Each row: { date, total, alerts, welcomes, plans, other } from EmailLog.
-              </p>
-              <pre id="emailDailyPre" class="mono">${escapeHtml(emailDailyJson)}</pre>
+            <div>
+              <!-- Email volume -->
+              <div class="card">
+                <h2>Email Volume (alerts only)</h2>
+                <p class="label-help">
+                  Based on <code>EmailLog</code> where <code>type = "alert"</code>.<br>
+                  Split by <code>meta.runMode</code> = <code>"signup"</code> vs <code>"cron"</code>.
+                </p>
+                <div class="metric-row">
+                  <span>Total alert emails (all time)</span>
+                  <span>${totalAlertEmails}</span>
+                </div>
+                <div class="metric-row">
+                  <span>Alert emails (last 24h)</span>
+                  <span>${totalAlertEmails24h}</span>
+                </div>
+                <hr style="margin:10px 0;border:none;border-top:1px solid #e5e7eb;">
+                <div class="metric-row">
+                  <span>Signup alerts (all time)</span>
+                  <span>${alertsSignupTotal}</span>
+                </div>
+                <div class="metric-row">
+                  <span>Cron alerts (all time)</span>
+                  <span>${alertsCronTotal}</span>
+                </div>
+                <div class="metric-row">
+                  <span>Signup alerts (last 24h)</span>
+                  <span>${alertsSignup24h}</span>
+                </div>
+                <div class="metric-row">
+                  <span>Cron alerts (last 24h)</span>
+                  <span>${alertsCron24h}</span>
+                </div>
+              </div>
+
+              <!-- Top postcodes -->
+              <div class="card">
+                <h2>Top Postcodes (active alerts)</h2>
+                <table>
+                  <thead>
+                    <tr>
+                      <th style="width:36px;">#</th>
+                      <th>Postcode</th>
+                      <th style="width:80px;">Alerts</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${topRows}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         `;
+
+        // raw daily breakdown for debugging
+        emailDailyPre.textContent = JSON.stringify(emailDaily, null, 2);
       }
 
       async function loadStats() {
@@ -355,6 +388,7 @@
           if (res.status === 403) {
             setStatus("Forbidden — wrong ADMIN_TOKEN", "status-err");
             summaryEl.innerHTML = "";
+            emailDailyPre.textContent = "";
             loadBtn.disabled = false;
             return;
           }
@@ -366,6 +400,7 @@
               "<pre class='mono'>" +
               escapeHtml(JSON.stringify(data, null, 2)) +
               "</pre>";
+            emailDailyPre.textContent = "";
             loadBtn.disabled = false;
             return;
           }
