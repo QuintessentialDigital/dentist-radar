@@ -1016,7 +1016,7 @@ app.get("/api/admin/cron-status", (req, res) => {
 });
 
 /* ---------------------------
-   Admin: Basic Usage Analytics + Email Volume
+   Admin: Usage & Email Analytics
 --------------------------- */
 app.get("/api/admin/stats", async (req, res) => {
   try {
@@ -1027,16 +1027,17 @@ app.get("/api/admin/stats", async (req, res) => {
       return res.status(403).json({ ok: false, error: "forbidden" });
     }
 
-    // -------- Core user / watch stats --------
-    const totalUsers = await User.countDocuments();
-    const totalWatches = await Watch.countDocuments();
+    const now = Date.now();
+    const last24h = new Date(now - 24 * 60 * 60 * 1000);
+
+    // ── Product / watch stats ─────────────────────────────
+    const totalUsers = await User.countDocuments(); // Pro/paid users (Stripe)
+    const totalWatches = await Watch.countDocuments(); // All alerts (free+pro)
 
     const activeWatches = await Watch.countDocuments({
       active: { $ne: false },
     });
     const inactiveWatches = totalWatches - activeWatches;
-
-    const last24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
 
     const signups24h = await Watch.countDocuments({
       createdAt: { $gte: last24h },
@@ -1054,7 +1055,7 @@ app.get("/api/admin/stats", async (req, res) => {
       { $limit: 15 },
     ]);
 
-    // -------- Success / feedback metrics --------
+    // ── Outcome / feedback stats ──────────────────────────
     const foundYesTotal = await Watch.countDocuments({ foundDentist: true });
     const foundNoTotal = await Watch.countDocuments({ foundDentist: false });
 
@@ -1068,20 +1069,46 @@ app.get("/api/admin/stats", async (req, res) => {
         ? (foundYesTotal / unsubWithFeedback) * 100
         : 0;
 
-    // -------- Email volume (Postmark load) --------
-    const totalEmails = await EmailLog.countDocuments();
-    const emails24h = await EmailLog.countDocuments({
+    // ── Email volume (alerts only + type split) ───────────
+    const alertMatch = { type: "alert" };
+
+    const totalAlertEmails = await EmailLog.countDocuments(alertMatch);
+
+    const totalAlertEmails24h = await EmailLog.countDocuments({
+      ...alertMatch,
       sentAt: { $gte: last24h },
     });
 
-    // Last 7 days, grouped by day and type
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const emailDailyAgg = await EmailLog.aggregate([
-      { $match: { sentAt: { $gte: sevenDaysAgo } } },
+    const alertsSignupTotal = await EmailLog.countDocuments({
+      ...alertMatch,
+      "meta.runMode": "signup",
+    });
+
+    const alertsCronTotal = await EmailLog.countDocuments({
+      ...alertMatch,
+      "meta.runMode": "cron",
+    });
+
+    const alertsSignup24h = await EmailLog.countDocuments({
+      ...alertMatch,
+      "meta.runMode": "signup",
+      sentAt: { $gte: last24h },
+    });
+
+    const alertsCron24h = await EmailLog.countDocuments({
+      ...alertMatch,
+      "meta.runMode": "cron",
+      sentAt: { $gte: last24h },
+    });
+
+    // ── Optional: daily breakdown (useful for debugging) ──
+    const emailDaily = await EmailLog.aggregate([
       {
         $group: {
           _id: {
-            $dateToString: { format: "%Y-%m-%d", date: "$sentAt" },
+            date: {
+              $dateToString: { format: "%Y-%m-%d", date: "$sentAt" },
+            },
           },
           total: { $sum: 1 },
           alerts: {
@@ -1099,27 +1126,52 @@ app.get("/api/admin/stats", async (req, res) => {
               $cond: [{ $eq: ["$type", "plan_activated"] }, 1, 0],
             },
           },
+          SignupAlerts: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$type", "alert"] },
+                    { $eq: ["$meta.runMode", "signup"] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
+          CronAlerts: {
+            $sum: {
+              $cond: [
+                {
+                  $and: [
+                    { $eq: ["$type", "alert"] },
+                    { $eq: ["$meta.runMode", "cron"] },
+                  ],
+                },
+                1,
+                0,
+              ],
+            },
+          },
         },
       },
-      { $sort: { _id: 1 } },
+      { $sort: { "_id.date": 1 } },
     ]);
 
-    const emailDaily = emailDailyAgg.map((r) => {
-      const other =
-        r.total - (r.alerts || 0) - (r.welcomes || 0) - (r.plans || 0);
-      return {
-        date: r._id,          // "2025-11-21"
-        total: r.total,
-        alerts: r.alerts || 0,
-        welcomes: r.welcomes || 0,
-        plans: r.plans || 0,
-        other: other < 0 ? 0 : other,
-      };
-    });
+    const emailDailyFormatted = emailDaily.map((d) => ({
+      date: d._id.date,
+      total: d.total,
+      alerts: d.alerts,
+      welcomes: d.welcomes,
+      plans: d.plans,
+      signupAlerts: d.SignupAlerts,
+      cronAlerts: d.CronAlerts,
+    }));
 
     return res.json({
       ok: true,
-      // Users / watches
+      // Product / usage
       totalUsers,
       totalWatches,
       activeWatches,
@@ -1127,22 +1179,26 @@ app.get("/api/admin/stats", async (req, res) => {
       signups24h,
       unsub24h,
       topPostcodes,
-      // Success metrics
+      // Outcome
       foundYesTotal,
       foundNoTotal,
       unsubWithFeedback,
-      successRate, // percent (0–100)
-      // Email metrics
-      totalEmails,
-      emails24h,
-      emailDaily,
+      successRate,
+      // Email volume
+      totalAlertEmails,
+      totalAlertEmails24h,
+      alertsSignupTotal,
+      alertsCronTotal,
+      alertsSignup24h,
+      alertsCron24h,
+      // Daily breakdown (for debugging / future charts)
+      emailDaily: emailDailyFormatted,
     });
   } catch (err) {
     console.error("admin/stats error:", err?.message || err);
     return res.status(500).json({ ok: false, error: "server_error" });
   }
 });
-
 
 
 
