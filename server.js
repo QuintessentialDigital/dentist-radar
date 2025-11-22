@@ -102,20 +102,22 @@ async function sendEmailHTML(to, subject, html, type = "other", meta = {}) {
 
     const ok = r.status >= 200 && r.status < 300;
     const body = r.data || {};
-    if (ok && type === "alert") {
+        // Log any email type we care about
+    if (ok && ["alert", "welcome", "plan_activated"].includes(type)) {
       try {
         await EmailLog.create({
           to,
           subject,
-          type,
+          type,               // "alert" | "welcome" | "plan_activated"
           providerId: body.MessageID,
-          meta,
+          meta,               // includes runMode for alerts
           sentAt: new Date(),
         });
       } catch (e) {
         console.error("⚠️ EmailLog save error:", e?.message || e);
       }
-    } else if (!ok) {
+    }
+     else if (!ok) {
       console.error("❌ Postmark error:", r.status, body);
     }
     return { ok, status: r.status, body };
