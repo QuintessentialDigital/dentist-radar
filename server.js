@@ -51,6 +51,59 @@ async function sendEmailHTML(to, subject, html, type = "other", meta = {}) {
     console.log("ℹ️ POSTMARK token not set → skip email.");
     return { ok: false, skipped: true };
   }
+  try {
+    const r = await axios.post(
+      "https://api.postmarkapp.com/email",
+      {
+        From:
+          process.env.MAIL_FROM ||
+          process.env.EMAIL_FROM ||
+          "alerts@dentistradar.co.uk",
+        To: to,
+        Subject: subject,
+        HtmlBody: html,
+        MessageStream: process.env.POSTMARK_MESSAGE_STREAM || "outbound",
+      },
+      {
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Postmark-Server-Token": key,
+        },
+        timeout: 12000,
+        validateStatus: () => true,
+      }
+    );
+
+    const ok = r.status >= 200 && r.status < 300;
+    const body = r.data || {};
+
+    if (!ok) {
+      console.error("❌ Postmark error:", r.status, body);
+      return { ok: false, status: r.status, body };
+    }
+
+    // ✅ Log ALL successful emails: alerts, welcomes, plans, etc.
+    try {
+      await EmailLog.create({
+        to,
+        subject,
+        type, // "alert" | "welcome" | "plan_activated" | "other"
+        providerId: body.MessageID || null,
+        meta,
+        sentAt: new Date(),
+      });
+    } catch (e) {
+      console.error("⚠️ EmailLog save error:", e?.message || e);
+    }
+
+    return { ok: true, status: r.status, body };
+  } catch (e) {
+    console.error("❌ Postmark exception:", e?.message);
+    return { ok: false, error: e?.message };
+  }
+}
+   
 
   // 🔒 Global throttle for alert emails: max 1 per user per 6 hours
   if (type === "alert") {
