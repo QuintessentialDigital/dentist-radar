@@ -440,6 +440,128 @@ function rateLimitWatchCreate(req, res, next) {
 }
 
 /* ---------------------------
+   Partner Clinics – lead capture (Phase 1)
+--------------------------- */
+app.post("/api/partner/register", async (req, res) => {
+  try {
+    const {
+      practiceName,
+      contactName,
+      email,
+      phone,
+      postcode,
+      website,
+      practiceType,
+      newPatients,
+      services,
+      plan,
+      notes,
+    } = req.body || {};
+
+    const norm = (s) => String(s || "").trim();
+    const normEmail = norm(email).toLowerCase();
+    const pc = normalizePostcode(postcode || "");
+    const chosenPlan = (plan || "").toLowerCase();
+
+    if (!emailRe.test(normEmail)) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "invalid_email" });
+    }
+    if (!practiceName || !contactName || !pc || !chosenPlan) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "missing_required" });
+    }
+    if (!["basic", "boost", "zone"].includes(chosenPlan)) {
+      return res
+        .status(400)
+        .json({ ok: false, error: "invalid_plan" });
+    }
+
+    // Basic dedupe: same practice+postcode+plan in "pending" shouldn't spam.
+    const existing = await PartnerClinic.findOne({
+      email: normEmail,
+      postcode: pc,
+      plan: chosenPlan,
+      status: "pending",
+    }).lean();
+
+    if (existing) {
+      return res.json({
+        ok: true,
+        message:
+          "We already have a recent enquiry from this practice. We’ll be in touch shortly.",
+      });
+    }
+
+    const partner = await PartnerClinic.create({
+      practiceName: norm(practiceName),
+      contactName: norm(contactName),
+      email: normEmail,
+      phone: norm(phone),
+      postcode: pc,
+      website: norm(website),
+      practiceType,
+      newPatients,
+      services,
+      plan: chosenPlan,
+      notes,
+    });
+
+    // Optional: email you when a new partner enquiry arrives
+    const adminEmail = process.env.PARTNER_ADMIN_EMAIL;
+    if (adminEmail) {
+      const html = `
+        <h2>New Partner Clinic enquiry</h2>
+        <p><strong>${practiceName}</strong> (${pc})</p>
+        <p>Contact: ${contactName} &lt;${normEmail}&gt; / ${phone || "n/a"}</p>
+        <p>Plan: ${chosenPlan}</p>
+        <p>Practice type: ${practiceType || "-"}</p>
+        <p>New patients: ${newPatients || "-"}</p>
+        <p>Website: ${website || "-"}</p>
+        <p>Services: ${services || "-"}</p>
+        <p>Notes: ${notes || "-"}</p>
+      `;
+      await sendEmailHTML(
+        adminEmail,
+        "New DentistRadar Partner Clinic enquiry",
+        html,
+        "partner_enquiry",
+        { partnerId: partner._id }
+      );
+    }
+
+    // (Optional) send a simple acknowledgement to the clinic
+    const ackHtml = `
+      <p>Hi ${contactName || ""},</p>
+      <p>Thank you for your interest in becoming a DentistRadar Partner Clinic.</p>
+      <p>We’ve received your details for <strong>${practiceName}</strong> (${pc}). We’ll review your information and be in touch with next steps within a few working days.</p>
+      <p>Best regards,<br>DentistRadar</p>
+    `;
+    await sendEmailHTML(
+      normEmail,
+      "We’ve received your DentistRadar Partner Clinic enquiry",
+      ackHtml,
+      "partner_ack",
+      { partnerId: partner._id }
+    );
+
+    return res.json({
+      ok: true,
+      message:
+        "Enquiry received. We’ll be in touch with next steps.",
+    });
+  } catch (err) {
+    console.error("partner/register error:", err?.message || err);
+    return res
+      .status(500)
+      .json({ ok: false, error: "server_error" });
+  }
+});
+
+
+/* ---------------------------
    Health / Debug
 --------------------------- */
 app.get("/api/health", (req, res) =>
