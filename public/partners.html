@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>DentistRadar Partner Clinics – Bring in high-intent patients</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    /* Page-specific tweaks layered on top of style.css */
+
+    .page-hero {
+      background:#f3f4f6;
+      padding:32px 0 24px;
+      border-bottom:1px solid #e5e7eb;
+    }
+    .page-hero-inner {
+      max-width:960px;
+      margin:0 auto;
+      display:flex;
+      flex-wrap:wrap;
+      gap:24px;
+      align-items:flex-start;
+    }
+    .page-hero-copy {
+      flex:2 1 260px;
+    }
+    .page-hero-copy h1 {
+      margin:0 0 8px;
+      font-size:26px;
+    }
+    .page-hero-copy p {
+      margin:4px 0;
+      font-size:14px;
+      color:#4b5563;
+    }
+    .page-hero-aside {
+      flex:1 1 220px;
+      background:#eef2ff;
+      border-radius:10px;
+      padding:12px 14px;
+      font-size:13px;
+      color:#111827;
+      border:1px solid #e0e7ff;
+    }
+    .badge-muted {
+      display:inline-flex;
+      align-items:center;
+      font-size:11px;
+      padding:2px 8px;
+      border-radius:999px;
+      border:1px solid #e5e7eb;
+      background:#f9fafb;
+      color:#4b5563;
+      margin-right:6px;
+    }
+
+    .section-narrow {
+      max-width:960px;
+      margin:24px auto;
+      padding:0 16px;
+    }
+    .two-col {
+      display:grid;
+      grid-template-columns:2fr 3fr;
+      gap:22px;
+    }
+    @media (max-width: 900px) {
+      .two-col {
+        grid-template-columns:1fr;
+      }
+    }
+
+    .panel {
+      background:#ffffff;
+      border-radius:12px;
+      border:1px solid #e5e7eb;
+      padding:16px 18px;
+      box-shadow:0 6px 14px rgba(15,23,42,0.06);
+    }
+    .panel h2 {
+      margin:0 0 6px;
+      font-size:18px;
+    }
+    .panel h3 {
+      margin:10px 0 4px;
+      font-size:15px;
+    }
+    .panel p {
+      margin:4px 0;
+      font-size:13px;
+      color:#4b5563;
+    }
+    .panel ul {
+      margin:4px 0 8px 18px;
+      padding:0;
+      font-size:13px;
+      color:#374151;
+    }
+
+    .pricing-grid {
+      display:grid;
+      grid-template-columns:repeat(3, minmax(0,1fr));
+      gap:18px;
+      margin-top:10px;
+    }
+    @media (max-width: 900px) {
+      .pricing-grid {
+        grid-template-columns:1fr;
+      }
+    }
+    .price-card {
+      border-radius:12px;
+      border:1px solid #e5e7eb;
+      background:#ffffff;
+      padding:14px 14px 16px;
+    }
+    .price-card h3 {
+      margin:0 0 6px;
+      font-size:15px;
+    }
+    .price-tag {
+      font-size:18px;
+      font-weight:700;
+      margin:2px 0 8px;
+      color:#111827;
+    }
+    .price-note {
+      font-size:11px;
+      color:#6b7280;
+    }
+    .price-card ul {
+      margin:6px 0 4px 18px;
+      font-size:13px;
+    }
+
+    .partner-form label {
+      display:block;
+      font-size:13px;
+      color:#374151;
+      margin:6px 0 3px;
+    }
+    .partner-form input,
+    .partner-form select,
+    .partner-form textarea {
+      width:100%;
+      box-sizing:border-box;
+      padding:7px 9px;
+      border-radius:8px;
+      border:1px solid #d1d5db;
+      font-size:13px;
+      font-family:inherit;
+    }
+    .partner-form textarea {
+      min-height:70px;
+      resize:vertical;
+    }
+    .partner-form small {
+      display:block;
+      font-size:11px;
+      color:#6b7280;
+      margin-top:2px;
+    }
+    .radio-row {
+      display:flex;
+      flex-wrap:wrap;
+      gap:10px;
+      margin-top:4px;
+    }
+    .radio-row label {
+      display:flex;
+      align-items:center;
+      gap:4px;
+      border-radius:999px;
+      border:1px solid #d1d5db;
+      padding:4px 8px;
+      font-size:12px;
+      cursor:pointer;
+    }
+    .partner-form .btn-primary {
+      margin-top:10px;
+      padding:9px 16px;
+      border-radius:999px;
+      background:#0b63ff;
+      color:#ffffff;
+      border:none;
+      cursor:pointer;
+      font-size:14px;
+      font-weight:500;
+    }
+    .partner-form .btn-primary:hover {
+      background:#084ccf;
+    }
+    .form-status {
+      margin-top:8px;
+      font-size:12px;
+    }
+    .form-status.ok {
+      color:#15803d;
+    }
+    .form-status.err {
+      color:#b91c1c;
+    }
+
+    .faq-list details {
+      border-radius:10px;
+      border:1px solid #e5e7eb;
+      padding:8px 10px;
+      margin:6px 0;
+      background:#ffffff;
+    }
+    .faq-list summary {
+      cursor:pointer;
+      font-size:13px;
+      font-weight:600;
+      color:#111827;
+    }
+    .faq-list p {
+      font-size:13px;
+      color:#4b5563;
+      margin:6px 0 2px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Re-use your existing header -->
+  <header>
+    <div class="container navbar">
+      <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"></a>
+      <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
+      <ul id="nav-links" class="nav-links">
+        <li><a href="/">Home</a></li>
+        <li><a href="pricing.html">Pricing</a></li>
+        <li><a class="active" href="partners.html">Partner Clinics</a></li>
+        <li><a href="about.html">About</a></li>
+        <li><a href="terms.html">Terms</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+      </ul>
+    </div>
+  </header>
+
+  <div class="page-hero">
+    <div class="page-hero-inner">
+      <div class="page-hero-copy">
+        <span class="badge-muted">For dental practices &amp; practice owners</span>
+        <h1>DentistRadar Partner Clinics</h1>
+        <p>
+          Thousands of people every week use DentistRadar to look for a local dentist.
+          Many struggle to find an NHS place and are open to private treatment.
+        </p>
+        <p>
+          Partner Clinics appear prominently in those searches and emails, so that
+          highly motivated patients can find and contact you quickly.
+        </p>
+        <p style="margin-top:10px;font-size:13px;color:#111827;">
+          No long contracts. Month-to-month. Cancel any time.
+        </p>
+      </div>
+      <aside class="page-hero-aside">
+        <strong>What you get as a Partner Clinic</strong>
+        <ul style="margin:6px 0 0 18px;padding:0;">
+          <li>Visibility to high-intent patients in your postcode area</li>
+          <li>Placement in alerts when no NHS dentist is available nearby</li>
+          <li>Clear “Partner Clinic” label with your phone &amp; website</li>
+          <li>Simple monthly pricing, no setup fee</li>
+        </ul>
+      </aside>
+    </div>
+  </div>
+
+  <main>
+    <section class="section-narrow">
+      <div class="two-col">
+        <div class="panel">
+          <h2>Partner plans</h2>
+          <p style="margin-bottom:10px;">
+            Choose a simple monthly plan. You can upgrade or cancel at any time.
+          </p>
+          <div class="pricing-grid">
+            <div class="price-card">
+              <h3>Featured Clinic</h3>
+              <div class="price-tag">£49<span style="font-size:12px;font-weight:500;"> / month</span></div>
+              <div class="price-note">Best for single-site practices</div>
+              <ul>
+                <li>“Partner Clinic” badge on DentistRadar</li>
+                <li>Highlighted in searches for your postcode</li>
+                <li>Your phone number and website shown</li>
+                <li>Displayed when no NHS dentist is available</li>
+              </ul>
+            </div>
+
+            <div class="price-card">
+              <h3>Lead Boost</h3>
+              <div class="price-tag">£99<span style="font-size:12px;font-weight:500;"> / month</span></div>
+              <div class="price-note">For growing private patient lists</div>
+              <ul>
+                <li>Everything in Featured</li>
+                <li>Priority visibility in nearby postcodes</li>
+                <li>Shown to users who have zero local NHS options</li>
+                <li>Monthly summary of views &amp; clicks</li>
+              </ul>
+            </div>
+
+            <div class="price-card">
+              <h3>Zone Owner</h3>
+              <div class="price-tag">£199<span style="font-size:12px;font-weight:500;"> / month</span></div>
+              <div class="price-note">Exclusive presence in your postcode district</div>
+              <ul>
+                <li>Exclusive “Partner Clinic” for one postcode district</li>
+                <li>Top placement for all relevant searches in that area</li>
+                <li>Priority support and onboarding</li>
+                <li>Custom reporting available on request</li>
+              </ul>
+            </div>
+          </div>
+          <p style="margin-top:10px;font-size:12px;color:#6b7280;">
+            All prices are per practice site, per month, excluding VAT (if applicable).
+          </p>
+        </div>
+
+        <div class="panel">
+          <h2>Register your interest</h2>
+          <p>
+            Tell us a little about your practice. We will review your details and
+            get in touch with next steps. There’s no obligation and no payment is
+            taken on this form.
+          </p>
+
+          <form id="partnerForm" class="partner-form" novalidate>
+            <label for="practiceName">Practice name</label>
+            <input id="practiceName" name="practiceName" type="text" required>
+
+            <label for="contactName">Contact name</label>
+            <input id="contactName" name="contactName" type="text" required>
+            <small>Practice owner, manager or main contact.</small>
+
+            <label for="email">Contact email</label>
+            <input id="email" name="email" type="email" autocomplete="email" required>
+
+            <label for="phone">Practice phone number</label>
+            <input id="phone" name="phone" type="text" required>
+
+            <label for="postcode">Practice postcode</label>
+            <input id="postcode" name="postcode" type="text" autocomplete="postal-code" required>
+
+            <label for="website">Website or booking link</label>
+            <input id="website" name="website" type="url" placeholder="https://">
+
+            <label for="practiceType">Practice type</label>
+            <select id="practiceType" name="practiceType" required>
+              <option value="">Please select…</option>
+              <option value="nhs_private">Mixed NHS and private</option>
+              <option value="private_only">Private only</option>
+            </select>
+
+            <label for="newPatients">Are you currently taking on new patients?</label>
+            <select id="newPatients" name="newPatients" required>
+              <option value="">Please select…</option>
+              <option value="yes_general">Yes – general dentistry</option>
+              <option value="yes_child">Yes – children only</option>
+              <option value="yes_private_only">Yes – private only</option>
+              <option value="no">Not currently</option>
+            </select>
+
+            <label for="services">Key services</label>
+            <textarea id="services" name="services" placeholder="e.g. General dentistry, hygiene, Invisalign, whitening, implants"></textarea>
+
+            <label>Which Partner plan are you interested in?</label>
+            <div class="radio-row">
+              <label>
+                <input type="radio" name="plan" value="basic" required>
+                Featured (£49/m)
+              </label>
+              <label>
+                <input type="radio" name="plan" value="boost">
+                Lead Boost (£99/m)
+              </label>
+              <label>
+                <input type="radio" name="plan" value="zone">
+                Zone Owner (£199/m)
+              </label>
+            </div>
+
+            <label for="notes">Anything else we should know? (optional)</label>
+            <textarea id="notes" name="notes" placeholder="Opening hours, areas you serve, typical waiting times, etc."></textarea>
+
+            <button type="submit" class="btn-primary">Submit details</button>
+            <div id="formStatus" class="form-status" aria-live="polite"></div>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-narrow">
+      <div class="panel faq-list">
+        <h2>Frequently asked questions</h2>
+
+        <details>
+          <summary>Who can become a Partner Clinic?</summary>
+          <p>
+            DentistRadar Partner Clinics are UK-registered dental practices that
+            provide NHS and/or private care. We currently focus on practices in
+            England and will extend to other nations over time.
+          </p>
+        </details>
+
+        <details>
+          <summary>How do you show Partner Clinics to patients?</summary>
+          <p>
+            When people use DentistRadar to look for a dentist in their area, we
+            first check whether any local practices are clearly accepting patients.
+            If none are available, we highlight Partner Clinics who can offer
+            private or mixed NHS/private treatment nearby.
+          </p>
+        </details>
+
+        <details>
+          <summary>Is there a long-term contract?</summary>
+          <p>
+            No. Plans are billed monthly and can be cancelled at any time before
+            the next billing date.
+          </p>
+        </details>
+
+        <details>
+          <summary>Do you guarantee a certain number of patients?</summary>
+          <p>
+            We do not guarantee specific numbers, because demand varies by area.
+            However, we focus on people who are already searching in your postcode,
+            so the interest level is very high. We will share simple usage metrics
+            with you over time.
+          </p>
+        </details>
+
+        <details>
+          <summary>How do we get started?</summary>
+          <p>
+            Submit your details using the form above. We’ll review your practice,
+            confirm the best plan for your area, and send you a secure payment link
+            when you’re ready to go ahead.
+          </p>
+        </details>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container footer">
+      © 2025 Dentist Radar ·
+      <a href="privacy.html">Privacy</a> ·
+      <a href="terms.html">Terms</a> ·
+      <a href="about.html">About</a> ·
+      <a href="mailto:support@dentistradar.co.uk">Support</a>
+    </div>
+  </footer>
+
+  <script>
+    // Simple nav toggle reuse
+    (function () {
+      const toggle = document.getElementById("menu-toggle");
+      const links = document.getElementById("nav-links");
+      toggle?.addEventListener("click", () => links?.classList.toggle("open"));
+      links?.querySelectorAll("a").forEach((a) =>
+        a.addEventListener("click", () => links.classList.remove("open"))
+      );
+    })();
+
+    // Partner form submit -> /api/partner/register
+    (function () {
+      const form = document.getElementById("partnerForm");
+      const statusEl = document.getElementById("formStatus");
+
+      function setStatus(msg, cls) {
+        if (!statusEl) return;
+        statusEl.textContent = msg || "";
+        statusEl.className = "form-status " + (cls || "");
+      }
+
+      if (!form) return;
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        setStatus("Sending your details…", "");
+
+        const formData = new FormData(form);
+        const payload = Object.fromEntries(formData.entries());
+
+        try {
+          const res = await fetch("/api/partner/register", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+
+          const data = await res.json().catch(() => ({}));
+
+          if (!res.ok || !data.ok) {
+            setStatus(
+              data.error === "invalid_email"
+                ? "Please enter a valid email address."
+                : "Something went wrong. Please try again or email support@dentistradar.co.uk.",
+              "err"
+            );
+            return;
+          }
+
+          setStatus(
+            "Thank you – we’ve received your details and will be in touch.",
+            "ok"
+          );
+          form.reset();
+        } catch (err) {
+          console.error(err);
+          setStatus(
+            "Unable to reach the server. Please try again later.",
+            "err"
+          );
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
