@@ -116,6 +116,38 @@ const emailLogSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// In models.js (after your existing imports / schemas)
+
+const partnerClinicSchema = new mongoose.Schema(
+  {
+    practiceName: { type: String, required: true },
+    contactName: { type: String, required: true },
+    email: { type: String, required: true, index: true },
+    phone: { type: String },
+    postcode: { type: String, required: true, index: true },
+    website: { type: String },
+    practiceType: { type: String }, // nhs_private | private_only
+    newPatients: { type: String },  // yes_general | yes_child | yes_private_only | no
+    services: { type: String },
+    plan: { type: String, enum: ["basic", "boost", "zone"], required: true },
+    notes: { type: String },
+    status: {
+      type: String,
+      enum: ["pending", "approved", "rejected"],
+      default: "pending",
+      index: true,
+    },
+  },
+  { timestamps: true }
+);
+
+const PartnerClinic =
+  mongoose.models.PartnerClinic ||
+  mongoose.model("PartnerClinic", partnerClinicSchema);
+
+export { PartnerClinic };
+
+
 // Helpful analytics indices (non-unique)
 emailLogSchema.index({ email: 1, postcode: 1 });
 emailLogSchema.index({ practiceId: 1 });
