@@ -1015,7 +1015,7 @@ async function runAllScans({ dryRun = false } = {}) {
       const email = normEmail(w.email || "");
       if (!emailRe.test(email)) continue;
 
-      // Check last alert in last 12 hours for this email+postcode+radius
+      // 1) Check last alert in last 12 hours for this email+postcode+radius
       const lastAlert = await EmailLog.findOne({
         to: email,
         type: "alert",
@@ -1036,6 +1036,29 @@ async function runAllScans({ dryRun = false } = {}) {
         continue;
       }
 
+      // 2) Per-watch memory: only NEW practices for this watch
+      const already = new Set(
+        Array.isArray(w.alertedVcodes) ? w.alertedVcodes : []
+      );
+
+      const freshPractices = practices.filter((p) => {
+        const k = practiceKey(p, postcode); // uses vcode/nhsUrl/name+postcode
+        return !already.has(k);
+      });
+
+      if (freshPractices.length === 0) {
+        results.push({
+          key,
+          postcode,
+          radius,
+          email,
+          acceptingCount,
+          emailsSent: 0,
+          reason: "no_new_practices_for_watch",
+        });
+        continue;
+      }
+
       if (dryRun) {
         results.push({
           key,
@@ -1043,55 +1066,74 @@ async function runAllScans({ dryRun = false } = {}) {
           radius,
           email,
           acceptingCount,
+          newCount: freshPractices.length,
           wouldSend: true,
         });
-      } else {
-        // 🔒 Daily cap check: stop sending if we've hit the limit
-        if (emailsSentToday >= DAILY_EMAIL_LIMIT) {
-          console.warn(
-            `[CRON] Daily alert email limit reached (${emailsSentToday}/${DAILY_EMAIL_LIMIT}). Skipping further sends.`
-          );
-          results.push({
-            key,
-            postcode,
-            radius,
-            email,
-            acceptingCount,
-            skipped: true,
-            reason: "daily_limit_reached",
-          });
-          continue;
-        }
-
-        const SITE =
-          process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
-
-        const manageUrl = `${SITE}/my-alerts.html?email=${encodeURIComponent(
-          email
-        )}`;
-        const unsubscribeUrl = `${SITE}/unsubscribe/${w._id}`;
-
-        const { subject, html } = buildAcceptanceEmail(
-          postcode,
-          radius,
-          practices,
-          { manageUrl, unsubscribeUrl }
-        );
-
-        const meta = {
-          postcode,
-          radius,
-          acceptingCount,
-          watchId: w._id,
-          runMode: "cron",
-        };
-        await sendEmailHTML(email, subject, html, "alert", meta);
-        totalEmails++;
-        emailsSentToday++;
-        console.log(
-          `[CRON] Sent acceptance alert to ${email} for ${key} with ${acceptingCount} practice(s). (emailsSentToday=${emailsSentToday})`
-        );
+        continue;
       }
+
+      // 3) Daily cap check – only after we know there IS something new to send
+      if (emailsSentToday >= DAILY_EMAIL_LIMIT) {
+        console.warn(
+          `[CRON] Daily alert email limit reached (${emailsSentToday}/${DAILY_EMAIL_LIMIT}). Skipping further sends.`
+        );
+        results.push({
+          key,
+          postcode,
+          radius,
+          email,
+          acceptingCount,
+          skipped: true,
+          reason: "daily_limit_reached",
+        });
+        continue;
+      }
+
+      const SITE =
+        process.env.PUBLIC_ORIGIN || "https://www.dentistradar.co.uk";
+
+      const manageUrl = `${SITE}/my-alerts.html?email=${encodeURIComponent(
+        email
+      )}`;
+      const unsubscribeUrl = `${SITE}/unsubscribe/${w._id}`;
+
+      const { subject, html } = buildAcceptanceEmail(
+        postcode,
+        radius,
+        freshPractices,
+        { manageUrl, unsubscribeUrl }
+      );
+
+      const meta = {
+        postcode,
+        radius,
+        acceptingCount: freshPractices.length,
+        watchId: w._id,
+        runMode: "cron",
+      };
+
+      await sendEmailHTML(email, subject, html, "alert", meta);
+      totalEmails++;
+      emailsSentToday++;
+
+      console.log(
+        `[CRON] Sent acceptance alert to ${email} for ${key} with ${freshPractices.length} NEW practice(s). (emailsSentToday=${emailsSentToday})`
+      );
+
+      // 4) 🧠 Update memory for this watch – mark these practices as alerted
+      const newKeys = freshPractices.map((p) =>
+        practiceKey(p, postcode)
+      );
+
+      await Watch.findByIdAndUpdate(
+        w._id,
+        {
+          $addToSet: {
+            alertedVcodes: { $each: newKeys },
+          },
+        },
+        { new: false }
+      );
     }
   }
 
@@ -1122,6 +1164,7 @@ async function runAllScans({ dryRun = false } = {}) {
 
   return summary;
 }
+
 
 /**
  * Admin endpoint to trigger grouped scans.
