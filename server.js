@@ -17,7 +17,6 @@ import axios from "axios";
 import { connectMongo, Watch, User, EmailLog, peek, PartnerClinic } from "./models.js";
 
 import { renderEmail } from "./emailTemplates.js";
-import { connectMongo, Watch, User, EmailLog, peek } from "./models.js";
 
 dotenv.config();
 
