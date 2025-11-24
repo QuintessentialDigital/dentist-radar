@@ -57,6 +57,11 @@ const watchSchema = new mongoose.Schema(
     unsubscribedAt: { type: Date, default: null },
     foundDentist: { type: Boolean, default: null },
 
+    alertedVcodes: {
+      type: [String],
+      default: [],
+    },
+
   },
   { timestamps: true }
 );
