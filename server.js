@@ -184,6 +184,15 @@ function detectUkRegion(postcode) {
   return "ENGLAND";
 }
 
+function practiceKey(p, postcode) {
+  // Prefer vcode if present
+  if (p.vcode) return `V:${p.vcode}`;
+  if (p.nhsUrl) return `U:${p.nhsUrl}`;
+  // Fallback – should be rare
+  return `N:${(p.name || "").trim()}|${(postcode || "").trim()}`;
+}
+
+
 async function planLimitFor(email) {
   const e = normEmail(email);
   const u = await User.findOne({ email: e }).lean();
@@ -719,28 +728,61 @@ async function handleCreateWatch(req, res) {
       });
     }
 
-    if (scanResult.acceptingCount > 0) {
+        if (scanResult.acceptingCount > 0) {
       const practices = scanResult.accepting || [];
 
-      const { subject, html } = buildAcceptanceEmail(
-        postcode,
-        radius,
-        practices,
-        { manageUrl, unsubscribeUrl }
+      // 🔑 Build set of already-alerted practice keys for this watch
+      const already = new Set(
+        Array.isArray(watch.alertedVcodes) ? watch.alertedVcodes : []
       );
 
-      await sendEmailHTML(email, subject, html, "alert", {
-        postcode,
-        radius,
-        acceptingCount: practices.length,
-        watchId: watch._id,
-        runMode: "signup",
+      // 🔎 Keep only practices this watch has NOT seen before
+      const freshPractices = practices.filter((p) => {
+        const key = practiceKey(p, postcode);
+        return !already.has(key);
       });
 
-      console.log(
-        `[WATCH] Sent acceptance alert email to ${email} with ${practices.length} accepting practice(s).`
-      );
-    } else {
+      if (freshPractices.length === 0) {
+        console.log(
+          `[WATCH] Signup scan for ${email} – no NEW accepting practices (all already alerted previously).`
+        );
+      } else {
+        const { subject, html } = buildAcceptanceEmail(
+          postcode,
+          radius,
+          freshPractices,
+          { manageUrl, unsubscribeUrl }
+        );
+
+        await sendEmailHTML(email, subject, html, "alert", {
+          postcode,
+          radius,
+          acceptingCount: freshPractices.length,
+          watchId: watch._id,
+          runMode: "signup",
+        });
+
+        console.log(
+          `[WATCH] Sent signup acceptance alert to ${email} with ${freshPractices.length} NEW practice(s).`
+        );
+
+        // 🧠 Persist newly-alerted vcodes/keys to this watch
+        const newKeys = freshPractices.map((p) =>
+          practiceKey(p, postcode)
+        );
+
+        await Watch.findByIdAndUpdate(
+          watch._id,
+          {
+            $addToSet: {
+              alertedVcodes: { $each: newKeys },
+            },
+          },
+          { new: true }
+        );
+      } 
+ }
+ else {
       console.log(
         `[WATCH] No accepting practices found for ${postcode} (${radius}mi) at signup.`
       );
