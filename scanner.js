@@ -38,6 +38,12 @@ function buildNhsSearchUrl(postcode, radiusMiles) {
   return url;
 }
 
+function extractVCodeFromBlock(block = "") {
+  const match = block.match(/V\d{6}/i);
+  return match ? match[0].toUpperCase() : null; // e.g. "V337531"
+}
+
+
 /**
  * Fetch with timeout so NHS can't hang the whole cron.
  */
@@ -262,20 +268,21 @@ function parseDistanceMiles(distanceText) {
  *   Block contains: "V006578 DEN"
  *   URL: https://www.nhs.uk/services/dentist/winnersh-dental-practice/v006578
  */
-function buildNhsProfileUrl(name, rawBlock) {
-  // Find the V-code, e.g. "V186502"
-  const idMatch = rawBlock.match(/V\d{6}/i);
-  if (!idMatch) return "";
+function buildNhsProfileUrl(name, rawBlock, vcodeFromPractice) {
+  // Prefer explicit vcode if passed in
+  let vCode = vcodeFromPractice || null;
 
-  const vCode = idMatch[0].toUpperCase(); // "V186502"
+  if (!vCode) {
+    const idMatch = rawBlock.match(/V\d{6}/i);
+    if (!idMatch) return "";
+    vCode = idMatch[0].toUpperCase();
+  }
 
-  // Clean HTML entities like &nbsp; and artefacts like "andnbsp"
   let cleanedName = name
     .replace(/&nbsp;?/gi, " ")
     .replace(/\bandnbsp\b/gi, " ")
     .trim();
 
-  // Slugify the practice name
   const slug = cleanedName
     .toLowerCase()
     .replace(/&/g, "and")
@@ -284,8 +291,6 @@ function buildNhsProfileUrl(name, rawBlock) {
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
 
-  // NHS pattern:
-  //   /services/dentist/{slug}/{VCODE}
   return `https://www.nhs.uk/services/dentist/${slug}/${vCode}`;
 }
 
@@ -329,6 +334,8 @@ function parsePracticeFromBlock(block, postcode) {
   // Phone
   const phone = extractPhoneFromBlock(block);
 
+  const vcode = extractVCodeFromBlock(block);
+
   const { patientType, childOnly } = parsePatientType(lower);
 
   return {
@@ -343,6 +350,7 @@ function parsePracticeFromBlock(block, postcode) {
     postcode: postcode || "",
     nhsUrl: "", // placeholder; set next
     appointmentsUrl: "",
+    vcode, 
   };
 }
 
@@ -379,7 +387,7 @@ export async function scanPostcode(postcode, radiusMiles) {
   // Step 2: build base practices
   const basePracticesRaw = blocks.map((block) => {
     const p = parsePracticeFromBlock(block, postcode);
-    p.nhsUrl = buildNhsProfileUrl(p.name, block) || "";
+    p.nhsUrl = buildNhsProfileUrl(p.name, block, p.vcode) || "";
 
     if (p.nhsUrl) {
       const base = p.nhsUrl.replace(/\/$/, "");
