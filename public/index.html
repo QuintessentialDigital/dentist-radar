@@ -32,10 +32,21 @@
     body{font-family:'Inter',sans-serif;background:var(--bg);color:#1e293b;line-height:1.6;overflow-x:hidden;}
     .container{max-width:1400px;margin:0 auto;padding:0 24px;}
 
+    /* England banner – forced to single line on mobile */
     .england-banner{
-      position:sticky;top:0;z-index:999;background:#fffbeb;color:#92400e;
-      padding:11px 16px;text-align:center;font-weight:700;font-size:14px;
+      position:sticky;
+      top:0;
+      z-index:999;
+      background:#fffbeb;
+      color:#92400e;
+      padding:6px 10px;
+      text-align:center;
+      font-weight:700;
+      font-size:13px;
       border-bottom:3px solid #f97316;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
     }
 
     header{
@@ -54,68 +65,58 @@
 
     #menu-toggle{
       display:none;
-      background:transparent;
-      border:none;
+      background:transparent !important;
+      border:none !important;
       cursor:pointer;
       padding:8px;
-      outline:none;
-      box-shadow:none;
+      outline:none !important;
+      box-shadow:none !important;
     }
-    #menu-toggle svg{
-      width:28px;height:28px;
-      stroke:currentColor;
-      stroke-width:2.5;
-      stroke-linecap:round;
-    }
+    #menu-toggle svg{width:28px;height:28px;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;}
 
     /* Desktop menu */
     .desktop-menu{display:flex;gap:36px;font-weight:600;font-size:16px;list-style:none;}
     .desktop-menu a{color:var(--gray-700);text-decoration:none;transition:all .2s;}
     .desktop-menu a:hover,.desktop-menu a.active{color:var(--primary);font-weight:700;}
 
-    /* MOBILE MENU – cleaned up */
+    /* DARK, RIGHT-ALIGNED MOBILE MENU */
     #mobile-menu{
       display:none;
       position:absolute;
       top:100%;
-      left:0;
-      right:0;
-      background:rgba(248,250,255,0.98); /* same feel as header */
-      backdrop-filter:blur(14px);
-      border-top:1px solid rgba(226,232,240,0.8);
-      box-shadow:none; /* remove boxy card look */
-      padding:4px 0 8px;
+      right:16px;
+      width:220px;
+      background:#1e1e1e;
+      border-radius:18px;
+      overflow:hidden;
+      border:1px solid rgba(255,255,255,0.08);
+      box-shadow:0 12px 28px rgba(0,0,0,0.35);
+      padding:0;
+      transform:translateY(-6px);
+      opacity:0;
+      transition:all .22s ease-out;
+    }
+    #mobile-menu.active{
+      display:block;
+      transform:translateY(0);
+      opacity:1;
     }
     #mobile-menu a{
       display:block;
-      padding:14px 24px;
-      font-size:17px;
+      padding:16px 20px;
+      font-size:16px;
       font-weight:600;
-      color:#1e293b;
+      color:#e2e8f0;
       text-decoration:none;
-      border-bottom:1px solid rgba(226,232,240,0.6);
+      border-bottom:1px solid rgba(255,255,255,0.06);
     }
     #mobile-menu a:last-child{
       border-bottom:none;
     }
     #mobile-menu a:hover,
     #mobile-menu a.active{
-      background:#e5edff;
-      color:var(--primary);
-    }
-
-    /* Optional small animation to make it feel smoother */
-    @media (max-width:1024px){
-      #mobile-menu{
-        transform:translateY(-6px);
-        opacity:0;
-        transition:all .2s ease-out;
-      }
-      #mobile-menu.active{
-        display:block;
-        transform:translateY(0);
-        opacity:1;
-      }
+      background:#2d2d2d;
+      color:#ffffff;
     }
 
     /* Responsive */
@@ -190,7 +191,7 @@
         <svg class="logo-icon" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M26 5a21 21 0 00-21 21c0 13 21 32 21 32s21-19 21-32A21 21 0 0026 5z" fill="#4f46e5"/>
           <circle cx="26" cy="26" r="9" fill="#fff"/>
-          <path d="M47 26c0-11.6-9.4-21-21-21" stroke="#06b6d4" stroke-width="4.5" stroke-linecap:round"/>
+          <path d="M47 26c0-11.6-9.4-21-21-21" stroke="#06b6d4" stroke-width="4.5" stroke-linecap="round"/>
         </svg>
         <div class="logo-text"><span>Dentist</span><span>Radar</span></div>
       </a>
