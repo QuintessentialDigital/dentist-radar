@@ -6,7 +6,6 @@
   <title>DentistRadar – Instant NHS Dentist Alerts • 27,000+ users</title>
   <meta name="description" content="Get an email the second an NHS dentist near you opens. Free forever. Join 27,000+ others.">
 
-  <!-- Analytics -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-7LXYSWBN54"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
@@ -15,7 +14,6 @@
     gtag('config', 'G-7LXYSWBN54');
   </script>
 
-  <!-- Font -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -24,34 +22,35 @@
     :root{
       --bg:#f8faff;--surface:#ffffff;--primary:#4f46e5;--primary-light:#6366f1;
       --gray-900:#0f172a;--gray-700:#334155;--gray-600:#475569;--success:#10b981;
-      --shadow:0 20px 40px rgba(79,70,229,0.12);--shadow-lg:0 32px 80px rgba(79,70,229,0.18);
+      --shadow:0 20px 40px rgba(79,70,229,0.12);--shadow-lg:0:32px 80px rgba(79,70,229,0.18);
     }
     *{box-sizing:border-box;margin:0;padding:0;}
     body{font-family:'Inter',sans-serif;background:var(--bg);color:#1e293b;line-height:1.6;overflow-x:hidden;}
     .container{max-width:1400px;margin:0 auto;padding:0 24px;}
 
-    /* England banner */
+    /* Yellow banner */
     .england-banner{
       position:sticky;top:0;z-index:999;background:#fffbeb;color:#92400e;
       padding:11px 16px;text-align:center;font-weight:700;font-size:14px;
       border-bottom:3px solid #f97316;box-shadow:0 2px 8px rgba(217,119,6,0.15);
     }
 
-    /* Header – matches your About page exactly */
+    /* Header – exactly like your live About page */
     header{
       position:fixed;top:52px;left:0;right:0;z-index:998;
       background:rgba(248,250,255,0.97);backdrop-filter:blur(20px);
       border-bottom:1px solid rgba(226,232,240,0.7);
+      height:72px; /* locked height so dropdown position is predictable */
     }
-    .navbar{display:flex;align-items:center;justify-content:space-between;padding:16px 0;}
+    .navbar{display:flex;align-items:center;justify-content:space-between;height:100%;padding:0 24px;}
     .logo{display:flex;align-items:center;gap:14px;text-decoration:none;}
     .logo-icon{width:48px;height:48px;}
     .logo-text{font-size:28px;font-weight:900;letter-spacing:-1.2px;}
-    .logo-text span:first-child{color:#0f172a;}
+    .logo-text span:first-child{color:var(--gray-900);}
     .logo-text span:last-child{color:var(--primary);}
 
     #menu-toggle{
-      display:none;background:none;border:none;cursor:pointer;padding:10px;border-radius:12px;transition:background .2s;
+      display:none;background:none;border:none;cursor:pointer;padding:8px;border-radius:10px;
     }
     #menu-toggle svg{width:28px;height:28px;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;}
 
@@ -61,7 +60,7 @@
     .nav-links a{color:var(--gray-700);text-decoration:none;transition:all .2s;}
     .nav-links a:hover,.nav-links a.active{color:var(--primary);font-weight:700;}
 
-    /* Hero – your favourite desktop layout */
+    /* Rest of your beautiful homepage styles (unchanged) */
     .hero{padding:160px 0 120px;background:radial-gradient(circle at 20% 80%,rgba(79,70,229,0.09),transparent 50%),var(--bg);}
     .hero-layout{display:grid;grid-template-columns:1fr 560px;gap:100px;align-items:center;}
     .hero-visual img{width:100%;border-radius:36px;box-shadow:var(--shadow-lg);}
@@ -99,36 +98,63 @@
     footer a{color:#cbd5e1;margin:0 12px;text-decoration:none;}
     footer a:hover{color:white;}
 
-    /* Mobile – perfect hamburger + dropdown (matches About page) */
+    /* MOBILE MENU – now 100% identical to your live About page */
     @media (max-width:1024px){
-      header{top:56px;}
-      .navbar{padding:14px 0;}
+      header{top:52px;height:72px;}
+      .navbar{padding:0 20px;}
+
+      #menu-toggle{display:block;}
+
+      .nav-links{
+        position:fixed;
+        top:124px;                    /* 52px banner + 72px header = 124px */
+        left:50%;
+        transform:translateX(-50%);
+        width:88%;
+        max-width:360px;
+        background:var(--surface);
+        border-radius:16px;
+        padding:12px 0;
+        box-shadow:0 20px 50px rgba(79,70,229,0.3);
+        border:1px solid rgba(79,70,229,0.12);
+        opacity:0;
+        visibility:hidden;
+        transition:all 0.3s ease;
+      }
+      .nav-links.active{
+        opacity:1;
+        visibility:visible;
+        transform:translateX(-50%) translateY(8px);
+      }
+      .nav-links a{
+        display:block;
+        padding:14px 24px;
+        font-size:17.5px;
+        font-weight:600;
+        color:var(--gray-800);
+        border-radius:10px;
+        margin:4px 16px;
+      }
+      .nav-links a:hover,
+      .nav-links a.active{
+        background:rgba(79,70,229,0.1);
+        color:var(--primary);
+      }
+
+      /* Rest of mobile adjustments */
       .hero-layout{grid-template-columns:1fr;gap:60px;text-align:center;}
       .hero-visual img{margin:0 auto;}
       .hero{padding:130px 0 90px;}
       h2{font-size:46px;}
       .alert-form{padding:48px 36px;}
-
-      #menu-toggle{display:block;}
-      .nav-links{
-        position:fixed;top:108px;left:50%;transform:translateX(-50%);
-        width:90%;max-width:380px;background:var(--surface);
-        border-radius:20px;padding:16px 0;
-        box-shadow:0 24px 60px rgba(79,70,229,0.3);
-        border:1px solid rgba(79,70,229,0.15);
-        opacity:0;visibility:hidden;
-        transform:translateX(-50%) translateY(-12px);
-        transition:all 0.3s cubic-bezier(0.4,0,0.2,1);
-      }
-      .nav-links.active{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0);}
-      .nav-links a{display:block;padding:16px 32px;font-size:18px;font-weight:600;border-radius:14px;margin:6px 20px;}
-      .nav-links a:hover,.nav-links a.active{background:rgba(79,70,229,0.12);color:var(--primary);}
     }
+
     @media (max-width:640px){
       .hero{padding:110px 0 70px;}
       h2{font-size:40px;}
       .logo-text{font-size:24px;}
       .logo-icon{width:44px;height:44px;}
+      .england-banner{font-size:13.5px;padding:10px;}
     }
   </style>
 </head>
@@ -144,12 +170,11 @@
         <svg class="logo-icon" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M26 5a21 21 0 00-21 21c0 13 21 32 21 32s21-19 21-32A21 21 0 0026 5z" fill="#4f46e5"/>
           <circle cx="26" cy="26" r="9" fill="#fff"/>
-          <path d="M47 26c0-11.6-9.4-21-21-21" stroke="#06b6d4" stroke-width="4.5" stroke-linecap:round"/>
+          <path d="M47 26c0-11.6-9.4-21-21-21" stroke="#06b6d4" stroke-width="4.5" stroke-linecap="round"/>
         </svg>
         <div class="logo-text"><span>Dentist</span><span>Radar</span></div>
       </a>
 
-      <!-- Clean hamburger icon (exactly like your About page) -->
       <button id="menu-toggle" aria-label="Menu">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <line x1="3" y1="6" x2="21" y2="6"/>
@@ -168,6 +193,7 @@
     </div>
   </header>
 
+  <!-- All your perfect sections below (unchanged) -->
   <main>
     <section class="hero">
       <div class="container hero-layout">
