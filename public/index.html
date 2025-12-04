@@ -20,10 +20,14 @@
     .container{max-width:1400px;margin:0 auto;padding:0 24px;}
 
     .england-banner{position:sticky;top:0;z-index:999;background:linear-gradient(135deg,#fffbeb,#fde68a);color:#92400e;padding:12px;text-align:center;font-weight:700;font-size:15px;border-bottom:3px solid #f97316;}
-    
+
     header{position:fixed;top:55px;left:0;right:0;z-index:998;background:rgba(248,250,255,0.96);backdrop-filter:blur(20px);border-bottom:1px solid rgba(226,232,240,0.7);}
     .navbar{display:flex;align-items:center;justify-content:space-between;padding:18px 0;}
-    .logo-svg{width:180px;height:46px;}
+    .logo{display:flex;align-items:center;gap:14px;text-decoration:none;}
+    .logo-icon{width:46px;height:46px;}
+    .logo-text{font-size:28px;font-weight:900;letter-spacing:-1.2px;}
+    .logo-text span:first-child{color:#0f172a;}        /* Dentist */
+    .logo-text span:last-child{color:#4f46e5;}         /* Radar   */
     #menu-toggle{display:none;font-size:28px;cursor:pointer;color:var(--primary);}
     .nav-links{display:flex;gap:36px;font-weight:600;font-size:16px;list-style:none;}
     .nav-links a{color:var(--gray-700);text-decoration:none;}
@@ -74,11 +78,13 @@
       .nav-links.active{display:flex;}
       #menu-toggle{display:block;}
       .trust-grid{grid-template-columns:1fr 1fr;gap:28px;}
+      .logo-text{font-size:24px;}
     }
     @media (max-width:640px){
       .trust-grid{grid-template-columns:1fr;}
       .hero{padding:100px 0 60px;}
       h2{font-size:40px;}
+      .logo-text{font-size:22px;}
     }
   </style>
 </head>
@@ -90,18 +96,16 @@
 
   <header>
     <div class="container navbar">
-      <!-- New DentistRadar logo – clean tooth + radar sweep (inline SVG, no file needed) -->
       <a href="/" class="logo">
-        <svg class="logo-svg" viewBox="0 0 180 46" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <g clip-path="url(#clip0)">
-            <path d="M12 2a10 10 0 00-10 10c0 8 10 22 10 22s10-14 10-22a10 10 0 00-10-10z" fill="#4f46e5"/>
-            <path d="M12 8a4 4 0 100 8 4 4 0 000-8z" fill="#fff"/>
-            <path d="M22 12c0-5.5-4.5-10-10-10" stroke="#06b6d4" stroke-width="3" stroke-linecap="round"/>
-            <text x="38" y="32" font-family="Inter,system-ui,sans-serif" font-size="28" font-weight="900" fill="#0f172a">DentistRadar</text>
-          </g>
-          <defs><clipPath id="clip0"><rect width="180" height="46"/></clipPath></defs>
+        <!-- Radar icon + perfectly colored text -->
+        <svg class="logo-icon" viewBox="0 0 46 46" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M23 3a20 20 0 00-20 20c0 12 20 30 20 30s20-18 20-30a20 20 0 00-20-20z" fill="#4f46e5"/>
+          <circle cx="23" cy="23" r="8" fill="#fff"/>
+          <path d="M43 23c0-11-9-20-20-20" stroke="#06b6d4" stroke-width="4" stroke-linecap="round"/>
         </svg>
+        <div class="logo-text"><span>Dentist</span><span>Radar</span></div>
       </a>
+
       <button id="menu-toggle" aria-label="Menu">Menu</button>
       <ul id="nav-links" class="nav-links">
         <li><a class="active" href="/">Home</a></li>
@@ -113,6 +117,7 @@
     </div>
   </header>
 
+  <!-- Everything else exactly the same as the previous perfect version -->
   <main>
     <section class="hero">
       <div class="container hero-layout">
@@ -144,7 +149,6 @@
     <section class="trust-section">
       <div class="container">
         <h2>27,000+ people trust DentistRadar</h2>
-
         <div class="trust-grid">
           <div class="trust-card">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="8"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
