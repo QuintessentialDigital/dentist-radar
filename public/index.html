@@ -14,23 +14,24 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 
   <style>
-    :root{--bg:#f8faff;--surface:#ffffff;--primary:#4f46e5;--primary-light:#6366f1;--accent:#06b6d4;--gray-900:#0f172a;--gray-700:#334155;--gray-600:#475569;--gray-500:#64748b;--success:#10b981;--radius:32px;--shadow:0 20px 40px rgba(79,70,229,0.12);}
+    :root{--bg:#f8faff;--surface:#ffffff;--primary:#4f46e5;--primary-light:#6366f1;--gray-900:#0f172a;--gray-700:#334155;--gray-600:#475569;--success:#10b981;--shadow:0 20px 40px rgba(79,70,229,0.12);}
     *{box-sizing:border-box;margin:0;padding:0;}
     body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--gray-800);line-height:1.6;overflow-x:hidden;}
     .container{max-width:1400px;margin:0 auto;padding:0 24px;}
 
-    .england-banner{position:sticky;top:0;z-index:999;background:linear-gradient(135deg,#fffbeb,#fde68a);color:#92400e;padding:12px;text-align:center;font-weight:700;font-size:15px;border-bottom:3px solid #f97316;}
+    .england-banner{position:sticky;top:0;z-index:999;background:linear-gradient(135deg,#fffbeb,#fde68a);color:#92400e;padding:11px;text-align:center;font-weight:700;font-size:14.5px;border-bottom:3px solid #f97316;}
 
-    header{position:fixed;top:55px;left:0;right:0;z-index:998;background:rgba(248,250,255,0.96);backdrop-filter:blur(20px);border-bottom:1px solid rgba(226,232,240,0.7);}
-    .navbar{display:flex;align-items:center;justify-content:space-between;padding:14px 0;} /* reduced padding */
-    .logo{display:flex;align-items:center;gap:14px;text-decoration:none;}
-    .logo-icon{width:52px;height:52px;} /* slightly larger + no cropping */
-    .logo-text{font-size:28px;font-weight:900;letter-spacing:-1.2px;line-height:1;}
+    header{position:fixed;top:54px;left:0;right:0;z-index:998;background:rgba(248,250,255,0.96);backdrop-filter:blur(20px);border-bottom:1px solid rgba(226,232,240,0.7);}
+    .navbar{display:flex;align-items:center;justify-content:space-between;padding:12px 0;height:68px;}
+    .logo{display:flex;align-items:center;gap:12px;text-decoration:none;}
+    .logo-icon{width:48px;height:48px;flex-shrink:0;}
+    .logo-text{font-size:27px;font-weight:900;letter-spacing:-1.3px;line-height:1;}
     .logo-text span:first-child{color:#0f172a;}
     .logo-text span:last-child{color:#4f46e5;}
     #menu-toggle{display:none;font-size:28px;cursor:pointer;color:var(--primary);}
+
     .nav-links{display:flex;gap:36px;font-weight:600;font-size:16px;list-style:none;}
-    .nav-links a{color:var(--gray-700);text-decoration:none;}
+    .nav-links a{color:var(--gray-700);text-decoration:none;padding:8px 0;}
     .nav-links a:hover,.nav-links a.active{color:var(--primary);font-weight:700;}
 
     .hero{padding:140px 0 100px;background:radial-gradient(circle at 20% 80%,rgba(79,70,229,0.09),transparent 50%),var(--bg);}
@@ -69,26 +70,39 @@
     footer a{color:#cbd5e1;margin:0 12px;text-decoration:none;}
     footer a:hover{color:white;}
 
-    /* Mobile fixes */
+    /* ─────── MOBILE PERFECTION ─────── */
     @media (max-width:1024px){
-      header{top:64px;padding:10px 0;}
-      .navbar{padding:10px 0;}
-      .logo-icon{width:48px;height:48px;}
+      header{top:60px;height:64px;}
+      .navbar{padding:8px 0;}
+      .logo-icon{width:44px;height:44px;}
       .logo-text{font-size:24px;}
-      .hero-layout{grid-template-columns:1fr;gap:60px;text-align:center;}
-      .hero{padding:120px 0 80px;}
-      h2{font-size:46px;}
-      .nav-links{display:none;flex-direction:column;position:absolute;top:100%;left:4%;right:4%;background:var(--surface);
-        padding:20px 0;border-radius:20px;box-shadow:0 20px 50px rgba(79,70,229,0.25);border:1px solid rgba(79,70,229,0.1);}
-      .nav-links.active{display:flex;}
-      .nav-links a{padding:12px 24px;font-size:17px;}
+      .hero{padding:110px 0 70px;}
+      h2{font-size:44px;}
+
+      /* Slick mobile menu – exactly like top startups */
       #menu-toggle{display:block;}
-      .trust-grid{grid-template-columns:1fr 1fr;gap:24px;}
+      .nav-links{
+        position:absolute;top:100%;left:50%;transform:translateX(-50%);
+        width:92%;max-width:400px;background:var(--surface);
+        border-radius:20px;padding:12px 0;
+        box-shadow:0 20px 50px rgba(79,70,229,0.25);
+        border:1px solid rgba(79,70,229,0.12);
+        opacity:0;visibility:hidden;transform:translateX(-50%) translateY(-10px);
+        transition:all 0.25s cubic-bezier(0.4,0,0.2,1);
+      }
+      .nav-links.active{
+        opacity:1;visibility:visible;transform:translateX(-50%) translateY(0);
+      }
+      .nav-links a{
+        display:block;padding:14px 28px;font-size:17px;font-weight:600;
+        border-radius:12px;margin:4px 16px;
+        transition:background 0.2s;
+      }
+      .nav-links a:hover,.nav-links a.active{
+        background:rgba(79,70,229,0.08);color:var(--primary);
+      }
     }
-    @media (max-width:640px){
-      .trust-grid{grid-template-columns:1fr;}
-      .hero{padding:100px 0 60px;}
-      h2{font-size:40px;}
+    @media (max-width:480px){
       .logo-text{font-size:22px;}
       .england-banner{font-size:14px;padding:10px;}
     }
@@ -111,7 +125,7 @@
         <div class="logo-text"><span>Dentist</span><span>Radar</span></div>
       </a>
 
-      <button id="menu-toggle" aria-label="Menu">Menu</button>
+      <button id="menu-toggle" aria-label="Open menu">Menu</button>
       <ul id="nav-links" class="nav-links">
         <li><a class="active" href="/">Home</a></li>
         <li><a href="pricing.html">Pricing</a></li>
@@ -122,7 +136,7 @@
     </div>
   </header>
 
-  <!-- Rest of page unchanged (hero, sections, etc.) -->
+  <!-- Rest of your perfect page (unchanged) -->
   <main>
     <section class="hero">
       <div class="container hero-layout">
@@ -195,7 +209,9 @@
 
   <script src="app.js" defer></script>
   <script>
-    document.getElementById('menu-toggle').onclick = () => document.getElementById('nav-links').classList.toggle('active');
+    document.getElementById('menu-toggle').onclick = () => {
+      document.getElementById('nav-links').classList.toggle('active');
+    };
   </script>
 </body>
 </html>
