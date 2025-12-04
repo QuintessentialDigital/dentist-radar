@@ -1,101 +1,250 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="scroll-smooth">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pricing – Dentist Radar</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Pricing — DentistRadar</title>
+  <meta name="description" content="Free forever plan + optional Pro and Family upgrades. Instant NHS dentist alerts.">
 
-<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-7LXYSWBN54"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-  gtag('config', 'G-7LXYSWBN54');
-</script>
-  
-<link rel="stylesheet" href="style.css">
+  <!-- Analytics -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-7LXYSWBN54"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-7LXYSWBN54');
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+  <style>
+    :root{
+      --bg:#f8faff;--surface:#ffffff;--primary:#4f46e5;--primary-light:#6366f1;
+      --gray-900:#0f172a;--gray-700:#334155;--gray-600:#475569;--gray-500:#64748b;
+      --shadow:0 20px 40px rgba(79,70,229,0.12);--radius:32px;
+    }
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:'Inter',sans-serif;background:var(--bg);color:#1e293b;line-height:1.7;overflow-x:hidden;}
+    .container{max-width:1400px;margin:0 auto;padding:0 24px;}
+
+    .england-banner{
+      position:sticky;top:0;z-index:999;background:#fffbeb;color:#92400e;
+      padding:11px 16px;text-align:center;font-weight:700;font-size:14px;
+      border-bottom:3px solid #f97316;
+    }
+
+    header{
+      position:fixed;top:52px;left:0;right:0;z-index:998;
+      background:rgba(248,250,255,0.97);backdrop-filter:blur(20px);
+      border-bottom:1px solid rgba(226,232,240,0.7);
+      height:72px;
+    }
+    .navbar{display:flex;align-items:center;justify-content:space-between;height:100%;padding:0 20px;}
+    .logo{display:flex;align-items:center;gap:14px;text-decoration:none;}
+    .logo-icon{width:48px;height:48px;}
+    .logo-text{font-size:28px;font-weight:900;letter-spacing:-1.2px;}
+    .logo-text span:first-child{color:var(--gray-900);}
+    .logo-text span:last-child{color:var(--primary);}
+
+    #menu-toggle{display:none;background:none;border:none;cursor:pointer;padding:8px;}
+    #menu-toggle svg{width:28px;height:28px;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;}
+
+    .nav-links{display:flex;gap:36px;font-weight:600;font-size:16px;list-style:none;}
+    .nav-links a{color:var(--gray-700);text-decoration:none;}
+    .nav-links a:hover,.nav-links a.active{color:var(--primary);font-weight:700;}
+
+    .small-hero{padding:140px 0 90px;text-align:center;}
+    .small-hero h1{
+      font-size:56px;font-weight:900;margin-bottom:16px;
+      background:linear-gradient(135deg,var(--gray-900),var(--primary));
+      -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+    }
+    .small-hero p{font-size:20px;color:var(--gray-600);max-width:680px;margin:0 auto;}
+
+    .pricing-grid{
+      display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:36px;
+      max-width:1200px;margin:40px auto 0;
+    }
+    .plan-card{
+      background:var(--surface);padding:48px 36px;border-radius:var(--radius);
+      box-shadow:var(--shadow);text-align:center;position:relative;transition:transform .4s;
+    }
+    .plan-card:hover{transform:translateY(-12px);}
+    .plan-card.highlight{
+      border:3px solid var(--primary);box-shadow:0 32px 80px rgba(79,70,229,0.22);
+    }
+    .plan-card h2{font-size:32px;font-weight:900;margin-bottom:12px;}
+    .plan-card p{font-size:18px;color:var(--gray-600);margin-bottom:32px;}
+    .plan-card ul{
+      list-style:none;text-align:left;margin:32px 0;font-size:17px;line-height:2;
+    }
+    .plan-card ul li{position:relative;padding-left:28px;color:var(--gray-700);}
+    .plan-card ul li::before{
+      content:"✓";position:absolute;left:0;color:var(--primary);font-weight:900;font-size:19px;
+    }
+    .price{
+      font-size:38px;font-weight:900;margin:32px 0 28px;
+      background:linear-gradient(135deg,var(--gray-900),var(--primary));
+      -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+    }
+    .btn{
+      display:block;padding:18px;border-radius:999px;font-size:18px;font-weight:800;
+      text-decoration:none;transition:all .3s;margin-top:20px;
+    }
+    .btn-primary{
+      background:linear-gradient(135deg,var(--primary),var(--primary-light));
+      color:white;box-shadow:0 20px 40px rgba(79,70,229,0.3);
+    }
+    .btn-primary:hover{transform:translateY(-4px);box-shadow:0 28px 56px rgba(79,70,229,0.4);}
+    .btn-outline{
+      border:2px solid var(--primary);color:var(--primary);background:transparent;
+    }
+    .btn-outline:hover{background:var(--primary);color:white;}
+
+    footer{
+      background:var(--gray-900);color:#94a3b8;padding:90px 0 40px;text-align:center;font-size:16px;margin-top:120px;
+    }
+    footer a{color:#cbd5e1;margin:0 12px;text-decoration:none;}
+    footer a:hover{color:white;}
+
+    /* Mobile – identical menu */
+    @media (max-width:1024px){
+      header{top:52px;height:72px;}
+      .navbar{padding:0 16px;}
+      #menu-toggle{display:block;}
+
+      .nav-links{
+        position:fixed;top:124px !important;left:50%;transform:translateX(-50%);
+        width:88%;max-width:340px;background:var(--surface);
+        border-radius:16px;padding:12px 0;
+        box-shadow:0 16px 48px rgba(79,70,229,0.28);
+        border:1px solid rgba(79,70,229,0.12);
+        opacity:0;visibility:hidden;transition:all 0.28s ease;
+      }
+      .nav-links.active{opacity:1;visibility:visible;transform:translateX(-50%) translateY(4px);}
+      .nav-links a{
+        display:block;padding:13px 20px;font-size:17px;font-weight:600;
+        color:#1e293b;border-radius:10px;margin:3px 14px;
+      }
+      .nav-links a:hover,.nav-links a.active{
+        background:rgba(79,70,229,0.11);color:var(--primary);
+      }
+
+      .small-hero h1{font-size:44px;}
+      .pricing-grid{gap:28px;}
+      .plan-card{padding:40px 28px;}
+    }
+    @media (max-width:640px){
+      .logo-text{font-size:24px;}
+      .logo-icon{width:44px;height:44px;}
+      .small-hero h1{font-size:40px;}
+      .price{font-size:34px;}
+    }
+  </style>
 </head>
 <body>
-<header>
-  <div class="container navbar">
-    <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"></a>
-    <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
-    <ul id="nav-links" class="nav-links">
-      <li><a href="/">Home</a></li>
-      <li><a class="active" href="pricing.html">Pricing</a></li>
-      <li><a href="about.html">About</a></li>
-      <li><a href="terms.html">Terms</a></li>
-      <li><a href="privacy.html">Privacy</a></li>
-    </ul>
-  </div>
-</header>
 
-<main>
-  <section class="hero small-hero">
+  <div class="england-banner">
+    Currently England only • Scotland, Wales & NI launching early 2026
+  </div>
+
+  <header>
+    <div class="container navbar">
+      <a href="/" class="logo">
+        <svg class="logo-icon" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M26 5a21 21 0 00-21 21c0 13 21 32 21 32s21-19 21-32A21 21 0 0026 5z" fill="#4f46e5"/>
+          <circle cx="26" cy="26" r="9" fill="#fff"/>
+          <path d="M47 26c0-11.6-9.4-21-21-21" stroke="#06b6d4" stroke-width="4.5" stroke-linecap="round"/>
+        </svg>
+        <div class="logo-text"><span>Dentist</span><span>Radar</span></div>
+      </a>
+
+      <button id="menu-toggle" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+
+      <ul id="nav-links" class="nav-links">
+        <li><a href="/">Home</a></li>
+        <li><a class="active" href="pricing.html">Pricing</a></li>
+        <li><a href="about.html">About</a></li>
+        <li><a href="terms.html">Terms</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+      </ul>
+    </div>
+  </header>
+
+  <main>
+    <section class="small-hero">
+      <div class="container">
+        <h1>Plans & Pricing</h1>
+        <p>Start free. Upgrade anytime to track more postcodes and get faster alerts.</p>
+      </div>
+    </section>
+
+    <section style="padding-bottom:120px">
+      <div class="container pricing-grid">
+        <!-- Free -->
+        <div class="plan-card">
+          <h2>Free</h2>
+          <p>Perfect for individuals wanting a single postcode alert.</p>
+          <ul>
+            <li>1 active postcode</li>
+            <li>Standard scan frequency (daily)</li>
+            <li>Email notifications</li>
+            <li>Cancel anytime</li>
+          </ul>
+          <div class="price">£0 / month</div>
+          <a href="/" class="btn btn-outline">Get Started Free</a>
+        </div>
+
+        <!-- Pro – highlighted -->
+        <div class="plan-card highlight">
+          <h2>Pro</h2>
+          <p>For families and users tracking multiple areas.</p>
+          <ul>
+            <li>Up to 5 postcodes</li>
+            <li>Faster scan frequency (hourly)</li>
+            <li>Priority email delivery</li>
+            <li>Early access to new features</li>
+          </ul>
+          <div class="price">£4.99 / month</div>
+          <a href="upgrade.html" class="btn btn-primary">Upgrade to Pro</a>
+        </div>
+
+        <!-- Family -->
+        <div class="plan-card">
+          <h2>Family</h2>
+          <p>Track all your family’s locations — ideal for relocations.</p>
+          <ul>
+            <li>Up to 10 postcodes</li>
+            <li>Faster scan frequency (hourly)</li>
+            <li>Multi-email alerts</li>
+            <li>Priority support</li>
+          </ul>
+          <div class="price">£9.99 / month</div>
+          <a href="upgrade.html" class="btn btn-primary">Go Family</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
     <div class="container">
-      <h1>Plans & Pricing</h1>
-      <p>Start free. Upgrade anytime to track more postcodes and get faster alerts.</p>
+      © 2025 DentistRadar • Part of the HealthRadar platform<br>
+      <a href="privacy.html">Privacy</a> • <a href="terms.html">Terms</a> • <a href="about.html">About</a> • <a href="mailto:support@dentistradar.co.uk">Support</a>
     </div>
-  </section>
+  </footer>
 
-  <section class="section">
-    <div class="container-wide pricing-grid">
-      <!-- Free -->
-      <div class="plan-card">
-        <h2>Free</h2>
-        <p>Perfect for individuals wanting a single postcode alert.</p>
-        <ul>
-          <li>1 active postcode</li>
-          <li>Standard scan frequency (daily)</li>
-          <li>Email notifications</li>
-          <li>Cancel anytime</li>
-        </ul>
-        <div class="price">£0 / month</div>
-        <a href="/" class="btn">Get Started Free</a>
-      </div>
-
-      <!-- Pro -->
-      <div class="plan-card highlight">
-        <h2>Pro</h2>
-        <p>For families and users tracking multiple areas.</p>
-        <ul>
-          <li>Up to 5 postcodes</li>
-          <li>Faster scan frequency (hourly)</li>
-          <li>Priority email delivery</li>
-          <li>Early access to new features</li>
-        </ul>
-        <div class="price">£4.99 / month</div>
-        <a href="upgrade.html" class="btn">Upgrade to Pro</a>
-      </div>
-
-      <!-- Family -->
-      <div class="plan-card">
-        <h2>Family</h2>
-        <p>Track all your family’s locations — ideal for relocations.</p>
-        <ul>
-          <li>Up to 10 postcodes</li>
-          <li>Faster scan frequency (hourly)</li>
-          <li>Multi-email alerts</li>
-          <li>Priority support</li>
-        </ul>
-        <div class="price">£9.99 / month</div>
-        <a href="upgrade.html" class="btn">Go Family</a>
-      </div>
-    </div>
-  </section>
-</main>
-
-<footer>
-  <div class="container footer">
-    © 2025 Dentist Radar · 
-    <a href="privacy.html">Privacy</a> · 
-    <a href="terms.html">Terms</a> · 
-    <a href="about.html">About</a> · 
-    <a href="mailto:support@dentistradar.co.uk">Support</a>
-  </div>
-</footer>
-
-<script src="app.js" defer></script>
+  <script>
+    document.getElementById('menu-toggle').onclick = () => {
+      document.getElementById('nav-links').classList.toggle('active');
+    };
+  </script>
 </body>
 </html>
