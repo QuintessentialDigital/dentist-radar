@@ -3,12 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>DentistRadar – Real-time NHS dentist alerts • 27,000+ users</title>
-  <meta name="description" content="Instant email the second an NHS dentist near you opens. Free forever. Join 27,000+ others.">
+  <title>DentistRadar – Instant NHS Dentist Alerts • 27,000+ users</title>
+  <meta name="description" content="Get an email the second an NHS dentist near you opens. Free forever. Join 27,000+ others.">
 
+  <!-- Analytics -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-7LXYSWBN54"></script>
-  <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-7LXYSWBN54');</script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-7LXYSWBN54');
+  </script>
 
+  <!-- Font -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
@@ -23,12 +30,14 @@
     body{font-family:'Inter',sans-serif;background:var(--bg);color:#1e293b;line-height:1.6;overflow-x:hidden;}
     .container{max-width:1400px;margin:0 auto;padding:0 24px;}
 
+    /* England banner */
     .england-banner{
       position:sticky;top:0;z-index:999;background:#fffbeb;color:#92400e;
       padding:11px 16px;text-align:center;font-weight:700;font-size:14px;
       border-bottom:3px solid #f97316;box-shadow:0 2px 8px rgba(217,119,6,0.15);
     }
 
+    /* Header – matches your About page exactly */
     header{
       position:fixed;top:52px;left:0;right:0;z-index:998;
       background:rgba(248,250,255,0.97);backdrop-filter:blur(20px);
@@ -41,13 +50,10 @@
     .logo-text span:first-child{color:#0f172a;}
     .logo-text span:last-child{color:var(--primary);}
 
-    /* Hamburger icon – clean & tiny */
     #menu-toggle{
-      display:none;background:none;border:none;font-size:28px;
-      color:var(--primary);cursor:pointer;padding:10px;
-      border-radius:12px;transition:background .2s;
+      display:none;background:none;border:none;cursor:pointer;padding:10px;border-radius:12px;transition:background .2s;
     }
-    #menu-toggle:hover{background:rgba(79,70,229,0.1);}
+    #menu-toggle svg{width:28px;height:28px;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;}
 
     .nav-links{
       display:flex;gap:36px;font-weight:600;font-size:16px;list-style:none;
@@ -55,13 +61,14 @@
     .nav-links a{color:var(--gray-700);text-decoration:none;transition:all .2s;}
     .nav-links a:hover,.nav-links a.active{color:var(--primary);font-weight:700;}
 
+    /* Hero – your favourite desktop layout */
     .hero{padding:160px 0 120px;background:radial-gradient(circle at 20% 80%,rgba(79,70,229,0.09),transparent 50%),var(--bg);}
     .hero-layout{display:grid;grid-template-columns:1fr 560px;gap:100px;align-items:center;}
     .hero-visual img{width:100%;border-radius:36px;box-shadow:var(--shadow-lg);}
     .alert-form{background:var(--surface);padding:56px;border-radius:38px;box-shadow:var(--shadow-lg);border:1px solid rgba(79,70,229,0.08);}
     .input{margin-bottom:22px;}
     label{display:block;font-weight:600;margin-bottom:8px;color:var(--gray-700);font-size:15px;}
-    input{width:100%;padding:19px 26px;border:2px solid #e2e8f0;border-radius:20px;font-size:18px;background:transparent;transition:all .3s;}
+    input{width:100%;padding:19px 26px;border:2px solid #e2e8f0;border-radius:20px;font-size:18px;transition:all .3s;}
     input:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 6px rgba(79,70,229,0.15);}
     button{width:100%;padding:20px;border:none;border-radius:999px;background:linear-gradient(135deg,var(--primary),var(--primary-light));color:white;font-size:20px;font-weight:800;cursor:pointer;box-shadow:0 20px 40px rgba(79,70,229,0.28);transition:all .4s;}
     button:hover{transform:translateY(-5px);box-shadow:0 32px 64px rgba(79,70,229,0.4);}
@@ -92,7 +99,7 @@
     footer a{color:#cbd5e1;margin:0 12px;text-decoration:none;}
     footer a:hover{color:white;}
 
-    /* Mobile – hamburger + perfect dropdown */
+    /* Mobile – perfect hamburger + dropdown (matches About page) */
     @media (max-width:1024px){
       header{top:56px;}
       .navbar{padding:14px 0;}
@@ -113,16 +120,9 @@
         transform:translateX(-50%) translateY(-12px);
         transition:all 0.3s cubic-bezier(0.4,0,0.2,1);
       }
-      .nav-links.active{
-        opacity:1;visibility:visible;transform:translateX(-50%) translateY(0);
-      }
-      .nav-links a{
-        display:block;padding:16px 32px;font-size:18px;font-weight:600;
-        border-radius:14px;margin:6px 20px;transition:background .25s;
-      }
-      .nav-links a:hover,.nav-links a.active{
-        background:rgba(79,70,229,0.12);color:var(--primary);
-      }
+      .nav-links.active{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0);}
+      .nav-links a{display:block;padding:16px 32px;font-size:18px;font-weight:600;border-radius:14px;margin:6px 20px;}
+      .nav-links a:hover,.nav-links a.active{background:rgba(79,70,229,0.12);color:var(--primary);}
     }
     @media (max-width:640px){
       .hero{padding:110px 0 70px;}
@@ -144,14 +144,14 @@
         <svg class="logo-icon" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M26 5a21 21 0 00-21 21c0 13 21 32 21 32s21-19 21-32A21 21 0 0026 5z" fill="#4f46e5"/>
           <circle cx="26" cy="26" r="9" fill="#fff"/>
-          <path d="M47 26c0-11.6-9.4-21-21-21" stroke="#06b6d4" stroke-width="4.5" stroke-linecap="round"/>
+          <path d="M47 26c0-11.6-9.4-21-21-21" stroke="#06b6d4" stroke-width="4.5" stroke-linecap:round"/>
         </svg>
         <div class="logo-text"><span>Dentist</span><span>Radar</span></div>
       </a>
 
-      <!-- Three-line hamburger instead of the word "Menu" -->
+      <!-- Clean hamburger icon (exactly like your About page) -->
       <button id="menu-toggle" aria-label="Menu">
-        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <line x1="3" y1="6" x2="21" y2="6"/>
           <line x1="3" y1="12" x2="21" y2="12"/>
           <line x1="3" y1="18" x2="21" y2="18"/>
@@ -168,12 +168,11 @@
     </div>
   </header>
 
-  <!-- Everything else exactly as you love it (hero, sections, footer…) -->
   <main>
     <section class="hero">
       <div class="container hero-layout">
         <div class="hero-visual">
-          <img src="hero-clinic.png" alt="Modern dental practice" loading="lazy">
+          <img src="hero-clinic.png" alt="Modern NHS dental practice" loading="lazy">
         </div>
         <div>
           <form id="alertForm" class="alert-form" novalidate>
