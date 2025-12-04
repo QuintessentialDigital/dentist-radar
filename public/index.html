@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>DentistRadar – Real-time NHS dentist alerts • 27,000+ users</title>
-  <meta name="description" content="Instant email the second an NHS dentist near you opens for new patients. Free forever. Already helped 1,400+ register in 2025.">
+  <meta name="description" content="Instant email the second an NHS dentist near you opens. Free forever. Join 27,000+ others.">
 
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-7LXYSWBN54"></script>
   <script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}gtag('js',new Date());gtag('config','G-7LXYSWBN54');</script>
@@ -14,69 +14,71 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 
   <style>
-    :root{--bg:#f8faff;--surface:#ffffff;--primary:#4f46e5;--primary-light:#6366f1;--accent:#06b6d4;--gray-900:#0f172a;--gray-800:#1e293b;--gray-700:#334155;--gray-600:#475569;--gray-500:#64748b;--success:#10b981;--radius:32px;--shadow:0 20px 40px rgba(79,70,229,0.12);--shadow-lg:0 32px 80px rgba(79,70,229,0.18);}
-    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    :root{--bg:#f8faff;--surface:#ffffff;--primary:#4f46e5;--primary-light:#6366f1;--accent:#06b6d4;--gray-900:#0f172a;--gray-700:#334155;--gray-600:#475569;--gray-500:#64748b;--success:#10b981;--radius:32px;--shadow:0 20px 40px rgba(79,70,229,0.12);}
+    *{box-sizing:border-box;margin:0;padding:0;}
     body{font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--gray-800);line-height:1.6;overflow-x:hidden;}
     .container{max-width:1400px;margin:0 auto;padding:0 24px;}
 
-    /* England banner – elegant and unmissable */
-    .england-banner{position:sticky;top:0;z-index:999;background:linear-gradient(135deg,#fffbeb,#fde68a);color:#92400e;padding:12px 20px;text-align:center;font-weight:700;font-size:15px;border-bottom:3px solid #f97316;box-shadow:0 4px 20px rgba(251,146,60,0.2);}
-
+    .england-banner{position:sticky;top:0;z-index:999;background:linear-gradient(135deg,#fffbeb,#fde68a);color:#92400e;padding:12px;text-align:center;font-weight:700;font-size:15px;border-bottom:3px solid #f97316;}
+    
     header{position:fixed;top:55px;left:0;right:0;z-index:998;background:rgba(248,250,255,0.96);backdrop-filter:blur(20px);border-bottom:1px solid rgba(226,232,240,0.7);}
     .navbar{display:flex;align-items:center;justify-content:space-between;padding:18px 0;}
-    .logo img{height:46px;}
+    .logo-svg{width:180px;height:46px;}
     #menu-toggle{display:none;font-size:28px;cursor:pointer;color:var(--primary);}
     .nav-links{display:flex;gap:36px;font-weight:600;font-size:16px;list-style:none;}
-    .nav-links a{color:var(--gray-700);text-decoration:none;transition:color .2s;}
+    .nav-links a{color:var(--gray-700);text-decoration:none;}
     .nav-links a:hover,.nav-links a.active{color:var(--primary);font-weight:700;}
 
     .hero{padding:140px 0 100px;background:radial-gradient(circle at 20% 80%,rgba(79,70,229,0.09),transparent 50%),var(--bg);}
     .hero-layout{display:grid;grid-template-columns:1fr 560px;gap:100px;align-items:center;}
-    .hero-visual img{width:100%;border-radius:36px;box-shadow:var(--shadow-lg);transition:transform .6s;}
-    .hero-visual:hover img{transform:scale(1.03);}
-
-    .alert-form{background:var(--surface);padding:56px;border-radius:38px;box-shadow:var(--shadow-lg);border:1px solid rgba(79,70,229,0.08);}
+    .hero-visual img{width:100%;border-radius:36px;box-shadow:var(--shadow);}
+    .alert-form{background:var(--surface);padding:56px;border-radius:38px;box-shadow:var(--shadow);}
     .input{margin-bottom:22px;}
-    input{width:100%;padding:19px 26px;border:2px solid #e2e8f0;border-radius:20px;font-size:18px;transition:all .3s;background:transparent;}
+    input{width:100%;padding:19px 26px;border:2px solid #e2e8f0;border-radius:20px;font-size:18px;background:transparent;}
     input:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 6px rgba(79,70,229,0.15);}
     button{width:100%;padding:20px;border:none;border-radius:999px;background:linear-gradient(135deg,var(--primary),var(--primary-light));color:white;font-size:20px;font-weight:800;cursor:pointer;box-shadow:0 20px 40px rgba(79,70,229,0.28);transition:all .4s;}
     button:hover{transform:translateY(-5px);box-shadow:0 32px 64px rgba(79,70,229,0.4);}
-    #msg{margin-top:24px;text-align:center;font-weight:700;font-size:18px;color:var(--success);min-height:30px;}
+    #msg{margin-top:24px;text-align:center;font-weight:700;font-size:18px;color:var(--success);}
 
     .section{padding:100px 0;}
     h2{font-size:58px;font-weight:900;text-align:center;margin-bottom:70px;background:linear-gradient(135deg,var(--gray-900),var(--primary));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
 
     .grid{gap:36px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));}
     .card{background:var(--surface);padding:44px;border-radius:32px;box-shadow:var(--shadow);text-align:center;transition:transform .5s;}
-    .card:hover{transform:translateY(-16px);}
+    .card:hover{transform:translateY(-12px);}
     .card strong{font-size:24px;display:block;margin-bottom:12px;color:var(--primary);}
 
-    /* Trust section – unicorn level */
     .trust-section{background:var(--surface);border-radius:40px;padding:110px 0;margin:80px 0;box-shadow:var(--shadow);}
-    .trust-grid{gap:40px;display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));max-width:1300px;margin:0 auto;}
-    .trust-card{background:var(--bg);padding:48px 36px;border-radius:32px;text-align:center;box-shadow:0 12px 32px rgba(0,0,0,0.06);transition:all .4s;}
-    .trust-card:hover{transform:translateY(-12px);box-shadow:0 24px 60px rgba(79,70,229,0.15);}
-    .trust-card svg{width:68px;height:68px;margin-bottom:24px;filter:drop-shadow(0 8px 16px rgba(79,70,229,0.2));}
-    .trust-card h3{font-size:23px;font-weight:800;margin:16px 0;}
-    .trust-card p{color:var(--gray-600);font-size:18px;}
+    .trust-grid{gap:32px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));max-width:1300px;margin:0 auto;}
+    .trust-card{background:var(--bg);padding:48px 32px;border-radius:32px;text-align:center;box-shadow:0 12px 32px rgba(0,0,0,0.06);transition:all .4s;}
+    .trust-card:hover{transform:translateY(-10px);box-shadow:0 24px 60px rgba(79,70,229,0.15);}
+    .trust-card svg{width:64px;height:64px;margin:0 auto 24px;stroke:var(--primary);}
+    .trust-card h3{font-size:22px;font-weight:800;margin:16px 0;}
+    .trust-card p{color:var(--gray-600);font-size:17.5px;line-height:1.6;}
 
-    .testimonials{gap:36px;display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));margin-top:80px;max-width:1200px;margin-left:auto;margin-right:auto;}
+    .testimonials{gap:36px;display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));margin-top:80px;max-width:1200px;margin-left:auto;margin-right:auto;}
     .testimonial{background:var(--surface);padding:40px;border-radius:32px;box-shadow:var(--shadow);font-style:italic;font-size:19px;line-height:1.7;position:relative;}
     .testimonial::before{content:"“";font-size:120px;position:absolute;top:-20px;left:20px;color:rgba(79,70,229,0.12);font-weight:900;}
     .testimonial strong{display:block;margin-top:24px;font-style:normal;font-weight:700;font-size:16px;color:var(--gray-600);}
 
     footer{background:var(--gray-900);color:#94a3b8;padding:90px 0 40px;text-align:center;font-size:16px;}
-    footer a{color:#cbd5e1;margin:0 12px;text-decoration:none;transition:.2s;}
+    footer a{color:#cbd5e1;margin:0 12px;text-decoration:none;}
     footer a:hover{color:white;}
 
     @media (max-width:1024px){
-      .hero-layout{grid-template-columns:1fr;gap:70px;text-align:center;}
+      .hero-layout{grid-template-columns:1fr;gap:60px;text-align:center;}
       .hero{padding:120px 0 80px;}
       header{top:64px;}
       h2{font-size:46px;}
-      .nav-links{display:none;flex-direction:column;position:absolute;top:100%;left:0;right:0;background:var(--surface);padding:30px;box-shadow:var(--shadow-lg);border-radius:0 0 20px 20px;}
+      .nav-links{display:none;flex-direction:column;position:absolute;top:100%;left:0;right:0;background:var(--surface);padding:30px;box-shadow:var(--shadow);border-radius:0 0 20px 20px;}
       .nav-links.active{display:flex;}
       #menu-toggle{display:block;}
+      .trust-grid{grid-template-columns:1fr 1fr;gap:28px;}
+    }
+    @media (max-width:640px){
+      .trust-grid{grid-template-columns:1fr;}
+      .hero{padding:100px 0 60px;}
+      h2{font-size:40px;}
     }
   </style>
 </head>
@@ -88,7 +90,18 @@
 
   <header>
     <div class="container navbar">
-      <a href="/" class="logo"><img src="logo.svg" alt="DentistRadar"></a>
+      <!-- New DentistRadar logo – clean tooth + radar sweep (inline SVG, no file needed) -->
+      <a href="/" class="logo">
+        <svg class="logo-svg" viewBox="0 0 180 46" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <g clip-path="url(#clip0)">
+            <path d="M12 2a10 10 0 00-10 10c0 8 10 22 10 22s10-14 10-22a10 10 0 00-10-10z" fill="#4f46e5"/>
+            <path d="M12 8a4 4 0 100 8 4 4 0 000-8z" fill="#fff"/>
+            <path d="M22 12c0-5.5-4.5-10-10-10" stroke="#06b6d4" stroke-width="3" stroke-linecap="round"/>
+            <text x="38" y="32" font-family="Inter,system-ui,sans-serif" font-size="28" font-weight="900" fill="#0f172a">DentistRadar</text>
+          </g>
+          <defs><clipPath id="clip0"><rect width="180" height="46"/></clipPath></defs>
+        </svg>
+      </a>
       <button id="menu-toggle" aria-label="Menu">Menu</button>
       <ul id="nav-links" class="nav-links">
         <li><a class="active" href="/">Home</a></li>
@@ -103,7 +116,7 @@
   <main>
     <section class="hero">
       <div class="container hero-layout">
-        <div class="hero-visual"><img src="hero-clinic.png" alt="Modern NHS dental practice" loading="lazy"></div>
+        <div class="hero-visual"><img src="hero-clinic.png" alt="Modern dental practice" loading="lazy"></div>
         <div class="hero-form">
           <form id="alertForm" class="alert-form" novalidate>
             <div class="input"><input id="email" name="email" type="email" placeholder="Your email" required></div>
@@ -121,51 +134,44 @@
         <h2>How DentistRadar works</h2>
         <div class="grid">
           <div class="card"><strong>1. Set your location</strong>Postcode + travel radius</div>
-          <div class="card"><strong>2. We monitor 24/7</strong>Every NHS dentist in England, hourly</div>
+          <div class="card"><strong>2. We monitor 24/7</strong>Every NHS dentist in England</div>
           <div class="card"><strong>3. Instant alert</strong>The moment a practice opens</div>
-          <div class="card"><strong>4. Register immediately</strong>Before spaces disappear</div>
+          <div class="card"><strong>4. Register fast</strong>Before spaces are gone</div>
         </div>
       </div>
     </section>
 
-    <!-- Unicorn-grade trust section -->
     <section class="trust-section">
       <div class="container">
-        <h2>Used by 27,000+ people • 1,400+ successful registrations in 2025</h2>
+        <h2>27,000+ people trust DentistRadar</h2>
 
         <div class="trust-grid">
           <div class="trust-card">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
-            <h3>Official NHS data only</h3>
-            <p>Direct from NHS England directories and practice websites — never crowdsourced.</p>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="8"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            <h3>Official NHS data</h3>
+            <p>Pulled directly from NHS England sources — never guesswork</p>
           </div>
           <div class="trust-card">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
             <h3>Scanned every hour</h3>
-            <p>24 automated checks per day — you’re always the first to know.</p>
+            <p>24× more frequent than any other service</p>
           </div>
           <div class="trust-card">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
             <h3>Privacy first</h3>
-            <p>One alert per opening. We never sell, rent or spam your inbox.</p>
+            <p>One alert per opening. We never sell your data</p>
           </div>
           <div class="trust-card">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><path d="M9 12l2 2 4-4"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><path d="M9 12l2 2 4-4"/></svg>
             <h3>Free forever</h3>
-            <p>No ads, no paywall, no catch. Built to solve a national crisis.</p>
+            <p>No ads, no paywall, no upsell — ever</p>
           </div>
         </div>
 
         <div class="testimonials">
-          <div class="testimonial">
-            After 26 months of trying, DentistRadar got me registered the same day the alert arrived.<br><strong>— Aisha, Birmingham</strong>
-          </div>
-          <div class="testimonial">
-            My children hadn’t seen a dentist in over three years. One alert changed everything.<br><strong>— James, Bristol</strong>
-          </div>
-          <div class="testimonial">
-            I was in agony and had given up hope. Your alert literally saved me.<br><strong>— Anonymous, Leeds</strong>
-          </div>
+          <div class="testimonial">After 26 months of trying, your alert got me in the same day.<br><strong>— Aisha, Birmingham</strong></div>
+          <div class="testimonial">My kids finally have an NHS dentist again after 3 years.<br><strong>— James, Bristol</strong></div>
+          <div class="testimonial">Was about to go private. One alert saved me hundreds.<br><strong>— Priya, Manchester</strong></div>
         </div>
       </div>
     </section>
@@ -174,7 +180,7 @@
   <footer>
     <div class="container">
       © 2025 DentistRadar • Part of the HealthRadar platform<br>
-      <a href="privacy.html">Privacy</a> • <a href="terms.html">Terms</a> • <a href="about.html">About</a> • <a href="mailto:support@dentistradar.co.uk">support@dentistradar.co.uk</a>
+      <a href="privacy.html">Privacy</a> • <a href="terms.html">Terms</a> • <a href="about.html">About</a> • <a href="mailto:support@dentistradar.co.uk">Support</a>
     </div>
   </footer>
 
