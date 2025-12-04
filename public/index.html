@@ -22,12 +22,12 @@
     .england-banner{position:sticky;top:0;z-index:999;background:linear-gradient(135deg,#fffbeb,#fde68a);color:#92400e;padding:12px;text-align:center;font-weight:700;font-size:15px;border-bottom:3px solid #f97316;}
 
     header{position:fixed;top:55px;left:0;right:0;z-index:998;background:rgba(248,250,255,0.96);backdrop-filter:blur(20px);border-bottom:1px solid rgba(226,232,240,0.7);}
-    .navbar{display:flex;align-items:center;justify-content:space-between;padding:18px 0;}
+    .navbar{display:flex;align-items:center;justify-content:space-between;padding:14px 0;} /* reduced padding */
     .logo{display:flex;align-items:center;gap:14px;text-decoration:none;}
-    .logo-icon{width:46px;height:46px;}
-    .logo-text{font-size:28px;font-weight:900;letter-spacing:-1.2px;}
-    .logo-text span:first-child{color:#0f172a;}        /* Dentist */
-    .logo-text span:last-child{color:#4f46e5;}         /* Radar   */
+    .logo-icon{width:52px;height:52px;} /* slightly larger + no cropping */
+    .logo-text{font-size:28px;font-weight:900;letter-spacing:-1.2px;line-height:1;}
+    .logo-text span:first-child{color:#0f172a;}
+    .logo-text span:last-child{color:#4f46e5;}
     #menu-toggle{display:none;font-size:28px;cursor:pointer;color:var(--primary);}
     .nav-links{display:flex;gap:36px;font-weight:600;font-size:16px;list-style:none;}
     .nav-links a{color:var(--gray-700);text-decoration:none;}
@@ -69,22 +69,28 @@
     footer a{color:#cbd5e1;margin:0 12px;text-decoration:none;}
     footer a:hover{color:white;}
 
+    /* Mobile fixes */
     @media (max-width:1024px){
+      header{top:64px;padding:10px 0;}
+      .navbar{padding:10px 0;}
+      .logo-icon{width:48px;height:48px;}
+      .logo-text{font-size:24px;}
       .hero-layout{grid-template-columns:1fr;gap:60px;text-align:center;}
       .hero{padding:120px 0 80px;}
-      header{top:64px;}
       h2{font-size:46px;}
-      .nav-links{display:none;flex-direction:column;position:absolute;top:100%;left:0;right:0;background:var(--surface);padding:30px;box-shadow:var(--shadow);border-radius:0 0 20px 20px;}
+      .nav-links{display:none;flex-direction:column;position:absolute;top:100%;left:4%;right:4%;background:var(--surface);
+        padding:20px 0;border-radius:20px;box-shadow:0 20px 50px rgba(79,70,229,0.25);border:1px solid rgba(79,70,229,0.1);}
       .nav-links.active{display:flex;}
+      .nav-links a{padding:12px 24px;font-size:17px;}
       #menu-toggle{display:block;}
-      .trust-grid{grid-template-columns:1fr 1fr;gap:28px;}
-      .logo-text{font-size:24px;}
+      .trust-grid{grid-template-columns:1fr 1fr;gap:24px;}
     }
     @media (max-width:640px){
       .trust-grid{grid-template-columns:1fr;}
       .hero{padding:100px 0 60px;}
       h2{font-size:40px;}
       .logo-text{font-size:22px;}
+      .england-banner{font-size:14px;padding:10px;}
     }
   </style>
 </head>
@@ -97,11 +103,10 @@
   <header>
     <div class="container navbar">
       <a href="/" class="logo">
-        <!-- Radar icon + perfectly colored text -->
-        <svg class="logo-icon" viewBox="0 0 46 46" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M23 3a20 20 0 00-20 20c0 12 20 30 20 30s20-18 20-30a20 20 0 00-20-20z" fill="#4f46e5"/>
-          <circle cx="23" cy="23" r="8" fill="#fff"/>
-          <path d="M43 23c0-11-9-20-20-20" stroke="#06b6d4" stroke-width="4" stroke-linecap="round"/>
+        <svg class="logo-icon" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M26 5a21 21 0 00-21 21c0 13 21 32 21 32s21-19 21-32A21 21 0 0026 5z" fill="#4f46e5"/>
+          <circle cx="26" cy="26" r="9" fill="#fff"/>
+          <path d="M47 26c0-11.6-9.4-21-21-21" stroke="#06b6d4" stroke-width="4.5" stroke-linecap="round"/>
         </svg>
         <div class="logo-text"><span>Dentist</span><span>Radar</span></div>
       </a>
@@ -117,7 +122,7 @@
     </div>
   </header>
 
-  <!-- Everything else exactly the same as the previous perfect version -->
+  <!-- Rest of page unchanged (hero, sections, etc.) -->
   <main>
     <section class="hero">
       <div class="container hero-layout">
