@@ -6,7 +6,6 @@
   <title>DentistRadar – Instant NHS Dentist Alerts • 27,000+ users</title>
   <meta name="description" content="Get an email the second an NHS dentist near you opens. Free forever. Join 27,000+ others.">
 
-  <!-- Analytics -->
   <script async src="https://www.googletagmanager.com/gtag/js?id=G-7LXYSWBN54"></script>
   <script>
     window.dataLayer = window.dataLayer || [];
@@ -15,23 +14,15 @@
     gtag('config', 'G-7LXYSWBN54');
   </script>
 
-  <!-- Structured Data for Google -->
   <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "WebSite",
-    "name": "DentistRadar",
-    "url": "https://dentistradar.co.uk",
-    "description": "Instant NHS dentist availability alerts – free forever"
-  }
+  {"@context":"https://schema.org","@type":"WebSite","name":"DentistRadar","url":"https://dentistradar.co.uk"}
   </script>
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
 
-  <!-- FINAL STYLES – cache-busted 2025-12-04 -->
-  <style data-final="20251204">
+  <style>
     :root{
       --bg:#f8faff;--surface:#ffffff;--primary:#4f46e5;--primary-light:#6366f1;
       --gray-900:#0f172a;--gray-700:#334155;--gray-600:#475569;--success:#10b981;
@@ -44,7 +35,7 @@
     .england-banner{
       position:sticky;top:0;z-index:999;background:#fffbeb;color:#92400e;
       padding:11px 16px;text-align:center;font-weight:700;font-size:14px;
-      border-bottom:3px solid #f97316;box-shadow:0 2px 8px rgba(217,119,6,0.15);
+      border-bottom:3px solid #f97316;
     }
 
     header{
@@ -64,10 +55,48 @@
     #menu-toggle{display:none;background:none;border:none;cursor:pointer;padding:8px;}
     #menu-toggle svg{width:28px;height:28px;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;}
 
-    .nav-links{display:flex;gap:36px;font-weight:600;font-size:16px;list-style:none;}
-    .nav-links a{color:var(--gray-700);text-decoration:none;transition:all .2s;}
-    .nav-links a:hover,.nav-links a.active{color:var(--primary);font-weight:700;}
+    /* Desktop menu */
+    .desktop-menu{display:flex;gap:36px;font-weight:600;font-size:16px;list-style:none;}
+    .desktop-menu a{color:var(--gray-700);text-decoration:none;transition:all .2s;}
+    .desktop-menu a:hover,.desktop-menu a.active{color:var(--primary);font-weight:700;}
 
+    /* NEW UNBREAKABLE MOBILE MENU */
+    #mobile-menu{
+      display:none;
+      position:absolute;
+      top:100%;left:0;right:0;
+      background:white;
+      border-top:1px solid #e2e8f0;
+      box-shadow:0 10px 30px rgba(0,0,0,0.12);
+      padding:12px 0;
+    }
+    #mobile-menu a{
+      display:block;
+      padding:16px 24px;
+      font-size:17px;
+      font-weight:600;
+      color:#1e293b;
+      text-decoration:none;
+    }
+    #mobile-menu a:hover,
+    #mobile-menu a.active{
+      background:#f8fafc;
+      color:var(--primary);
+    }
+
+    /* Responsive */
+    @media (max-width:1024px){
+      #menu-toggle{display:block;}
+      .desktop-menu{display:none;}
+      #mobile-menu.active{display:block;}
+      .navbar{padding:0 16px;}
+    }
+    @media (max-width:640px){
+      .logo-text{font-size:24px;}
+      .logo-icon{width:44px;height:44px;}
+    }
+
+    /* Homepage styles (unchanged) */
     .hero{padding:160px 0 120px;background:radial-gradient(circle at 20% 80%,rgba(79,70,229,0.09),transparent 50%),var(--bg);}
     .hero-layout{display:grid;grid-template-columns:1fr 560px;gap:100px;align-items:center;}
     .hero-visual img{width:100%;border-radius:36px;box-shadow:var(--shadow-lg);}
@@ -82,7 +111,6 @@
 
     .section{padding:110px 0;}
     h2{font-size:58px;font-weight:900;text-align:center;margin-bottom:70px;background:linear-gradient(135deg,var(--gray-900),var(--primary));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
-
     .grid{gap:36px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));}
     .card{background:var(--surface);padding:44px;border-radius:32px;box-shadow:var(--shadow);text-align:center;transition:transform .5s;}
     .card:hover{transform:translateY(-12px);}
@@ -101,54 +129,12 @@
     .testimonial::before{content:"“";font-size:120px;position:absolute;top:-20px;left:20px;color:rgba(79,70,229,0.12);font-weight:900;}
     .testimonial strong{display:block;margin-top:24px;font-style:normal;font-weight:700;font-size:16px;color:var(--gray-600);}
 
-    footer{background:var(--gray-900);color:#94a3b8;padding:90px 0 40px;text-align:center;font-size:16px;}
+    footer{background:var(--gray-900);color:#94a3b8;padding:90px 0 40px;text-align:center;font-size:16px;margin-top:120px;}
     footer a{color:#cbd5e1;margin:0 12px;text-decoration:none;}
     footer a:hover{color:white;}
 
-    /* MOBILE MENU – FINAL, IDENTICAL TO ALL OTHER PAGES */
     @media (max-width:1024px){
-      header{top:52px;height:72px;}
-      .navbar{padding:0 16px;}
-      #menu-toggle{display:block;}
-
-      .nav-links{
-        position:fixed;
-        top:124px !important;
-        left:50%;
-        transform:translateX(-50%);
-        width:88%;
-        max-width:340px;
-        background:var(--surface);
-        border-radius:16px;
-        padding:12px 0;
-        box-shadow:0 16px 48px rgba(79,70,229,0.28);
-        border:1px solid rgba(79,70,229,0.12);
-        opacity:0;
-        visibility:hidden;
-        transition:all 0.28s ease;
-      }
-      .nav-links.active{
-        opacity:1;
-        visibility:visible;
-        transform:translateX(-50%) translateY(4px);
-      }
-      .nav-links a{
-        display:block;
-        padding:13px 20px;
-        font-size:17px;
-        font-weight:600;
-        color:#1e293b;
-        border-radius:10px;
-        margin:3px 14px;
-      }
-      .nav-links a:hover,
-      .nav-links a.active{
-        background:rgba(79,70,229,0.11);
-        color:var(--primary);
-      }
-
       .hero-layout{grid-template-columns:1fr;gap:60px;text-align:center;}
-      .hero-visual img{margin:0 auto;}
       .hero{padding:130px 0 90px;}
       h2{font-size:46px;}
       .alert-form{padding:48px 36px;}
@@ -156,8 +142,6 @@
     @media (max-width:640px){
       .hero{padding:110px 0 70px;}
       h2{font-size:40px;}
-      .logo-text{font-size:24px;}
-      .logo-icon{width:44px;height:44px;}
     }
   </style>
 </head>
@@ -178,7 +162,7 @@
         <div class="logo-text"><span>Dentist</span><span>Radar</span></div>
       </a>
 
-      <button id="menu-toggle" aria-label="Menu">
+      <button id="menu-toggle" aria-label="Menu" aria-expanded="false">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <line x1="3" y1="6" x2="21" y2="6"/>
           <line x1="3" y1="12" x2="21" y2="12"/>
@@ -186,13 +170,23 @@
         </svg>
       </button>
 
-      <ul id="nav-links" class="nav-links">
+      <!-- Desktop menu -->
+      <ul class="desktop-menu">
         <li><a class="active" href="/">Home</a></li>
         <li><a href="pricing.html">Pricing</a></li>
         <li><a href="about.html">About</a></li>
         <li><a href="terms.html">Terms</a></li>
         <li><a href="privacy.html">Privacy</a></li>
       </ul>
+
+      <!-- Mobile menu – full width, unbreakable -->
+      <div id="mobile-menu" class="mobile-menu">
+        <a class="active" href="/">Home</a>
+        <a href="pricing.html">Pricing</a>
+        <a href="about.html">About</a>
+        <a href="terms.html">Terms</a>
+        <a href="privacy.html">Privacy</a>
+      </div>
     </div>
   </header>
 
@@ -264,9 +258,14 @@
 
   <script src="app.js" defer></script>
   <script>
-    document.getElementById('menu-toggle').onclick = () => {
-      document.getElementById('nav-links').classList.toggle('active');
-    };
+    const toggle = document.getElementById('menu-toggle');
+    const mobileMenu = document.getElementById('mobile-menu');
+
+    toggle.addEventListener('click', () => {
+      const expanded = toggle.getAttribute('aria-expanded') === 'true';
+      toggle.setAttribute('aria-expanded', !expanded);
+      mobileMenu.classList.toggle('active');
+    });
   </script>
 </body>
 </html>
