@@ -1,104 +1,220 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="scroll-smooth">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Privacy Policy — Dentist Radar</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Privacy Policy — DentistRadar</title>
+  <meta name="description" content="How DentistRadar handles your data. We collect the absolute minimum and never sell it.">
 
-<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-7LXYSWBN54"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-  gtag('config', 'G-7LXYSWBN54');
-</script>
-  
-<link rel="stylesheet" href="style.css">
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-7LXYSWBN54"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-7LXYSWBN54');
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+  <style>
+    :root{
+      --bg:#f8faff;--surface:#ffffff;--primary:#4f46e5;--primary-light:#6366f1;
+      --gray-900:#0f172a;--gray-700:#334155;--gray-600:#475569;
+      --shadow:0 20px 40px rgba(79,70,229,0.12);
+    }
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:'Inter',sans-serif;background:var(--bg);color:#1e293b;line-height:1.7;overflow-x:hidden;}
+    .container{max-width:1400px;margin:0 auto;padding:0 24px;}
+
+    .england-banner{
+      position:sticky;top:0;z-index:999;background:#fffbeb;color:#92400e;
+      padding:11px 16px;text-align:center;font-weight:700;font-size:14px;
+      border-bottom:3px solid #f97316;
+    }
+
+    header{
+      position:fixed;top:52px;left:0;right:0;z-index:998;
+      background:rgba(248,250,255,0.97);backdrop-filter:blur(20px);
+      border-bottom:1px solid rgba(226,232,240,0.7);
+      height:72px;
+    }
+    .navbar{display:flex;align-items:center;justify-content:space-between;height:100%;padding:0 20px;}
+    .logo{display:flex;align-items:center;gap:14px;text-decoration:none;}
+    .logo-icon{width:48px;height:48px;}
+    .logo-text{font-size:28px;font-weight:900;letter-spacing:-1.2px;}
+    .logo-text span:first-child{color:var(--gray-900);}
+    .logo-text span:last-child{color:var(--primary);}
+
+    #menu-toggle{display:none;background:none;border:none;cursor:pointer;padding:8px;}
+    #menu-toggle svg{width:28px;height:28px;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;}
+
+    .nav-links{display:flex;gap:36px;font-weight:600;font-size:16px;list-style:none;}
+    .nav-links a{color:var(--gray-700);text-decoration:none;}
+    .nav-links a:hover,.nav-links a.active{color:var(--primary);font-weight:700;}
+
+    .small-hero{padding:140px 0 80px;text-align:center;}
+    .small-hero h1{
+      font-size:52px;font-weight:900;margin-bottom:16px;
+      background:linear-gradient(135deg,var(--gray-900),var(--primary));
+      -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+    }
+    .small-hero p{font-size:18px;color:var(--gray-600);}
+
+    .legal-text{max-width:860px;margin:0 auto;padding:0 20px;}
+    .legal-text h2{
+      font-size:28px;font-weight:800;margin:48px 0 20px;color:var(--gray-900);
+    }
+    .legal-text p,.legal-text li{
+      font-size:17.5px;color:#334155;margin-bottom:16px;
+    }
+    .legal-text ul{
+      margin:20px 0;padding-left:32px;
+    }
+    .legal-text ul li{list-style:disc;}
+
+    footer{
+      background:var(--gray-900);color:#94a3b8;padding:90px 0 40px;text-align:center;font-size:16px;margin-top:120px;
+    }
+    footer a{color:#cbd5e1;margin:0 12px;text-decoration:none;}
+    footer a:hover{color:white;}
+
+    @media (max-width:1024px){
+      header{top:52px;height:72px;}
+      .navbar{padding:0 16px;}
+      #menu-toggle{display:block;}
+      .nav-links{
+        position:fixed;top:124px !important;left:50%;transform:translateX(-50%);
+        width:88%;max-width:340px;background:var(--surface);
+        border-radius:16px;padding:12px 0;
+        box-shadow:0 16px 48px rgba(79,70,229,0.28);
+        border:1px solid rgba(79,70,229,0.12);
+        opacity:0;visibility:hidden;transition:all 0.28s ease;
+      }
+      .nav-links.active{opacity:1;visibility:visible;transform:translateX(-50%) translateY(4px);}
+      .nav-links a{
+        display:block;padding:13px 20px;font-size:17px;font-weight:600;
+        color:#1e293b;border-radius:10px;margin:3px 14px;
+      }
+      .nav-links a:hover,.nav-links a.active{
+        background:rgba(79,70,229,0.11);color:var(--primary);
+      }
+      .small-hero h1{font-size:42px;}
+      .legal-text{padding:0 24px;}
+    }
+    @media (max-width:640px){
+      .logo-text{font-size:24px;}
+      .logo-icon{width:44px;height:44px;}
+      .small-hero h1{font-size:38px;}
+    }
+  </style>
 </head>
 <body>
-<header>
-  <div class="container navbar">
-    <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"></a>
-    <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
-    <ul id="nav-links" class="nav-links">
-      <li><a href="/">Home</a></li>
-      <li><a href="pricing.html">Pricing</a></li>
-      <li><a href="about.html">About</a></li>
-      <li><a href="terms.html">Terms</a></li>
-      <li><a class="active" href="privacy.html">Privacy</a></li>
-    </ul>
+
+  <div class="england-banner">
+    Currently England only • Scotland, Wales & NI launching early 2026
   </div>
-</header>
 
-<main>
-  <section class="hero small-hero">
-    <div class="container">
-      <h1>Privacy Policy</h1>
-      <p>Last updated: 30 October 2025</p>
+  <header>
+    <div class="container navbar">
+      <a href="/" class="logo">
+        <svg class="logo-icon" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M26 5a21 21 0 00-21 21c0 13 21 32 21 32s21-19 21-32A21 21 0 0026 5z" fill="#4f46e5"/>
+          <circle cx="26" cy="26" r="9" fill="#fff"/>
+          <path d="M47 26c0-11.6-9.4-21-21-21" stroke="#06b6d4" stroke-width="4.5" stroke-linecap="round"/>
+        </svg>
+        <div class="logo-text"><span>Dentist</span><span>Radar</span></div>
+      </a>
+
+      <button id="menu-toggle" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+
+      <ul id="nav-links" class="nav-links">
+        <li><a href="/">Home</a></li>
+        <li><a href="pricing.html">Pricing</a></li>
+        <li><a href="about.html">About</a></li>
+        <li><a href="terms.html">Terms</a></li>
+        <li><a class="active" href="privacy.html">Privacy</a></li>
+      </ul>
     </div>
-  </section>
+  </header>
 
-  <section class="section section-wide">
-    <div class="container-wide" style="text-align:left;max-width:900px">
+  <main>
+    <section class="small-hero">
+      <div class="container">
+        <h1>Privacy Policy</h1>
+        <p>Last updated: 4 December 2025</p>
+      </div>
+    </section>
+
+    <section style="padding:80px 0">
       <div class="legal-text">
-      <h2>1. Who we are</h2>
-      <p>Dentist Radar provides alert notifications about potential NHS dentist availability near your chosen postcode(s).</p>
+        <h2>1. Who we are</h2>
+        <p>DentistRadar provides alert notifications about potential NHS dentist availability near your chosen postcode(s).</p>
 
-      <h2>2. What we collect</h2>
-      <ul>
-        <li>Email address (to send alerts)</li>
-        <li>Postcode(s) and chosen radius</li>
-        <li>Technical logs (e.g., IP, timestamps) for security and troubleshooting</li>
-      </ul>
+        <h2>2. What we collect</h2>
+        <ul>
+          <li>Email address (to send alerts)</li>
+          <li>Postcode(s) and chosen radius</li>
+          <li>Technical logs (e.g., IP, timestamps) for security and troubleshooting</li>
+        </ul>
 
-      <h2>3. How we use your data</h2>
-      <ul>
-        <li>To deliver alerts you requested</li>
-        <li>To improve and secure the service</li>
-        <li>To communicate important service updates</li>
-      </ul>
+        <h2>3. How we use your data</h2>
+        <ul>
+          <li>To deliver alerts you requested</li>
+          <li>To improve and secure the service</li>
+          <li>To communicate important service updates</li>
+        </ul>
 
-      <h2>4. Lawful basis</h2>
-      <p>We process your data under UK GDPR on the basis of your consent and/or our legitimate interests in providing the service.</p>
+        <h2>4. Lawful basis</h2>
+        <p>We process your data under UK GDPR on the basis of your consent and/or our legitimate interests in providing the service.</p>
 
-      <h2>5. Storage & Providers</h2>
-      <p>We use reputable providers to run our service (e.g., hosting, databases, email delivery). Where applicable, these providers process limited data as our processors.</p>
-      <ul>
-        <li>Email delivery (e.g., Postmark or similar): sends alert emails on our behalf.</li>
-        <li>Database hosting (e.g., managed cloud database): stores alert configuration data (email, postcode, radius).</li>
-      </ul>
+        <h2>5. Storage & Providers</h2>
+        <p>We use reputable providers to run our service (e.g., hosting, databases, email delivery). Where applicable, these providers process limited data as our processors.</p>
+        <ul>
+          <li>Email delivery (e.g., Postmark or similar): sends alert emails on our behalf.</li>
+          <li>Database hosting (e.g., managed cloud database): stores alert configuration data (email, postcode, radius).</li>
+        </ul>
 
-      <h2>6. Retention</h2>
-      <p>We keep your alert details while your alert is active. If you delete your alert, we remove it from our active system; minimal logs may remain for security and audit.</p>
+        <h2>6. Retention</h2>
+        <p>We keep your alert details while your alert is active. If you delete your alert, we remove it from our active system; minimal logs may remain for security and audit.</p>
 
-      <h2>7. Your rights</h2>
-      <p>Under UK GDPR you may have rights to access, correct, delete or restrict processing of your personal data. Contact us to exercise these rights.</p>
+        <h2>7. Your rights</h2>
+        <p>Under UK GDPR you may have rights to access, correct, delete or restrict processing of your personal data. Contact us to exercise these rights.</p>
 
-      <h2>8. Cookies</h2>
-      <p>We use essential cookies only (e.g., for basic site functionality). We do not use cookies for advertising.</p>
+        <h2>8. Cookies</h2>
+        <p>We use essential cookies only (e.g., for basic site functionality). We do not use cookies for advertising.</p>
 
-      <h2 id="contact">9. Contact</h2>
-      <p>To contact us about privacy or to exercise your rights, email: <strong>support@dentistradar.co.uk</strong></p>
+        <h2 id="contact">9. Contact</h2>
+        <p>To contact us about privacy or to exercise your rights, email: <strong>support@dentistradar.co.uk</strong></p>
 
-      <h2>10. Changes</h2>
-      <p>We may update this Policy; a new “Last updated” date will appear at the top of this page.</p>
+        <h2>10. Changes</h2>
+        <p>We may update this Policy; a new “Last updated” date will appear at the top of this page.</p>
 
-      <p style="margin-top:14px;color:#666;font-size:.9rem">This page is provided for information only and is not legal advice.</p>
+        <p style="margin-top:40px;color:#666;font-size:15px;">
+          This page is provided for information only and is not legal advice.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      © 2025 DentistRadar • Part of the HealthRadar platform<br>
+      <a href="privacy.html">Privacy</a> • <a href="terms.html">Terms</a> • <a href="about.html">About</a> • <a href="mailto:support@dentistradar.co.uk">Support</a>
     </div>
-  </section>
-</main>
+  </footer>
 
-<footer>
-  <div class="container footer">
-    © 2025 Dentist Radar · 
-    <a href="privacy.html">Privacy</a> · 
-    <a href="terms.html">Terms</a> · 
-    <a href="about.html">About</a> · 
-    <a href="mailto:support@dentistradar.co.uk">Support</a>
-  </div>
-</footer>
-
-<script src="app.js" defer></script>
+  <script>
+    document.getElementById('menu-toggle').onclick = () => {
+      document.getElementById('nav-links').classList.toggle('active');
+    };
+  </script>
 </body>
 </html>
