@@ -32,7 +32,7 @@
     body{font-family:'Inter',sans-serif;background:var(--bg);color:#1e293b;line-height:1.6;overflow-x:hidden;}
     .container{max-width:1400px;margin:0 auto;padding:0 24px;}
 
-    /* England banner – forced to single line on mobile */
+    /* Updated banner text + clean mobile fit */
     .england-banner{
       position:sticky;
       top:0;
@@ -63,6 +63,7 @@
     .logo-text span:first-child{color:var(--gray-900);}
     .logo-text span:last-child{color:var(--primary);}
 
+    /* FIXED: hamburger icon now dark, visible */
     #menu-toggle{
       display:none;
       background:transparent !important;
@@ -72,7 +73,12 @@
       outline:none !important;
       box-shadow:none !important;
     }
-    #menu-toggle svg{width:28px;height:28px;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;}
+    #menu-toggle svg{
+      width:28px;height:28px;
+      stroke:#1e1e1e !important; /* made dark */
+      stroke-width:2.5;
+      stroke-linecap:round;
+    }
 
     /* Desktop menu */
     .desktop-menu{display:flex;gap:36px;font-weight:600;font-size:16px;list-style:none;}
@@ -182,7 +188,7 @@
 <body>
 
   <div class="england-banner">
-    Currently England only • Scotland, Wales & NI launching early 2026
+    Scotland, Wales & NI launching in 2026
   </div>
 
   <header>
@@ -197,7 +203,7 @@
       </a>
 
       <button id="menu-toggle" aria-label="Menu" aria-expanded="false">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#1e1e1e">
           <line x1="3" y1="6" x2="21" y2="6"/>
           <line x1="3" y1="12" x2="21" y2="12"/>
           <line x1="3" y1="18" x2="21" y2="18"/>
