@@ -1,86 +1,191 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="scroll-smooth">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>About — Dentist Radar</title>
-  
-<!-- Google tag (gtag.js) -->
-<script async src="https://www.googletagmanager.com/gtag/js?id=G-7LXYSWBN54"></script>
-<script>
-  window.dataLayer = window.dataLayer || [];
-  function gtag(){dataLayer.push(arguments);}
-  gtag('js', new Date());
-  gtag('config', 'G-7LXYSWBN54');
-</script>
-  
-<link rel="stylesheet" href="style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>About — DentistRadar</title>
+  <meta name="description" content="How DentistRadar works and why we built it. Free NHS dentist alerts for everyone.">
+
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-7LXYSWBN54"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-7LXYSWBN54');
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+  <style>
+    :root{
+      --bg:#f8faff;--surface:#ffffff;--primary:#4f46e5;--primary-light:#6366f1;
+      --gray-900:#0f172a;--gray-700:#334155;--gray-600:#475569;--success:#10b981;
+      --shadow:0 20px 40px rgba(79,70,229,0.12);--shadow-lg:0 32px 80px rgba(79,70,229,0.18);
+    }
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{font-family:'Inter',sans-serif;background:var(--bg);color:#1e293b;line-height:1.6;overflow-x:hidden;}
+    .container{max-width:1400px;margin:0 auto;padding:0 24px;}
+
+    .england-banner{
+      position:sticky;top:0;z-index:999;background:#fffbeb;color:#92400e;
+      padding:11px 16px;text-align:center;font-weight:700;font-size:14px;
+      border-bottom:3px solid #f97316;box-shadow:0 2px 8px rgba(217,119,6,0.15);
+    }
+
+    header{
+      position:fixed;top:52px;left:0;right:0;z-index:998;
+      background:rgba(248,250,255,0.97);backdrop-filter:blur(20px);
+      border-bottom:1px solid rgba(226,232,240,0.7);
+    }
+    .navbar{display:flex;align-items:center;justify-content:space-between;padding:16px 0;}
+    .logo{display:flex;align-items:center;gap:14px;text-decoration:none;}
+    .logo-icon{width:48px;height:48px;}
+    .logo-text{font-size:28px;font-weight:900;letter-spacing:-1.2px;}
+    .logo-text span:first-child{color:#0f172a;}
+    .logo-text span:last-child{color:var(--primary);}
+
+    #menu-toggle{
+      display:none;background:none;border:none;cursor:pointer;padding:10px;border-radius:12px;transition:background .2s;
+    }
+    #menu-toggle svg{width:28px;height:28px;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;}
+
+    .nav-links{
+      display:flex;gap:36px;font-weight:600;font-size:16px;list-style:none;
+    }
+    .nav-links a{color:var(--gray-700);text-decoration:none;transition:all .2s;}
+    .nav-links a:hover,.nav-links a.active{color:var(--primary);font-weight:700;}
+
+    .hero.small-hero{padding:140px 0 80px;text-align:center;}
+    .hero.small-hero h1{font-size:52px;font-weight:900;margin-bottom:20px;background:linear-gradient(135deg,var(--gray-900),var(--primary));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+    .hero.small-hero p{font-size:20px;color:var(--gray-600);max-width:720px;margin:0 auto;}
+
+    .section-wide{padding:100px 0;}
+    h2{font-size:48px;font-weight:900;text-align:center;margin-bottom:60px;background:linear-gradient(135deg,var(--gray-900),var(--primary));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+    .grid{gap:32px;display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));}
+    .card{background:var(--surface);padding:40px;border-radius:28px;box-shadow:var(--shadow);text-align:center;}
+    .card strong{font-size:22px;display:block;margin-bottom:12px;color:var(--primary);}
+
+    footer{background:var(--gray-900);color:#94a3b8;padding:90px 0 40px;text-align:center;font-size:16px;}
+    footer a{color:#cbd5e1;margin:0 12px;text-decoration:none;}
+    footer a:hover{color:white;}
+
+    /* Mobile */
+    @media (max-width:1024px){
+      header{top:56px;}
+      .navbar{padding:14px 0;}
+      #menu-toggle{display:block;}
+      .nav-links{
+        position:fixed;top:108px;left:50%;transform:translateX(-50%);
+        width:90%;max-width:380px;background:var(--surface);
+        border-radius:20px;padding:16px 0;
+        box-shadow:0 24px 60px rgba(79,70,229,0.3);
+        border:1px solid rgba(79,70,229,0.15);
+        opacity:0;visibility:hidden;
+        transform:translateX(-50%) translateY(-12px);
+        transition:all 0.3s cubic-bezier(0.4,0,0.2,1);
+      }
+      .nav-links.active{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0);}
+      .nav-links a{display:block;padding:16px 32px;font-size:18px;font-weight:600;border-radius:14px;margin:6px 20px;}
+      .nav-links a:hover,.nav-links a.active{background:rgba(79,70,229,0.12);color:var(--primary);}
+      .hero.small-hero h1{font-size:42px;}
+      h2{font-size:40px;}
+    }
+    @media (max-width:640px){
+      .logo-text{font-size:24px;}
+      .logo-icon{width:44px;height:44px;}
+    }
+  </style>
 </head>
 <body>
-<header>
-  <div class="container navbar">
-    <a href="/" class="logo"><img src="logo.svg" alt="Dentist Radar"></a>
-    <button id="menu-toggle" class="menu-toggle" aria-label="Menu">☰</button>
-    <ul id="nav-links" class="nav-links">
-      <li><a href="/">Home</a></li>
-      <li><a href="pricing.html">Pricing</a></li>
-      <li><a class="active" href="about.html">About</a></li>
-      <li><a href="terms.html">Terms</a></li>
-      <li><a href="privacy.html">Privacy</a></li>
-    </ul>
+
+  <div class="england-banner">
+    Currently England only • Scotland, Wales & NI launching early 2026
   </div>
-</header>
 
-<main>
-  <section class="hero small-hero">
-    <div class="container">
-      <h1>About Dentist Radar</h1>
-      <p>We help people find NHS dental availability quickly and simply.</p>
+  <header>
+    <div class="container navbar">
+      <a href="/" class="logo">
+        <svg class="logo-icon" viewBox="0 0 52 52" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M26 5a21 21 0 00-21 21c0 13 21 32 21 32s21-19 21-32A21 21 0 0026 5z" fill="#4f46e5"/>
+          <circle cx="26" cy="26" r="9" fill="#fff"/>
+          <path d="M47 26c0-11.6-9.4-21-21-21" stroke="#06b6d4" stroke-width="4.5" stroke-linecap="round"/>
+        </svg>
+        <div class="logo-text"><span>Dentist</span><span>Radar</span></div>
+      </a>
+
+      <!-- Clean hamburger icon (this is the one you love) -->
+      <button id="menu-toggle" aria-label="Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <line x1="3" y1="6" x2="21" y2="6"/>
+          <line x1="3" y1="12" x2="21" y2="12"/>
+          <line x1="3" y1="18" x2="21" y2="18"/>
+        </svg>
+      </button>
+
+      <ul id="nav-links" class="nav-links">
+        <li><a href="/">Home</a></li>
+        <li><a href="pricing.html">Pricing</a></li>
+        <li><a class="active" href="about.html">About</a></li>
+        <li><a href="terms.html">Terms</a></li>
+        <li><a href="privacy.html">Privacy</a></li>
+      </ul>
     </div>
-  </section>
+  </header>
 
-  <section class="section section-wide">
-    <div class="container-wide">
-      <h2>Our Mission</h2>
-      <p style="max-width:840px;margin:10px auto 0">
-        Dentist Radar turns NHS availability data into timely, easy-to-use alerts, so you can act fast when practices
-        near you start accepting new NHS patients. We focus on clarity, privacy, and speed.
-      </p>
-    </div>
-  </section>
-
-  <section class="section section-wide">
-    <div class="container-wide">
-      <h2>How It Works</h2>
-      <div class="grid">
-        <div class="card"><strong>Data</strong> We monitor official NHS listings for changes in patient acceptance status.</div>
-        <div class="card"><strong>Scanning</strong> Our system checks at regular intervals and flags changes near your postcode.</div>
-        <div class="card"><strong>Alerts</strong> When there’s availability, we email you so you can contact the practice promptly.</div>
-        <div class="card"><strong>Privacy</strong> We store the minimum necessary data (email, postcode, radius) to deliver alerts.</div>
+  <main>
+    <section class="hero small-hero">
+      <div class="container">
+        <h1>About DentistRadar</h1>
+        <p>We help people find NHS dental availability quickly and simply.</p>
       </div>
+    </section>
+
+    <section class="section-wide">
+      <div class="container">
+        <h2>Our Mission</h2>
+        <p style="max-width:840px;margin:40px auto 0;font-size:19px;color:#475569;line-height:1.7;">
+          DentistRadar turns NHS availability data into timely, easy-to-use alerts, so you can act fast when practices
+          near you start accepting new NHS patients. We focus on clarity, privacy, and speed.
+        </p>
+      </div>
+    </section>
+
+    <section class="section-wide">
+      <div class="container">
+        <h2>How It Works</h2>
+        <div class="grid">
+          <div class="card"><strong>Data</strong>We monitor official NHS listings for changes in patient acceptance status.</div>
+          <div class="card"><strong>Scanning</strong>Our system checks every hour and flags changes near your postcode.</div>
+          <div class="card"><strong>Alerts</strong>When there’s availability, we email you instantly so you can contact the practice promptly.</div>
+          <div class="card"><strong>Privacy</strong>We store only the minimum data needed (email, postcode, radius) and never sell it.</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section-wide" id="contact">
+      <div class="container">
+        <h2>Contact</h2>
+        <p style="max-width:840px;margin:40px auto 0;font-size:19px;color:#475569;">
+          For any questions or support, email us at <a href="mailto:support@dentistradar.co.uk" style="color:var(--primary);font-weight:600;">support@dentistradar.co.uk</a>
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="container">
+      © 2025 DentistRadar • Part of the HealthRadar platform<br>
+      <a href="privacy.html">Privacy</a> • <a href="terms.html">Terms</a> • <a href="about.html">About</a> • <a href="mailto:support@dentistradar.co.uk">Support</a>
     </div>
-  </section>
+  </footer>
 
-  <section class="section section-wide" id="contact">
-    <div class="container-wide">
-      <h2>Contact</h2>
-      <p style="max-width:840px;margin:10px auto 0">
-        For any questions or early access to upgrades, please reach out to support@dentistradar.co.uk
-      </p>
-    </div>
-  </section>
-</main>
-
-<footer>
-  <div class="container footer">
-    © 2025 Dentist Radar · 
-    <a href="privacy.html">Privacy</a> · 
-    <a href="terms.html">Terms</a> · 
-    <a href="about.html">About</a> · 
-    <a href="mailto:support@dentistradar.co.uk">Support</a>
-  </div>
-</footer>
-
-<script src="app.js" defer></script>
+  <script>
+    document.getElementById('menu-toggle').onclick = () => {
+      document.getElementById('nav-links').classList.toggle('active');
+    };
+  </script>
 </body>
 </html>
