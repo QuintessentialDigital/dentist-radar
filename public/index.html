@@ -66,6 +66,7 @@
       align-items:center;
       justify-content:space-between;
       height:100%;
+      position:relative; /* important for mobile menu alignment */
     }
 
     .logo{display:flex;align-items:center;gap:14px;text-decoration:none;}
@@ -115,7 +116,7 @@
       display:none;
       position:absolute;
       top:100%;
-      right:16px;
+      right:0; /* align to right edge of navbar/container */
       width:220px;
       background:#1e1e1e;
       border-radius:18px;
@@ -370,7 +371,7 @@
         text-align:center;
       }
       .hero-visual{
-        order:1;
+        order:0; /* image first on mobile */
       }
       .alert-form{
         padding:48px 32px;
@@ -402,7 +403,7 @@
 <body>
 
   <div class="england-banner">
-    Currently England only • Scotland, Wales &amp; NI launching early 2026
+    Currently England only • Scotland, Wales &amp; NI launching in 2026
   </div>
 
   <header>
