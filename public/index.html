@@ -101,6 +101,7 @@
       transform:translateY(-6px);
       opacity:0;
       transition:all .22s ease-out;
+      text-align:right;          /* NEW: right-align text in mobile menu */
     }
     #mobile-menu.active{
       display:block;
@@ -129,7 +130,7 @@
     @media (max-width:1024px){
       #menu-toggle{display:block;}
       .desktop-menu{display:none;}
-      .navbar{padding:0 16px;}
+      .navbar{padding:0 16px; justify-content:space-between;}
     }
     @media (max-width:640px){
       .logo-text{font-size:24px;}
@@ -188,7 +189,7 @@
 <body>
 
   <div class="england-banner">
-    Scotland, Wales & NI launching in 2026
+    Currently England only • Scotland, Wales &amp; NI launching early 2026
   </div>
 
   <header>
@@ -241,7 +242,7 @@
             <div class="input"><label for="email">Your email</label><input id="email" type="email" required></div>
             <div class="input"><label for="postcode">Postcode</label><input id="postcode" type="text" placeholder="e.g. RG1 2AB" required></div>
             <div class="input"><label for="radius">Radius in miles</label><input id="radius" type="number" min="1" max="30" value="10" required></div>
-            <button type="submit">Start receiving alerts – Free forever</button>
+            <button type="submit">Get NHS dentist alerts – free forever</button>
           </form>
           <p id="msg" aria-live="polite"></p>
         </div>
