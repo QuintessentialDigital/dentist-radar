@@ -1,10 +1,11 @@
-// scanner.js – DentistRadar NHS scanner (v7.4 – robust result parsing + within-distance support)
+// scanner.js – DentistRadar NHS scanner (v7.5 – production fix)
 //
-// Safe patch based on your working v7.2:
-//  - Fixes "Parsed 0 result blocks" by extracting blocks around "Vxxxxxx DEN"
-//  - Adds support for distance format "Within X mile(s)"
-//  - Adds name fallback parsing "Vxxxxxx DEN <Practice Name>"
-//  - Keeps your proven acceptance classifiers + appointments logic intact
+// Fixes vs v7.4:
+//  - Clean result blocks anchored at "Within X mile(s) Vxxxxxx DEN" to avoid page boilerplate
+//  - Stronger practice name extraction (prevents "Some dentists in England..." leaking into name)
+//  - Supports distance formats: "Within 1 mile", "Within 2.3 miles", and older "X miles away"
+//  - Keeps your proven appointments + acceptance rules so signup alerts continue to work
+//  - Keeps concurrency limiting for appointments fetches
 
 import "dotenv/config";
 
@@ -25,11 +26,9 @@ function buildNhsSearchUrl(postcode, radiusMiles) {
   const pathPostcode = formatted.replace(/\s+/, "-"); // "RG41-4UW"
   const radius = Number(radiusMiles) || 5;
 
-  const url = `https://www.nhs.uk/service-search/find-a-dentist/results/${encodeURIComponent(
+  return `https://www.nhs.uk/service-search/find-a-dentist/results/${encodeURIComponent(
     pathPostcode
   )}?distance=${radius}`;
-
-  return url;
 }
 
 function extractVCodeFromBlock(block = "") {
@@ -49,7 +48,6 @@ async function fetchText(url, label = "fetch") {
     const res = await fetch(url, {
       signal: controller.signal,
       headers: {
-        // More realistic UA than the old "DentistRadar scanner"
         "User-Agent":
           process.env.SCAN_UA ||
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -85,32 +83,56 @@ function htmlToText(html = "") {
   let text = html.replace(/<script[\s\S]*?<\/script>/gi, " ");
   text = text.replace(/<style[\s\S]*?<\/style>/gi, " ");
   text = text.replace(/<[^>]+>/g, " ");
-  text = text.replace(/\s+/g, " ").trim();
-  return text;
+  return text.replace(/\s+/g, " ").trim();
 }
 
 /**
  * Extract individual "result blocks" from the search results text.
  *
- * NHS changed the old "Result for ... End of result for ..." markers.
- * We now anchor blocks around "Vxxxxxx DEN" which is present in your observed output.
+ * NHS now shows results like:
+ *   "Within 1 mile V006578 DEN Winnersh Dental Practice 410, READING ROAD, ... RG41 5EP"
+ *
+ * This function MUST NOT capture page boilerplate like:
+ *   "Some dentists in England are accepting new NHS patients..."
+ *
+ * We therefore anchor blocks on the strongest pattern:
+ *   "Within X mile(s) Vxxxxxx DEN"
  */
 function extractResultBlocks(text) {
   if (!text) return [];
 
-  const rx = /V\d{6}\s+DEN/gi;
   const blocks = [];
   const seen = new Set();
+
+  // Primary: anchor from "Within ... Vxxxxxx DEN"
+  const rx = /Within\s+[\d.,]+\s+miles?\s+V\d{6}\s+DEN/gi;
   let m;
 
   while ((m = rx.exec(text)) !== null) {
     const idx = m.index;
 
-    // capture a bit before (so we include "Within X mile") and after (name + address)
-    const start = Math.max(0, idx - 120);
-    const end = Math.min(text.length, idx + 700);
-    const snippet = text.slice(start, end).trim();
+    // Start exactly at "Within ..." to avoid header text contamination.
+    const start = idx;
+    const end = Math.min(text.length, idx + 700); // enough for name + address + postcode
 
+    const snippet = text.slice(start, end).trim();
+    const v = extractVCodeFromBlock(snippet);
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+
+    blocks.push(`Result for ${snippet}`);
+  }
+
+  if (blocks.length > 0) return blocks;
+
+  // Fallback: anchor at Vxxxxxx DEN (smaller backtrack only)
+  const rx2 = /V\d{6}\s+DEN/gi;
+  while ((m = rx2.exec(text)) !== null) {
+    const idx = m.index;
+    const start = Math.max(0, idx - 40);
+    const end = Math.min(text.length, idx + 700);
+
+    const snippet = text.slice(start, end).trim();
     const v = extractVCodeFromBlock(snippet);
     if (!v || seen.has(v)) continue;
     seen.add(v);
@@ -158,6 +180,7 @@ function parsePatientType(lowerText) {
 
 /**
  * Classify acceptance status from NHS *appointments* page text.
+ * Keep wide matching – NHS wording varies.
  */
 function classifyAcceptanceFromAppointments(lower) {
   if (!lower) return "unknown";
@@ -183,7 +206,7 @@ function classifyAcceptanceFromAppointments(lower) {
     return "unknown";
   }
 
-  // Accepting (keep wide net — NHS wording varies)
+  // Accepting
   if (
     lower.includes(
       "when availability allows, this dentist accepts new nhs patients"
@@ -248,11 +271,13 @@ function extractPhoneFromBlock(text) {
 }
 
 /**
- * Parse distance text into numeric miles.
+ * Parse distance text to miles.
  * Supports:
- *  - "This organisation is 1 mile away"
  *  - "Within 1 mile"
+ *  - "Within 2.3 miles"
+ *  - "1 mile"
  *  - "2.3 miles"
+ *  - older "... away" (we pass just "X mile(s)" portion anyway)
  */
 function parseDistanceMiles(distanceText) {
   if (!distanceText) return null;
@@ -262,6 +287,7 @@ function parseDistanceMiles(distanceText) {
     distanceText.match(/([\d.,]+)\s*miles?/i);
 
   if (!m) return null;
+
   const raw = m[1].replace(",", ".");
   const n = parseFloat(raw);
   return Number.isFinite(n) ? n : null;
@@ -269,6 +295,7 @@ function parseDistanceMiles(distanceText) {
 
 /**
  * Build NHS profile URL from practice name + V-code.
+ * (This is how your current system is set up.)
  */
 function buildNhsProfileUrl(name, rawBlock, vcodeFromPractice) {
   let vCode = vcodeFromPractice || null;
@@ -279,7 +306,7 @@ function buildNhsProfileUrl(name, rawBlock, vcodeFromPractice) {
     vCode = idMatch[0].toUpperCase();
   }
 
-  let cleanedName = name
+  const cleanedName = String(name || "")
     .replace(/&nbsp;?/gi, " ")
     .replace(/\bandnbsp\b/gi, " ")
     .trim();
@@ -297,53 +324,60 @@ function buildNhsProfileUrl(name, rawBlock, vcodeFromPractice) {
 
 /**
  * Parse a single result block into a base practice object.
- * NHS now frequently looks like:
- *   "Within 1 mile V006578 DEN Winnersh Dental Practice 410, READING ROAD, ... RG41 5EP"
+ * Expected block now begins with:
+ *   "Result for Within 1 mile V006578 DEN Winnersh Dental Practice 410, READING ROAD, ... RG41 5EP"
  */
 function parsePracticeFromBlock(block, postcode) {
   const lower = block.toLowerCase();
 
-  // Name
+  // --- Name ---
   let name = "Unknown practice";
 
-  // Primary (older): "Result for <name>"
-  const nameMatch = block.match(
-    /Result for\s+(.+?)(?=\s{2,}|This organisation is|Address for this organisation is|Phone:|$)/i
+  // Primary: V-code style "V006578 DEN Winnersh Dental Practice"
+  // Stop before the address begins (address usually begins with digits, or a comma+digits)
+  const vName = block.match(
+    /V\d{6}\s+DEN\s+(.+?)(?=\s+\d|,\s*\d| Phone:|$)/i
   );
-  if (nameMatch) {
-    name = nameMatch[1].trim();
+  if (vName) {
+    name = vName[1].trim();
   }
 
-  // New fallback: "V006578 DEN Winnersh Dental Practice"
+  // Fallback: old style "Result for <name>" (kept for backward compatibility)
   if (name === "Unknown practice") {
-    const m = block.match(/V\d{6}\s+DEN\s+(.+?)(?=\s+\d|,|\s+Within| Address| Phone|$)/i);
-    if (m) name = m[1].trim();
+    const nameMatch = block.match(
+      /Result for\s+(.+?)(?=\s{2,}|This organisation is|Address for this organisation is|Phone:|$)/i
+    );
+    if (nameMatch) name = nameMatch[1].trim();
   }
 
+  // Clean any trailing codes
   name = name.replace(/\s+V\d{6}\s+DEN$/i, "").trim();
 
-  // Distance text
+  // --- Distance ---
   let distanceText = "";
-  const distOld = block.match(/This organisation is\s+(.+?)\s+away/i);
-  if (distOld) {
-    distanceText = distOld[1].trim();
+  const within = block.match(/Within\s+([\d.,]+\s+miles?)/i);
+  if (within) {
+    distanceText = `Within ${within[1]}`;
   } else {
-    const within = block.match(/Within\s+([\d.,]+\s+miles?)/i);
-    if (within) distanceText = within[0].trim(); // keep "Within 1 mile"
+    const distOld = block.match(/This organisation is\s+(.+?)\s+away/i);
+    if (distOld) distanceText = distOld[1].trim();
   }
   const distanceMiles = parseDistanceMiles(distanceText);
 
-  // Address (best-effort)
+  // --- Address ---
+  // For the new format, the address tends to appear immediately after the name.
+  // We’ll capture from the first digit after "DEN <name>" onwards, up to the end of snippet.
   let address = "";
-  const addrMatch = block.match(
-    /DEN\s+.+?\s+(.+?)(?:Phone:|This dentist surgery|When availability allows|Not accepting new NHS patients|has not given a recent update|$)/i
-  );
-  if (addrMatch) {
-    address = addrMatch[1].trim();
-  }
+  const addr = block.match(/V\d{6}\s+DEN\s+.+?(\d.+)$/i);
+  if (addr) address = addr[1].trim();
 
+  // --- Phone ---
   const phone = extractPhoneFromBlock(block);
+
+  // --- vcode ---
   const vcode = extractVCodeFromBlock(block);
+
+  // --- Patient type flags (from block text; refined later from appointments text if available)
   const { patientType, childOnly } = parsePatientType(lower);
 
   const nhsUrl = buildNhsProfileUrl(name, block, vcode) || "";
@@ -366,7 +400,7 @@ function parsePracticeFromBlock(block, postcode) {
 }
 
 /**
- * Simple concurrency pool (no deps)
+ * Simple concurrency pool (no deps).
  */
 async function runPool(items, concurrency, workerFn) {
   const results = [];
@@ -391,28 +425,28 @@ export async function scanPostcode(postcode, radiusMiles) {
   const started = Date.now();
   const radius = Number(radiusMiles) || 5;
 
+  const searchUrl = buildNhsSearchUrl(postcode, radius);
   console.log(
-    `[SCAN] (v7.4) Searching NHS for ${postcode} (${radius} miles) – ${buildNhsSearchUrl(
-      postcode,
-      radius
-    )}`
+    `[SCAN] (v7.5) Searching NHS for ${postcode} (${radius} miles) – ${searchUrl}`
   );
 
-  const searchUrl = buildNhsSearchUrl(postcode, radius);
+  // 1) Fetch search results
   const html = await fetchText(searchUrl, "search");
   const text = htmlToText(html);
 
+  // 2) Extract blocks (now clean)
   const blocks = extractResultBlocks(text);
-
   console.log(
-    `[SCAN] (v7.4) Parsed ${blocks.length} result block(s) from search results.`
+    `[SCAN] (v7.5) Parsed ${blocks.length} result block(s) from search results.`
   );
 
+  // 3) Parse base practices
   const basePracticesRaw = blocks.map((block) => {
     const p = parsePracticeFromBlock(block, postcode);
     return { practice: p, searchLower: block.toLowerCase() };
   });
 
+  // 4) Strict radius filter
   const RADIUS_TOLERANCE = 0.2;
   const basePractices = basePracticesRaw.filter(({ practice }) => {
     if (practice.distanceMiles == null || isNaN(practice.distanceMiles)) return true;
@@ -420,10 +454,10 @@ export async function scanPostcode(postcode, radiusMiles) {
   });
 
   console.log(
-    `[SCAN] (v7.4) After radius filter (${radius} mi): kept ${basePractices.length}/${basePracticesRaw.length} practices.`
+    `[SCAN] (v7.5) After radius filter (${radius} mi): kept ${basePractices.length}/${basePracticesRaw.length} practices.`
   );
 
-  // Appointments fetch with concurrency limit (protects you + NHS)
+  // 5) Appointments fetch with concurrency limit
   const concurrency = Number(process.env.SCAN_APPT_CONCURRENCY) || 4;
 
   const enriched = await runPool(basePractices, concurrency, async (item) => {
@@ -435,6 +469,7 @@ export async function scanPostcode(postcode, radiusMiles) {
     if (p.appointmentsUrl) {
       const apptHtml = await fetchText(p.appointmentsUrl, "appointments");
       const apptText = htmlToText(apptHtml).toLowerCase();
+
       if (apptText) {
         finalStatus = classifyAcceptanceFromAppointments(apptText);
 
@@ -454,6 +489,7 @@ export async function scanPostcode(postcode, radiusMiles) {
     return p;
   });
 
+  // 6) Group results
   const accepting = [];
   const notAccepting = [];
   const unknown = [];
@@ -479,7 +515,7 @@ export async function scanPostcode(postcode, radiusMiles) {
     tookMs,
   };
 
-  console.log("[SCAN] (v7.4) Result summary:", {
+  console.log("[SCAN] (v7.5) Result summary:", {
     postcode: result.postcode,
     radiusMiles: result.radiusMiles,
     accepting: result.acceptingCount,
