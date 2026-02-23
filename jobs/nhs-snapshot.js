@@ -3,7 +3,12 @@ const PracticeOds = require("../models/PracticeOds");
 const PracticeStatusLatest = require("../models/PracticeStatusLatest");
 const PracticeStatusEvent = require("../models/PracticeStatusEvent");
 
-const UA = process.env.CRAWLER_USER_AGENT || "HealthRadar/DentistRadar snapshot bot (contact: admin@yourdomain)";
+const UA =
+  process.env.CRAWLER_USER_AGENT ||
+  "HealthRadar/DentistRadar snapshot bot (contact: admin@yourdomain)";
+
+// ✅ Only valid dentist codes look like V123456
+const VCODE_REGEX = /^V\d{6}$/i;
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -14,25 +19,26 @@ function randBetween(min, max) {
 }
 
 function normalizeStatusFromText(allText) {
-  const t = allText.toLowerCase().replace(/\s+/g, " ");
+  const t = String(allText || "").toLowerCase().replace(/\s+/g, " ");
   // Strong negative first
   if (t.includes("not accepting") && t.includes("nhs")) return "not_accepting";
   // Positive
-  if (t.includes("accepting") && t.includes("nhs") && !t.includes("not accepting")) return "accepting";
+  if (t.includes("accepting") && t.includes("nhs") && !t.includes("not accepting"))
+    return "accepting";
   return "unknown";
 }
 
 function extractEvidenceSnippet(html) {
-  // Keep it simple: just return a short surrounding snippet
-  // (We can make this smarter with cheerio later if needed)
-  const plain = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const plain = String(html || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   const idx = plain.toLowerCase().indexOf("accepting");
   if (idx === -1) return "";
   return plain.slice(Math.max(0, idx - 80), Math.min(plain.length, idx + 160));
 }
 
 async function fetchPracticePage(code) {
-  // NHS.uk supports /services/dentist/<code> redirect → canonical page
   const url = `https://www.nhs.uk/services/dentist/${encodeURIComponent(code)}`;
   const res = await axios.get(url, {
     timeout: Number(process.env.HTTP_TIMEOUT_MS || 25000),
@@ -49,34 +55,38 @@ async function fetchPracticePage(code) {
 }
 
 async function selectBatch(batchSize) {
-  const checkedCodes = await PracticeStatusLatest
-    .find({})
+  // ✅ Only consider checked dentist V-codes
+  const checkedCodes = await PracticeStatusLatest.find({
+    code: { $regex: VCODE_REGEX },
+  })
     .select({ code: 1 })
     .lean();
 
-  const checkedSet = new Set(checkedCodes.map(x => x.code));
+  const checkedSet = new Set(checkedCodes.map((x) => x.code));
 
-  // First: practices never checked
+  // ✅ First: dentist V-code practices never checked
   const neverChecked = await PracticeOds.find({
-    code: { $nin: Array.from(checkedSet) }
+    code: { $regex: VCODE_REGEX, $nin: Array.from(checkedSet) },
   })
-  .limit(batchSize)
-  .lean();
+    .limit(batchSize)
+    .lean();
 
   if (neverChecked.length >= batchSize) {
     return neverChecked;
   }
 
-  // If we need more, re-check oldest
-  const oldest = await PracticeStatusLatest.find({})
+  // ✅ If we need more, re-check oldest (still only V-codes)
+  const oldest = await PracticeStatusLatest.find({
+    code: { $regex: VCODE_REGEX },
+  })
     .sort({ checkedAt: 1 })
     .limit(batchSize - neverChecked.length)
     .lean();
 
-  const oldestCodes = oldest.map(x => x.code);
+  const oldestCodes = oldest.map((x) => x.code);
 
   const oldestPractices = await PracticeOds.find({
-    code: { $in: oldestCodes }
+    code: { $regex: VCODE_REGEX, $in: oldestCodes },
   }).lean();
 
   return [...neverChecked, ...oldestPractices];
@@ -92,10 +102,16 @@ async function runNhsSnapshotBatch() {
 
   let okCount = 0;
   let errCount = 0;
+  let skippedNonV = 0;
 
   for (const p of batch) {
     const code = p.code;
-    if (!code) continue;
+
+    // ✅ Extra safety: never process non-dentist codes
+    if (!code || !VCODE_REGEX.test(code)) {
+      skippedNonV++;
+      continue;
+    }
 
     await sleep(randBetween(rateMin, rateMax));
 
@@ -145,7 +161,7 @@ async function runNhsSnapshotBatch() {
     else errCount++;
   }
 
-  return { batchSize: batch.length, okCount, errCount, checkedAt };
+  return { batchSize: batch.length, okCount, errCount, skippedNonV, checkedAt };
 }
 
 module.exports = { runNhsSnapshotBatch };
