@@ -15,7 +15,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import axios from "axios";
 import { connectMongo, Watch, User, EmailLog, peek, PartnerClinic } from "./models.js";
-
 import { renderEmail } from "./emailTemplates.js";
 
 dotenv.config();
@@ -23,7 +22,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-const snapshotRoutes = require("./routes/snapshot");
+import snapshotRoutes from "./routes/snapshot.js";
 app.use("/api/v1", snapshotRoutes);
 
 app.use(cors());
