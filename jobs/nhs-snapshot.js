@@ -49,45 +49,37 @@ async function fetchPracticePage(code) {
 }
 
 async function selectBatch(batchSize) {
-  const strategy = process.env.BATCH_STRATEGY || "stale_first";
+  const checkedCodes = await PracticeStatusLatest
+    .find({})
+    .select({ code: 1 })
+    .lean();
 
-  if (strategy === "stale_first") {
-    // join-like approach: pick ODS practices, order by last checked (from latest table)
-    // Mongo doesn’t join easily without aggregation; we do a pragmatic two-step:
-    // 1) fetch codes already checked sorted by oldest
-    // 2) fill remainder from never-checked codes
+  const checkedSet = new Set(checkedCodes.map(x => x.code));
 
-    const checked = await PracticeStatusLatest.find({})
-      .sort({ checkedAt: 1 })
-      .limit(batchSize)
-      .select({ code: 1 })
-      .lean();
+  // First: practices never checked
+  const neverChecked = await PracticeOds.find({
+    code: { $nin: Array.from(checkedSet) }
+  })
+  .limit(batchSize)
+  .lean();
 
-    const checkedCodes = checked.map((x) => x.code);
-    let batch = [];
-
-    // First: re-check stale ones
-    if (checkedCodes.length) {
-      const stale = await PracticeOds.find({ code: { $in: checkedCodes } })
-        .limit(batchSize)
-        .lean();
-      batch = batch.concat(stale);
-    }
-
-    // Then: include never-checked codes
-    if (batch.length < batchSize) {
-      const remaining = batchSize - batch.length;
-      const neverCheckedCodes = await PracticeOds.find({ code: { $nin: checkedCodes } })
-        .limit(remaining)
-        .lean();
-      batch = batch.concat(neverCheckedCodes);
-    }
-
-    return batch;
+  if (neverChecked.length >= batchSize) {
+    return neverChecked;
   }
 
-  // Default: simple scan
-  return PracticeOds.find({}).limit(batchSize).lean();
+  // If we need more, re-check oldest
+  const oldest = await PracticeStatusLatest.find({})
+    .sort({ checkedAt: 1 })
+    .limit(batchSize - neverChecked.length)
+    .lean();
+
+  const oldestCodes = oldest.map(x => x.code);
+
+  const oldestPractices = await PracticeOds.find({
+    code: { $in: oldestCodes }
+  }).lean();
+
+  return [...neverChecked, ...oldestPractices];
 }
 
 async function runNhsSnapshotBatch() {
