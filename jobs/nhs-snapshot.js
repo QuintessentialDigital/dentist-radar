@@ -1,3 +1,11 @@
+// nhs-snapshot.js (FULL FILE - fixed)
+// Fixes:
+// 1) Only processes valid dentist V-codes (V123456)
+// 2) Builds the correct NHS dentist URL using slug + V-code
+// 3) Falls back to /services/dentist/<VCODE> (in case NHS supports redirect)
+// 4) Never leaves nhsUrl empty on failure (stores attempted url)
+// 5) Keeps your existing status + evidence logic
+
 const axios = require("axios");
 const PracticeOds = require("../models/PracticeOds");
 const PracticeStatusLatest = require("../models/PracticeStatusLatest");
@@ -7,7 +15,6 @@ const UA =
   process.env.CRAWLER_USER_AGENT ||
   "HealthRadar/DentistRadar snapshot bot (contact: admin@yourdomain)";
 
-// ✅ Only valid dentist codes look like V123456
 const VCODE_REGEX = /^V\d{6}$/i;
 
 function sleep(ms) {
@@ -18,28 +25,59 @@ function randBetween(min, max) {
   return Math.floor(min + Math.random() * (max - min + 1));
 }
 
+function toSlug(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 function normalizeStatusFromText(allText) {
   const t = String(allText || "").toLowerCase().replace(/\s+/g, " ");
+
   // Strong negative first
   if (t.includes("not accepting") && t.includes("nhs")) return "not_accepting";
+  if (t.includes("not taking on") && t.includes("nhs")) return "not_accepting";
+  if (t.includes("currently not accepting") && t.includes("nhs"))
+    return "not_accepting";
+
   // Positive
-  if (t.includes("accepting") && t.includes("nhs") && !t.includes("not accepting"))
+  if (
+    t.includes("accepting") &&
+    t.includes("nhs") &&
+    !t.includes("not accepting")
+  )
     return "accepting";
+  if (t.includes("accepts new nhs patients")) return "accepting";
+  if (t.includes("accepting new nhs patients")) return "accepting";
+  if (t.includes("taking on new nhs patients")) return "accepting";
+
   return "unknown";
 }
 
 function extractEvidenceSnippet(html) {
   const plain = String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  const idx = plain.toLowerCase().indexOf("accepting");
+
+  // Try to capture around "nhs"
+  const lower = plain.toLowerCase();
+  const idx =
+    lower.indexOf("accepting") !== -1
+      ? lower.indexOf("accepting")
+      : lower.indexOf("nhs");
+
   if (idx === -1) return "";
-  return plain.slice(Math.max(0, idx - 80), Math.min(plain.length, idx + 160));
+  return plain.slice(Math.max(0, idx - 120), Math.min(plain.length, idx + 220));
 }
 
-async function fetchPracticePage(code) {
-  const url = `https://www.nhs.uk/services/dentist/${encodeURIComponent(code)}`;
+async function fetchWithAxios(url) {
   const res = await axios.get(url, {
     timeout: Number(process.env.HTTP_TIMEOUT_MS || 25000),
     maxRedirects: 5,
@@ -49,13 +87,39 @@ async function fetchPracticePage(code) {
     },
     validateStatus: (s) => s >= 200 && s < 400,
   });
+
   const html = res.data || "";
   const finalUrl = res.request?.res?.responseUrl || url;
   return { html, finalUrl };
 }
 
+async function fetchPracticePage(code, name) {
+  const slug = toSlug(name);
+  const urlSlug = slug
+    ? `https://www.nhs.uk/services/dentist/${slug}/${encodeURIComponent(code)}`
+    : null;
+
+  // Fallback (may redirect for some, may 404 for others)
+  const urlDirect = `https://www.nhs.uk/services/dentist/${encodeURIComponent(
+    code
+  )}`;
+
+  const urls = [urlSlug, urlDirect].filter(Boolean);
+
+  let lastErr;
+  for (const url of urls) {
+    try {
+      return await fetchWithAxios(url);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+
+  throw lastErr;
+}
+
 async function selectBatch(batchSize) {
-  // ✅ Only consider checked dentist V-codes
+  // Only consider checked V-codes
   const checkedCodes = await PracticeStatusLatest.find({
     code: { $regex: VCODE_REGEX },
   })
@@ -64,7 +128,7 @@ async function selectBatch(batchSize) {
 
   const checkedSet = new Set(checkedCodes.map((x) => x.code));
 
-  // ✅ First: dentist V-code practices never checked
+  // First: V-code practices never checked
   const neverChecked = await PracticeOds.find({
     code: { $regex: VCODE_REGEX, $nin: Array.from(checkedSet) },
   })
@@ -75,7 +139,7 @@ async function selectBatch(batchSize) {
     return neverChecked;
   }
 
-  // ✅ If we need more, re-check oldest (still only V-codes)
+  // If we need more, re-check oldest (V-codes only)
   const oldest = await PracticeStatusLatest.find({
     code: { $regex: VCODE_REGEX },
   })
@@ -107,7 +171,7 @@ async function runNhsSnapshotBatch() {
   for (const p of batch) {
     const code = p.code;
 
-    // ✅ Extra safety: never process non-dentist codes
+    // Safety: skip non V-codes
     if (!code || !VCODE_REGEX.test(code)) {
       skippedNonV++;
       continue;
@@ -122,7 +186,7 @@ async function runNhsSnapshotBatch() {
     let error = "";
 
     try {
-      const { html, finalUrl } = await fetchPracticePage(code);
+      const { html, finalUrl } = await fetchPracticePage(code, p.name);
       nhsUrl = finalUrl;
       status = normalizeStatusFromText(html);
       evidence = extractEvidenceSnippet(html);
@@ -130,6 +194,11 @@ async function runNhsSnapshotBatch() {
       ok = false;
       error = String(e?.message || e).slice(0, 500);
       status = "unknown";
+      // Never leave empty — helps debugging
+      const slug = toSlug(p.name);
+      nhsUrl = slug
+        ? `https://www.nhs.uk/services/dentist/${slug}/${code}`
+        : `https://www.nhs.uk/services/dentist/${code}`;
     }
 
     const latestDoc = {
@@ -145,7 +214,11 @@ async function runNhsSnapshotBatch() {
       error,
     };
 
-    await PracticeStatusLatest.updateOne({ code }, { $set: latestDoc }, { upsert: true });
+    await PracticeStatusLatest.updateOne(
+      { code },
+      { $set: latestDoc },
+      { upsert: true }
+    );
 
     await PracticeStatusEvent.create({
       code,
