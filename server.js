@@ -23,6 +23,9 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+const snapshotRoutes = require("./routes/snapshot");
+app.use("/api/v1", snapshotRoutes);
+
 app.use(cors());
 app.use(express.json());
 // Allow standard HTML form posts
