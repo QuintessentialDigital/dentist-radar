@@ -49,29 +49,32 @@ function stripHtml(html) {
 function normalizeStatusFromText(allText) {
   const t = String(allText || "").toLowerCase().replace(/\s+/g, " ");
 
-  // ---- Explicit "not confirmed" → UNKNOWN (avoid false positives)
-  if (t.includes("has not confirmed whether they are accepting new nhs patients"))
-    return "unknown";
-  if (t.includes("has not confirmed") && t.includes("accepting new nhs patients"))
-    return "unknown";
-  if (t.includes("not confirmed") && t.includes("accepting new nhs patients"))
-    return "unknown";
+  // 1) NOT ACCEPTING (strongest)
+  if (/not\s+accepting\s+new\s+nhs\s+patients/.test(t)) return "not_accepting";
+  if (/not\s+taking\s+on\s+new\s+nhs\s+patients/.test(t)) return "not_accepting";
+  if (/currently\s+not\s+accepting\s+nhs\s+patients/.test(t)) return "not_accepting";
+  if (/not\s+accepting\s+nhs\s+patients/.test(t)) return "not_accepting";
 
-  // ---- Strong negatives
-  if (t.includes("not accepting new nhs patients")) return "not_accepting";
-  if (t.includes("not taking on new nhs patients")) return "not_accepting";
-  if (t.includes("currently not accepting nhs patients")) return "not_accepting";
-  if (t.includes("not accepting nhs patients")) return "not_accepting";
+  // 2) NOT CONFIRMED => UNKNOWN (covers: accept / accepts / accepting)
+  // Example: "has not confirmed if they currently accept new NHS patients..."
+  if (
+    /(has\s+not\s+confirmed|hasn't\s+confirmed|not\s+confirmed)\b/.test(t) &&
+    /(accept|accepts|accepting)\b/.test(t) &&
+    /new\s+nhs\s+patients/.test(t)
+  ) {
+    return "unknown";
+  }
 
-  // ---- Strong positives (only explicit/standard phrasing)
-  if (t.includes("when availability allows, this dentist accepts new nhs patients"))
+  // 3) ACCEPTING (only explicit)
+  if (/when\s+availability\s+allows.{0,60}accepts\s+new\s+nhs\s+patients/.test(t))
     return "accepting";
-  if (t.includes("accepting new nhs patients")) return "accepting";
-  if (t.includes("accepts new nhs patients")) return "accepting";
-  if (t.includes("taking on new nhs patients")) return "accepting";
+  if (/accepting\s+new\s+nhs\s+patients/.test(t)) return "accepting";
+  if (/accepts\s+new\s+nhs\s+patients/.test(t)) return "accepting";
+  if (/taking\s+on\s+new\s+nhs\s+patients/.test(t)) return "accepting";
 
   return "unknown";
 }
+
 
 function extractEvidenceSnippet(htmlOrText) {
   const plain = stripHtml(htmlOrText);
