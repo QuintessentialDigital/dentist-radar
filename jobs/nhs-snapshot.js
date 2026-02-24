@@ -81,14 +81,15 @@ function extractEvidenceSnippet(htmlOrText) {
   const lower = plain.toLowerCase();
 
   const needles = [
-    "has not confirmed",
-    "not accepting new nhs patients",
-    "not taking on new nhs patients",
-    "accepting new nhs patients",
-    "accepts new nhs patients",
-    "when availability allows",
-  ];
-
+  "has not confirmed",
+  "not accepting new nhs patients",
+  "not taking on new nhs patients",
+  "accept new nhs patients",
+  "accepting new nhs patients",
+  "accepts new nhs patients",
+  "when availability allows",
+];
+ 
   let idx = -1;
   for (const n of needles) {
     idx = lower.indexOf(n);
