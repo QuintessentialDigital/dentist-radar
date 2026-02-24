@@ -1,12 +1,4 @@
-// nhs-snapshot.js (FULL FILE - appointments-first + strict classification)
-//
-// Fixes:
-// 1) Only processes valid dentist V-codes (V123456)
-// 2) Builds correct NHS dentist URL using slug + V-code
-// 3) Fetches /appointments FIRST (more reliable for "confirmed / not confirmed")
-// 4) Strict classifier that treats "has not confirmed..." as UNKNOWN
-// 5) Removes overly-broad "accepting + nhs" rule that caused false positives
-// 6) Never leaves nhsUrl empty on failure (stores attempted url)
+// nhs-snapshot.js (CLEAN FULL FILE - appointments authoritative + locked classification)
 
 const axios = require("axios");
 const PracticeOds = require("../models/PracticeOds");
@@ -46,6 +38,8 @@ function stripHtml(html) {
     .trim();
 }
 
+// Returns { status, lock, reason }
+// lock=true means "do NOT override this based on other pages"
 function parseNhsAcceptance(allText) {
   const t = String(allText || "").toLowerCase().replace(/\s+/g, " ");
 
@@ -59,7 +53,7 @@ function parseNhsAcceptance(allText) {
   if (/currently\s+not\s+accepting\s+nhs\s+patients/.test(t))
     return { status: "not_accepting", lock: true, reason: "explicit_currently_not" };
 
-  // NOT CONFIRMED => UNKNOWN (ABSOLUTE OVERRIDE)
+  // NOT CONFIRMED => UNKNOWN (absolute override)
   // Covers: "has not confirmed if they currently accept new NHS patients..."
   if (
     /(has\s+not\s+confirmed|hasn't\s+confirmed|not\s+confirmed)\b/.test(t) &&
@@ -84,21 +78,23 @@ function parseNhsAcceptance(allText) {
   return { status: "unknown", lock: false, reason: "no_signal" };
 }
 
-
 function extractEvidenceSnippet(htmlOrText) {
   const plain = stripHtml(htmlOrText);
   const lower = plain.toLowerCase();
 
   const needles = [
-  "has not confirmed",
-  "not accepting new nhs patients",
-  "not taking on new nhs patients",
-  "accept new nhs patients",
-  "accepting new nhs patients",
-  "accepts new nhs patients",
-  "when availability allows",
-];
- 
+    "has not confirmed",
+    "hasn't confirmed",
+    "not confirmed",
+    "not accepting new nhs patients",
+    "not taking on new nhs patients",
+    "currently not accepting nhs patients",
+    "accept new nhs patients",
+    "accepting new nhs patients",
+    "accepts new nhs patients",
+    "when availability allows",
+  ];
+
   let idx = -1;
   for (const n of needles) {
     idx = lower.indexOf(n);
@@ -106,7 +102,7 @@ function extractEvidenceSnippet(htmlOrText) {
   }
 
   if (idx === -1) return "";
-  return plain.slice(Math.max(0, idx - 140), Math.min(plain.length, idx + 260));
+  return plain.slice(Math.max(0, idx - 160), Math.min(plain.length, idx + 320));
 }
 
 async function fetchWithAxios(url) {
@@ -132,7 +128,6 @@ async function fetchPracticePage(code, name) {
     ? `https://www.nhs.uk/services/dentist/${slug}/${encodeURIComponent(code)}`
     : null;
 
-  // Fallback (may or may not work for all)
   const urlDirect = `https://www.nhs.uk/services/dentist/${encodeURIComponent(code)}`;
 
   const urls = [urlSlug, urlDirect].filter(Boolean);
@@ -152,9 +147,7 @@ async function fetchAppointmentsPage(code, name) {
   const slug = toSlug(name);
 
   const url = slug
-    ? `https://www.nhs.uk/services/dentist/${slug}/${encodeURIComponent(
-        code
-      )}/appointments`
+    ? `https://www.nhs.uk/services/dentist/${slug}/${encodeURIComponent(code)}/appointments`
     : `https://www.nhs.uk/services/dentist/${encodeURIComponent(code)}/appointments`;
 
   return await fetchWithAxios(url);
@@ -165,7 +158,6 @@ function canonicalBaseUrl(url) {
 }
 
 async function selectBatch(batchSize) {
-  // Only consider checked V-codes
   const checkedCodes = await PracticeStatusLatest.find({
     code: { $regex: VCODE_REGEX },
   })
@@ -174,18 +166,14 @@ async function selectBatch(batchSize) {
 
   const checkedSet = new Set(checkedCodes.map((x) => x.code));
 
-  // First: V-code practices never checked
   const neverChecked = await PracticeOds.find({
     code: { $regex: VCODE_REGEX, $nin: Array.from(checkedSet) },
   })
     .limit(batchSize)
     .lean();
 
-  if (neverChecked.length >= batchSize) {
-    return neverChecked;
-  }
+  if (neverChecked.length >= batchSize) return neverChecked;
 
-  // If we need more, re-check oldest (V-codes only)
   const oldest = await PracticeStatusLatest.find({
     code: { $regex: VCODE_REGEX },
   })
@@ -229,61 +217,47 @@ async function runNhsSnapshotBatch() {
     let evidence = "";
     let ok = true;
     let error = "";
-    let sourcePage = "";
-    let sourceReason = "";
-    let appointmentsUrl = "";
 
-  try {
-  // 1) Appointments page first (authoritative)
-  const { html: apptHtml, finalUrl: apptFinalUrl } =
-    await fetchAppointmentsPage(code, p.name);
+    // Debug fields (to prove what happened)
+    let statusSource = "";
+    let statusReason = "";
+    let appointmentsUrlUsed = "";
 
-  appointmentsUrlUsed = apptFinalUrl;
-  nhsUrl = canonicalBaseUrl(apptFinalUrl);
+    try {
+      // ---- 1) Appointments is authoritative
+      const { html: apptHtml, finalUrl: apptFinalUrl } =
+        await fetchAppointmentsPage(code, p.name);
 
-  const apptText = stripHtml(apptHtml);
-  const apptParsed = parseNhsAcceptance(apptText);
+      appointmentsUrlUsed = apptFinalUrl;
+      nhsUrl = canonicalBaseUrl(apptFinalUrl);
 
-  status = apptParsed.status;
-  evidence = extractEvidenceSnippet(apptHtml);
-  statusSource = "appointments";
-  statusReason = apptParsed.reason;
+      const apptParsed = parseNhsAcceptance(stripHtml(apptHtml));
 
-  // 2) Only fallback if appointments had NO SIGNAL (lock=false) AND is unknown
-  if (apptParsed.lock === false && status === "unknown") {
-    const { html: mainHtml, finalUrl } = await fetchPracticePage(code, p.name);
-    const mainText = stripHtml(mainHtml);
-    const mainParsed = parseNhsAcceptance(mainText);
+      status = apptParsed.status;
+      evidence = extractEvidenceSnippet(apptHtml);
+      statusSource = "appointments";
+      statusReason = apptParsed.reason;
 
-    // Only upgrade if main page gives a locked explicit signal
-    if (mainParsed.lock === true && mainParsed.status !== "unknown") {
-      status = mainParsed.status;
-      evidence = extractEvidenceSnippet(mainHtml);
-      nhsUrl = finalUrl;
-      statusSource = "main";
-      statusReason = mainParsed.reason;
-    }
-  }
-} catch (e) {
-  ok = false;
-  error = String(e?.message || e).slice(0, 500);
-  status = "unknown";
-  statusSource = "error";
-  statusReason = "fetch_failed";
+      // ---- 2) Only fallback if appointments had NO signal (lock=false) AND is unknown
+      if (apptParsed.lock === false && status === "unknown") {
+        const { html: mainHtml, finalUrl } = await fetchPracticePage(code, p.name);
+        const mainParsed = parseNhsAcceptance(stripHtml(mainHtml));
 
-  const slug = toSlug(p.name);
-  nhsUrl = slug
-    ? `https://www.nhs.uk/services/dentist/${slug}/${code}`
-    : `https://www.nhs.uk/services/dentist/${code}`;
-}
-  }
-  
-    }
+        // Only upgrade if main page has locked explicit signal
+        if (mainParsed.lock === true && mainParsed.status !== "unknown") {
+          status = mainParsed.status;
+          evidence = extractEvidenceSnippet(mainHtml);
+          nhsUrl = finalUrl;
+          statusSource = "main";
+          statusReason = mainParsed.reason;
+        }
       }
     } catch (e) {
       ok = false;
       error = String(e?.message || e).slice(0, 500);
       status = "unknown";
+      statusSource = "error";
+      statusReason = "fetch_failed";
 
       const slug = toSlug(p.name);
       nhsUrl = slug
@@ -295,7 +269,6 @@ async function runNhsSnapshotBatch() {
       code,
       name: p.name || "",
       postcode: p.postcode || "",
-      // Region fields should come from PracticeOds enrichment if present
       region: p.nhsEnglandRegion || p.region || "Unknown",
       nhsUrl,
       status,
