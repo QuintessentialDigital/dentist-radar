@@ -18,7 +18,7 @@ require("dotenv").config();
 const mongoose = require("mongoose");
 
 // IMPORTANT: adjust this path if your model path differs
-const PracticeOds = require("./models/PracticeOds");
+const PracticeOds = require("../models/PracticeOds");
 
 const ENRICH_BATCH = Number(process.env.ENRICH_BATCH || 500);
 const POSTCODES_IO_BATCH = Math.min(100, Number(process.env.POSTCODES_IO_BATCH || 100));
