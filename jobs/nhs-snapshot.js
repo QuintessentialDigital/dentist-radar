@@ -53,15 +53,12 @@ function normalizeStatusFromText(allText) {
   if (/not\s+accepting\s+new\s+nhs\s+patients/.test(t)) return "not_accepting";
   if (/not\s+taking\s+on\s+new\s+nhs\s+patients/.test(t)) return "not_accepting";
   if (/currently\s+not\s+accepting\s+nhs\s+patients/.test(t)) return "not_accepting";
-  if (/not\s+accepting\s+nhs\s+patients/.test(t)) return "not_accepting";
 
-  // 2) NOT CONFIRMED => UNKNOWN (covers: accept / accepts / accepting)
-  // Example: "has not confirmed if they currently accept new NHS patients..."
-  if (
-    /(has\s+not\s+confirmed|hasn't\s+confirmed|not\s+confirmed)\b/.test(t) &&
-    /(accept|accepts|accepting)\b/.test(t) &&
-    /new\s+nhs\s+patients/.test(t)
-  ) {
+  // 2) NOT CONFIRMED => UNKNOWN (ABSOLUTE OVERRIDE)
+  // If NHS says "has not confirmed..." anywhere AND mentions new NHS patients,
+  // we treat it as UNKNOWN even if the word "accepting" appears elsewhere.
+  if (/(has\s+not\s+confirmed|hasn't\s+confirmed|not\s+confirmed)\b/.test(t) &&
+      /new\s+nhs\s+patients/.test(t)) {
     return "unknown";
   }
 
