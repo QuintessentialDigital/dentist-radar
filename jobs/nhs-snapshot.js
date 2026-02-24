@@ -1,10 +1,12 @@
-// nhs-snapshot.js (FULL FILE - fixed)
+// nhs-snapshot.js (FULL FILE - appointments-first + strict classification)
+//
 // Fixes:
 // 1) Only processes valid dentist V-codes (V123456)
-// 2) Builds the correct NHS dentist URL using slug + V-code
-// 3) Falls back to /services/dentist/<VCODE> (in case NHS supports redirect)
-// 4) Never leaves nhsUrl empty on failure (stores attempted url)
-// 5) Keeps your existing status + evidence logic
+// 2) Builds correct NHS dentist URL using slug + V-code
+// 3) Fetches /appointments FIRST (more reliable for "confirmed / not confirmed")
+// 4) Strict classifier that treats "has not confirmed..." as UNKNOWN
+// 5) Removes overly-broad "accepting + nhs" rule that caused false positives
+// 6) Never leaves nhsUrl empty on failure (stores attempted url)
 
 const axios = require("axios");
 const PracticeOds = require("../models/PracticeOds");
@@ -35,46 +37,63 @@ function toSlug(name) {
     .replace(/^-|-$/g, "");
 }
 
-function normalizeStatusFromText(allText) {
-  const t = String(allText || "").toLowerCase().replace(/\s+/g, " ");
-
-  // Strong negative first
-  if (t.includes("not accepting") && t.includes("nhs")) return "not_accepting";
-  if (t.includes("not taking on") && t.includes("nhs")) return "not_accepting";
-  if (t.includes("currently not accepting") && t.includes("nhs"))
-    return "not_accepting";
-
-  // Positive
-  if (
-    t.includes("accepting") &&
-    t.includes("nhs") &&
-    !t.includes("not accepting")
-  )
-    return "accepting";
-  if (t.includes("accepts new nhs patients")) return "accepting";
-  if (t.includes("accepting new nhs patients")) return "accepting";
-  if (t.includes("taking on new nhs patients")) return "accepting";
-
-  return "unknown";
-}
-
-function extractEvidenceSnippet(html) {
-  const plain = String(html || "")
+function stripHtml(html) {
+  return String(html || "")
     .replace(/<script[\s\S]*?<\/script>/gi, " ")
     .replace(/<style[\s\S]*?<\/style>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
 
-  // Try to capture around "nhs"
+function normalizeStatusFromText(allText) {
+  const t = String(allText || "").toLowerCase().replace(/\s+/g, " ");
+
+  // ---- Explicit "not confirmed" → UNKNOWN (avoid false positives)
+  if (t.includes("has not confirmed whether they are accepting new nhs patients"))
+    return "unknown";
+  if (t.includes("has not confirmed") && t.includes("accepting new nhs patients"))
+    return "unknown";
+  if (t.includes("not confirmed") && t.includes("accepting new nhs patients"))
+    return "unknown";
+
+  // ---- Strong negatives
+  if (t.includes("not accepting new nhs patients")) return "not_accepting";
+  if (t.includes("not taking on new nhs patients")) return "not_accepting";
+  if (t.includes("currently not accepting nhs patients")) return "not_accepting";
+  if (t.includes("not accepting nhs patients")) return "not_accepting";
+
+  // ---- Strong positives (only explicit/standard phrasing)
+  if (t.includes("when availability allows, this dentist accepts new nhs patients"))
+    return "accepting";
+  if (t.includes("accepting new nhs patients")) return "accepting";
+  if (t.includes("accepts new nhs patients")) return "accepting";
+  if (t.includes("taking on new nhs patients")) return "accepting";
+
+  return "unknown";
+}
+
+function extractEvidenceSnippet(htmlOrText) {
+  const plain = stripHtml(htmlOrText);
   const lower = plain.toLowerCase();
-  const idx =
-    lower.indexOf("accepting") !== -1
-      ? lower.indexOf("accepting")
-      : lower.indexOf("nhs");
+
+  const needles = [
+    "has not confirmed",
+    "not accepting new nhs patients",
+    "not taking on new nhs patients",
+    "accepting new nhs patients",
+    "accepts new nhs patients",
+    "when availability allows",
+  ];
+
+  let idx = -1;
+  for (const n of needles) {
+    idx = lower.indexOf(n);
+    if (idx !== -1) break;
+  }
 
   if (idx === -1) return "";
-  return plain.slice(Math.max(0, idx - 120), Math.min(plain.length, idx + 220));
+  return plain.slice(Math.max(0, idx - 140), Math.min(plain.length, idx + 260));
 }
 
 async function fetchWithAxios(url) {
@@ -95,14 +114,13 @@ async function fetchWithAxios(url) {
 
 async function fetchPracticePage(code, name) {
   const slug = toSlug(name);
+
   const urlSlug = slug
     ? `https://www.nhs.uk/services/dentist/${slug}/${encodeURIComponent(code)}`
     : null;
 
-  // Fallback (may redirect for some, may 404 for others)
-  const urlDirect = `https://www.nhs.uk/services/dentist/${encodeURIComponent(
-    code
-  )}`;
+  // Fallback (may or may not work for all)
+  const urlDirect = `https://www.nhs.uk/services/dentist/${encodeURIComponent(code)}`;
 
   const urls = [urlSlug, urlDirect].filter(Boolean);
 
@@ -114,8 +132,23 @@ async function fetchPracticePage(code, name) {
       lastErr = e;
     }
   }
-
   throw lastErr;
+}
+
+async function fetchAppointmentsPage(code, name) {
+  const slug = toSlug(name);
+
+  const url = slug
+    ? `https://www.nhs.uk/services/dentist/${slug}/${encodeURIComponent(
+        code
+      )}/appointments`
+    : `https://www.nhs.uk/services/dentist/${encodeURIComponent(code)}/appointments`;
+
+  return await fetchWithAxios(url);
+}
+
+function canonicalBaseUrl(url) {
+  return String(url || "").replace(/\/appointments\/?$/, "");
 }
 
 async function selectBatch(batchSize) {
@@ -171,7 +204,6 @@ async function runNhsSnapshotBatch() {
   for (const p of batch) {
     const code = p.code;
 
-    // Safety: skip non V-codes
     if (!code || !VCODE_REGEX.test(code)) {
       skippedNonV++;
       continue;
@@ -186,15 +218,29 @@ async function runNhsSnapshotBatch() {
     let error = "";
 
     try {
-      const { html, finalUrl } = await fetchPracticePage(code, p.name);
-      nhsUrl = finalUrl;
-      status = normalizeStatusFromText(html);
-      evidence = extractEvidenceSnippet(html);
+      // 1) Appointments page first (most reliable for "confirmed")
+      const { html: apptHtml, finalUrl: apptFinalUrl } =
+        await fetchAppointmentsPage(code, p.name);
+
+      nhsUrl = canonicalBaseUrl(apptFinalUrl);
+      status = normalizeStatusFromText(stripHtml(apptHtml));
+      evidence = extractEvidenceSnippet(apptHtml);
+
+      // 2) Fallback: if still unknown, try main page
+      if (status === "unknown") {
+        const { html: mainHtml, finalUrl } = await fetchPracticePage(code, p.name);
+        nhsUrl = finalUrl;
+        const status2 = normalizeStatusFromText(stripHtml(mainHtml));
+        if (status2 !== "unknown") {
+          status = status2;
+          evidence = extractEvidenceSnippet(mainHtml);
+        }
+      }
     } catch (e) {
       ok = false;
       error = String(e?.message || e).slice(0, 500);
       status = "unknown";
-      // Never leave empty — helps debugging
+
       const slug = toSlug(p.name);
       nhsUrl = slug
         ? `https://www.nhs.uk/services/dentist/${slug}/${code}`
@@ -205,7 +251,8 @@ async function runNhsSnapshotBatch() {
       code,
       name: p.name || "",
       postcode: p.postcode || "",
-      region: p.region || "Unknown",
+      // Region fields should come from PracticeOds enrichment if present
+      region: p.nhsEnglandRegion || p.region || "Unknown",
       nhsUrl,
       status,
       statusEvidence: evidence,
@@ -222,7 +269,7 @@ async function runNhsSnapshotBatch() {
 
     await PracticeStatusEvent.create({
       code,
-      region: p.region || "Unknown",
+      region: p.nhsEnglandRegion || p.region || "Unknown",
       status,
       checkedAt,
       nhsUrl,
