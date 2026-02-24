@@ -50,29 +50,40 @@ function parseNhsAcceptance(allText) {
   const t = String(allText || "").toLowerCase().replace(/\s+/g, " ");
 
   // NOT ACCEPTING (strongest)
-  if (/not\s+accepting\s+new\s+nhs\s+patients/.test(t)) return { status: "not_accepting", lock: true, reason: "explicit_not_accepting" };
-  if (/not\s+taking\s+on\s+new\s+nhs\s+patients/.test(t)) return { status: "not_accepting", lock: true, reason: "explicit_not_taking_on" };
-  if (/currently\s+not\s+accepting\s+nhs\s+patients/.test(t)) return { status: "not_accepting", lock: true, reason: "explicit_currently_not" };
+  if (/not\s+accepting\s+new\s+nhs\s+patients/.test(t))
+    return { status: "not_accepting", lock: true, reason: "explicit_not_accepting" };
 
-  // NOT CONFIRMED (must be UNKNOWN and must LOCK)
+  if (/not\s+taking\s+on\s+new\s+nhs\s+patients/.test(t))
+    return { status: "not_accepting", lock: true, reason: "explicit_not_taking_on" };
+
+  if (/currently\s+not\s+accepting\s+nhs\s+patients/.test(t))
+    return { status: "not_accepting", lock: true, reason: "explicit_currently_not" };
+
+  // NOT CONFIRMED => UNKNOWN (ABSOLUTE OVERRIDE)
   // Covers: "has not confirmed if they currently accept new NHS patients..."
   if (
     /(has\s+not\s+confirmed|hasn't\s+confirmed|not\s+confirmed)\b/.test(t) &&
-    /(accept|accepts|accepting)\b/.test(t) &&
     /new\s+nhs\s+patients/.test(t)
   ) {
     return { status: "unknown", lock: true, reason: "not_confirmed" };
   }
 
-  // ACCEPTING (explicit)
+  // ACCEPTING (explicit only)
   if (/when\s+availability\s+allows.{0,80}accepts\s+new\s+nhs\s+patients/.test(t))
     return { status: "accepting", lock: true, reason: "availability_allows_accepts" };
-  if (/accepting\s+new\s+nhs\s+patients/.test(t)) return { status: "accepting", lock: true, reason: "explicit_accepting" };
-  if (/accepts\s+new\s+nhs\s+patients/.test(t)) return { status: "accepting", lock: true, reason: "explicit_accepts" };
-  if (/taking\s+on\s+new\s+nhs\s+patients/.test(t)) return { status: "accepting", lock: true, reason: "explicit_taking_on" };
+
+  if (/accepting\s+new\s+nhs\s+patients/.test(t))
+    return { status: "accepting", lock: true, reason: "explicit_accepting" };
+
+  if (/accepts\s+new\s+nhs\s+patients/.test(t))
+    return { status: "accepting", lock: true, reason: "explicit_accepts" };
+
+  if (/taking\s+on\s+new\s+nhs\s+patients/.test(t))
+    return { status: "accepting", lock: true, reason: "explicit_taking_on" };
 
   return { status: "unknown", lock: false, reason: "no_signal" };
 }
+
 
 function extractEvidenceSnippet(htmlOrText) {
   const plain = stripHtml(htmlOrText);
@@ -222,40 +233,51 @@ async function runNhsSnapshotBatch() {
     let sourceReason = "";
     let appointmentsUrl = "";
 
-    try {
-      // 1) Appointments page is authoritative
-const { html: apptHtml, finalUrl: apptFinalUrl } =
-  await fetchAppointmentsPage(code, p.name);
+  try {
+  // 1) Appointments page first (authoritative)
+  const { html: apptHtml, finalUrl: apptFinalUrl } =
+    await fetchAppointmentsPage(code, p.name);
 
-nhsUrl = canonicalBaseUrl(apptFinalUrl);
+  appointmentsUrlUsed = apptFinalUrl;
+  nhsUrl = canonicalBaseUrl(apptFinalUrl);
 
-const apptText = stripHtml(apptHtml);
-const apptParsed = parseNhsAcceptance(apptText);
+  const apptText = stripHtml(apptHtml);
+  const apptParsed = parseNhsAcceptance(apptText);
 
-status = apptParsed.status;
-evidence = extractEvidenceSnippet(apptHtml);
+  status = apptParsed.status;
+  evidence = extractEvidenceSnippet(apptHtml);
+  statusSource = "appointments";
+  statusReason = apptParsed.reason;
 
-// OPTIONAL BUT HIGHLY RECOMMENDED DEBUG FIELDS (remove later if you want)
-const sourcePage = "appointments";
-const sourceReason = apptParsed.reason;
-const appointmentsUrl = apptFinalUrl;
+  // 2) Only fallback if appointments had NO SIGNAL (lock=false) AND is unknown
+  if (apptParsed.lock === false && status === "unknown") {
+    const { html: mainHtml, finalUrl } = await fetchPracticePage(code, p.name);
+    const mainText = stripHtml(mainHtml);
+    const mainParsed = parseNhsAcceptance(mainText);
 
-// 2) Only fall back to main page if appointments had no usable signal (lock=false) AND status is unknown
-if (apptParsed.lock === false && status === "unknown") {
-  const { html: mainHtml, finalUrl } = await fetchPracticePage(code, p.name);
-  nhsUrl = finalUrl;
-
-  const mainText = stripHtml(mainHtml);
-  const mainParsed = parseNhsAcceptance(mainText);
-
-  // Only upgrade if main page is locked to a clear signal
-  if (mainParsed.lock === true && mainParsed.status !== "unknown") {
-    status = mainParsed.status;
-    evidence = extractEvidenceSnippet(mainHtml);
-    // overwrite debug
-    // sourcePage = "main"; // can't reassign const; see note below
+    // Only upgrade if main page gives a locked explicit signal
+    if (mainParsed.lock === true && mainParsed.status !== "unknown") {
+      status = mainParsed.status;
+      evidence = extractEvidenceSnippet(mainHtml);
+      nhsUrl = finalUrl;
+      statusSource = "main";
+      statusReason = mainParsed.reason;
+    }
   }
-}  
+} catch (e) {
+  ok = false;
+  error = String(e?.message || e).slice(0, 500);
+  status = "unknown";
+  statusSource = "error";
+  statusReason = "fetch_failed";
+
+  const slug = toSlug(p.name);
+  nhsUrl = slug
+    ? `https://www.nhs.uk/services/dentist/${slug}/${code}`
+    : `https://www.nhs.uk/services/dentist/${code}`;
+}
+  }
+  
     }
       }
     } catch (e) {
@@ -279,9 +301,9 @@ if (apptParsed.lock === false && status === "unknown") {
       status,
       statusEvidence: evidence,
       checkedAt,
-      sourcePage,
-      sourceReason,
-      appointmentsUrl,
+      statusSource,
+      statusReason,
+      appointmentsUrlUsed,
       ok,
       error,
     };
