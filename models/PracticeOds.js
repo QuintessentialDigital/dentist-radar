@@ -9,6 +9,11 @@ const PracticeOdsSchema = new mongoose.Schema(
     address2: { type: String, default: "" },
     town: { type: String, default: "" },
     county: { type: String, default: "" },
+    // Add these fields inside your PracticeOdsSchema definition
+    nhsEnglandRegion: { type: String, default: "" }, // e.g. "South East"
+    ukRegion: { type: String, default: "" },         // e.g. "South East"
+    adminDistrict: { type: String, default: "" },    // optional
+    adminCounty: { type: String, default: "" },      // optional
 
     // Optional - add later via postcode directory mapping
     region: { type: String, default: "Unknown", index: true },
