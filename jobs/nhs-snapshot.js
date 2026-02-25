@@ -158,10 +158,19 @@ async function selectBatch(batchSize) {
 }
 
 async function runNhsSnapshotBatch() {
-  const batchSize = Number(process.env.BATCH_SIZE || 200);
-  const rateMin = Number(process.env.RATE_MIN_MS || 900);
-  const rateMax = Number(process.env.RATE_MAX_MS || 1800);
 
+  const batchSizeEnv = parseInt(process.env.BATCH_SIZE || "", 10);
+  const batchSize = Number.isFinite(batchSizeEnv) && batchSizeEnv > 0 ? batchSizeEnv : 200;
+
+  const rateMinEnv = parseInt(process.env.RATE_MIN_MS || "", 10);
+  const rateMin = Number.isFinite(rateMinEnv) && rateMinEnv >= 0 ? rateMinEnv : 900;
+
+  const rateMaxEnv = parseInt(process.env.RATE_MAX_MS || "", 10);
+  const rateMaxCandidate = Number.isFinite(rateMaxEnv) && rateMaxEnv >= 0 ? rateMaxEnv : 1800;
+  const rateMax = Math.max(rateMin, rateMaxCandidate);
+
+  console.log("[SNAP] Using batchSize/rate:", { batchSize, rateMin, rateMax });
+  
   const batch = await selectBatch(batchSize);
   const checkedAt = new Date();
 
