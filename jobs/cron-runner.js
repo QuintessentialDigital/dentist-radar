@@ -7,7 +7,7 @@ async function main() {
   const mongoUri = process.env.MONGO_URI || process.env.MONGODB_URI;
   if (!mongoUri) throw new Error("Missing MONGO_URI (or MONGODB_URI).");
 
-  await mongoose.connect(mongoUri);
+  await mongoose.connect(mongoUri, { dbName: "dentistradar" });
   console.log("✅ Mongo connected");
 
   // Optional ODS sync
