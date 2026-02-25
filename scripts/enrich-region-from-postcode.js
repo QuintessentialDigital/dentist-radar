@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 require("dotenv").config();
 
-const PracticeVcode = require("../models/practicevcodes");
+const PracticeVcode = require("../models/PracticeVcode");
 
 // ---- NHS England region mapping by postcode outward ----
 // (You can expand if needed)
