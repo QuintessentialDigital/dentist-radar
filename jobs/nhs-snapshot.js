@@ -1,13 +1,16 @@
-// nhs-snapshot.js (CLEAN FULL FILE - appointments authoritative + locked classification)
+// nhs-snapshot.js (CANONICAL URL + practicevcodes source + appointments authoritative)
 
 const axios = require("axios");
-const PracticeOds = require("../models/PracticeOds");
+
+// IMPORTANT: swap source from ODS -> VCODE master
+const PracticeVcode = require("../models/PracticeVcode");
+
 const PracticeStatusLatest = require("../models/PracticeStatusLatest");
 const PracticeStatusEvent = require("../models/PracticeStatusEvent");
 
 const UA =
   process.env.CRAWLER_USER_AGENT ||
-  "HealthRadar/DentistRadar snapshot bot (contact: admin@yourdomain)";
+  "DentistRadar snapshot bot (contact: admin@yourdomain)";
 
 const VCODE_REGEX = /^V\d{6}$/i;
 
@@ -17,16 +20,6 @@ function sleep(ms) {
 
 function randBetween(min, max) {
   return Math.floor(min + Math.random() * (max - min + 1));
-}
-
-function toSlug(name) {
-  return String(name || "")
-    .toLowerCase()
-    .replace(/&/g, "and")
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
 }
 
 function stripHtml(html) {
@@ -54,7 +47,6 @@ function parseNhsAcceptance(allText) {
     return { status: "not_accepting", lock: true, reason: "explicit_currently_not" };
 
   // NOT CONFIRMED => UNKNOWN (absolute override)
-  // Covers: "has not confirmed if they currently accept new NHS patients..."
   if (
     /(has\s+not\s+confirmed|hasn't\s+confirmed|not\s+confirmed)\b/.test(t) &&
     /new\s+nhs\s+patients/.test(t)
@@ -89,7 +81,6 @@ function extractEvidenceSnippet(htmlOrText) {
     "not accepting new nhs patients",
     "not taking on new nhs patients",
     "currently not accepting nhs patients",
-    "accept new nhs patients",
     "accepting new nhs patients",
     "accepts new nhs patients",
     "when availability allows",
@@ -100,7 +91,6 @@ function extractEvidenceSnippet(htmlOrText) {
     idx = lower.indexOf(n);
     if (idx !== -1) break;
   }
-
   if (idx === -1) return "";
   return plain.slice(Math.max(0, idx - 160), Math.min(plain.length, idx + 320));
 }
@@ -118,46 +108,21 @@ async function fetchWithAxios(url) {
 
   const html = res.data || "";
   const finalUrl = res.request?.res?.responseUrl || url;
-  return { html, finalUrl };
-}
-
-async function fetchPracticePage(code, name) {
-  const slug = toSlug(name);
-
-  const urlSlug = slug
-    ? `https://www.nhs.uk/services/dentist/${slug}/${encodeURIComponent(code)}`
-    : null;
-
-  const urlDirect = `https://www.nhs.uk/services/dentist/${encodeURIComponent(code)}`;
-
-  const urls = [urlSlug, urlDirect].filter(Boolean);
-
-  let lastErr;
-  for (const url of urls) {
-    try {
-      return await fetchWithAxios(url);
-    } catch (e) {
-      lastErr = e;
-    }
-  }
-  throw lastErr;
-}
-
-async function fetchAppointmentsPage(code, name) {
-  const slug = toSlug(name);
-
-  const url = slug
-    ? `https://www.nhs.uk/services/dentist/${slug}/${encodeURIComponent(code)}/appointments`
-    : `https://www.nhs.uk/services/dentist/${encodeURIComponent(code)}/appointments`;
-
-  return await fetchWithAxios(url);
+  return { html, finalUrl, statusCode: res.status };
 }
 
 function canonicalBaseUrl(url) {
   return String(url || "").replace(/\/appointments\/?$/, "");
 }
 
+function safeBaseUrl(nhsUrl) {
+  const u = String(nhsUrl || "").trim();
+  if (!u) return "";
+  return u.replace(/\/appointments\/?$/, "").replace(/\/+$/, "");
+}
+
 async function selectBatch(batchSize) {
+  // Only consider checked V-codes
   const checkedCodes = await PracticeStatusLatest.find({
     code: { $regex: VCODE_REGEX },
   })
@@ -166,14 +131,16 @@ async function selectBatch(batchSize) {
 
   const checkedSet = new Set(checkedCodes.map((x) => x.code));
 
-  const neverChecked = await PracticeOds.find({
-    code: { $regex: VCODE_REGEX, $nin: Array.from(checkedSet) },
+  // First: practices never checked (from practicevcodes universe)
+  const neverChecked = await PracticeVcode.find({
+    vcode: { $regex: VCODE_REGEX, $nin: Array.from(checkedSet) },
   })
     .limit(batchSize)
     .lean();
 
   if (neverChecked.length >= batchSize) return neverChecked;
 
+  // If we need more, re-check oldest
   const oldest = await PracticeStatusLatest.find({
     code: { $regex: VCODE_REGEX },
   })
@@ -183,8 +150,8 @@ async function selectBatch(batchSize) {
 
   const oldestCodes = oldest.map((x) => x.code);
 
-  const oldestPractices = await PracticeOds.find({
-    code: { $regex: VCODE_REGEX, $in: oldestCodes },
+  const oldestPractices = await PracticeVcode.find({
+    vcode: { $regex: VCODE_REGEX, $in: oldestCodes },
   }).lean();
 
   return [...neverChecked, ...oldestPractices];
@@ -192,8 +159,8 @@ async function selectBatch(batchSize) {
 
 async function runNhsSnapshotBatch() {
   const batchSize = Number(process.env.BATCH_SIZE || 200);
-  const rateMin = Number(process.env.RATE_MIN_MS || 800);
-  const rateMax = Number(process.env.RATE_MAX_MS || 1600);
+  const rateMin = Number(process.env.RATE_MIN_MS || 900);
+  const rateMax = Number(process.env.RATE_MAX_MS || 1800);
 
   const batch = await selectBatch(batchSize);
   const checkedAt = new Date();
@@ -203,8 +170,7 @@ async function runNhsSnapshotBatch() {
   let skippedNonV = 0;
 
   for (const p of batch) {
-    const code = p.code;
-
+    const code = p.vcode || p.code; // safety
     if (!code || !VCODE_REGEX.test(code)) {
       skippedNonV++;
       continue;
@@ -213,70 +179,83 @@ async function runNhsSnapshotBatch() {
     await sleep(randBetween(rateMin, rateMax));
 
     let status = "unknown";
-    let nhsUrl = "";
     let evidence = "";
     let ok = true;
     let error = "";
 
-    // Debug fields (to prove what happened)
+    // Debug fields
     let statusSource = "";
     let statusReason = "";
     let appointmentsUrlUsed = "";
+    let baseUrlUsed = "";
+    let httpStatus = null;
 
-    try {
-      // ---- 1) Appointments is authoritative
-      const { html: apptHtml, finalUrl: apptFinalUrl } =
-        await fetchAppointmentsPage(code, p.name);
+    // Canonical base URL from discovery/enrichment
+    const baseUrl = safeBaseUrl(p.nhsUrl);
+    baseUrlUsed = baseUrl;
 
-      appointmentsUrlUsed = apptFinalUrl;
-      nhsUrl = canonicalBaseUrl(apptFinalUrl);
-
-      const apptParsed = parseNhsAcceptance(stripHtml(apptHtml));
-
-      status = apptParsed.status;
-      evidence = extractEvidenceSnippet(apptHtml);
-      statusSource = "appointments";
-      statusReason = apptParsed.reason;
-
-      // ---- 2) Only fallback if appointments had NO signal (lock=false) AND is unknown
-      if (apptParsed.lock === false && status === "unknown") {
-        const { html: mainHtml, finalUrl } = await fetchPracticePage(code, p.name);
-        const mainParsed = parseNhsAcceptance(stripHtml(mainHtml));
-
-        // Only upgrade if main page has locked explicit signal
-        if (mainParsed.lock === true && mainParsed.status !== "unknown") {
-          status = mainParsed.status;
-          evidence = extractEvidenceSnippet(mainHtml);
-          nhsUrl = finalUrl;
-          statusSource = "main";
-          statusReason = mainParsed.reason;
-        }
-      }
-    } catch (e) {
+    // If missing base URL, fail fast (should be rare)
+    if (!baseUrl) {
       ok = false;
-      error = String(e?.message || e).slice(0, 500);
-      status = "unknown";
+      error = "missing_nhsUrl_on_practicevcodes";
       statusSource = "error";
-      statusReason = "fetch_failed";
+      statusReason = "missing_base_url";
+    } else {
+      try {
+        // 1) Appointments authoritative
+        const apptUrl = `${baseUrl}/appointments`;
+        const { html: apptHtml, finalUrl: apptFinalUrl, statusCode } =
+          await fetchWithAxios(apptUrl);
 
-      const slug = toSlug(p.name);
-      nhsUrl = slug
-        ? `https://www.nhs.uk/services/dentist/${slug}/${code}`
-        : `https://www.nhs.uk/services/dentist/${code}`;
+        appointmentsUrlUsed = apptFinalUrl;
+        httpStatus = statusCode;
+
+        const apptParsed = parseNhsAcceptance(stripHtml(apptHtml));
+        status = apptParsed.status;
+        evidence = extractEvidenceSnippet(apptHtml);
+        statusSource = "appointments";
+        statusReason = apptParsed.reason;
+
+        // 2) Fallback only if "no signal"
+        if (apptParsed.lock === false && status === "unknown") {
+          const { html: mainHtml, finalUrl, statusCode: mainStatus } =
+            await fetchWithAxios(baseUrl);
+          httpStatus = mainStatus;
+
+          const mainParsed = parseNhsAcceptance(stripHtml(mainHtml));
+          if (mainParsed.lock === true && mainParsed.status !== "unknown") {
+            status = mainParsed.status;
+            evidence = extractEvidenceSnippet(mainHtml);
+            statusSource = "main";
+            statusReason = mainParsed.reason;
+          }
+        }
+      } catch (e) {
+        ok = false;
+        const sc = e?.response?.status;
+        const msg = e?.message || String(e);
+        error = sc ? `HTTP_${sc}: ${msg}` : msg;
+        status = "unknown";
+        statusSource = "error";
+        statusReason = "fetch_failed";
+      }
     }
 
     const latestDoc = {
-      code,
+      code, // store as code for snapshot collections
+      // carry through metadata from practicevcodes
       name: p.name || "",
-      postcode: p.postcode || "",
-      region: p.nhsEnglandRegion || p.region || "Unknown",
-      nhsUrl,
+      postcode: p.postcode || p.postcodeGuess || "",
+      region: p.region || "Unknown",
+      nhsUrl: baseUrl || canonicalBaseUrl(appointmentsUrlUsed) || "",
       status,
       statusEvidence: evidence,
       checkedAt,
       statusSource,
       statusReason,
       appointmentsUrlUsed,
+      baseUrlUsed,
+      httpStatus,
       ok,
       error,
     };
@@ -289,12 +268,17 @@ async function runNhsSnapshotBatch() {
 
     await PracticeStatusEvent.create({
       code,
-      region: p.nhsEnglandRegion || p.region || "Unknown",
+      region: p.region || "Unknown",
       status,
       checkedAt,
-      nhsUrl,
+      nhsUrl: latestDoc.nhsUrl,
       ok,
       error,
+      statusSource,
+      statusReason,
+      appointmentsUrlUsed,
+      baseUrlUsed,
+      httpStatus,
     });
 
     if (ok) okCount++;
